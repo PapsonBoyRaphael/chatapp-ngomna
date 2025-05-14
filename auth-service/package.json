@@ -25,12 +25,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/PapsonBoyRaphael/chatapp.git"
+    "url": "https://github.com/PapsonBoyRaphael/chatapp-microservices.git"
   },
   "keywords": [],
   "bugs": {
-    "url": "https://github.com/PapsonBoyRaphael/chatapp/issues"
+    "url": "https://github.com/PapsonBoyRaphael/chatapp-microservices/issues"
   },
-  "homepage": "https://github.com/PapsonBoyRaphael/chatapp#readme",
+  "homepage": "https://github.com/PapsonBoyRaphael/chatapp-microservices#readme",
   "description": "Auth service for the chat application"
 }
