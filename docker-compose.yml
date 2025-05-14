@@ -2,7 +2,9 @@ version: "3.8"
 
 services:
   auth-service:
-    build: ./auth-service
+    build:
+      context: ./auth-service
+      dockerfile: Dockerfile
     ports:
       - "3000:3000"
     environment:
@@ -10,9 +12,14 @@ services:
       - AUTH_PORT=3000
     depends_on:
       - mongodb
+    volumes:
+      - ./auth-service:/app
+      - /app/node_modules
 
   user-service:
-    build: ./user-service
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
     ports:
       - "3001:3001"
     environment:
@@ -20,9 +27,14 @@ services:
       - USER_PORT=3001
     depends_on:
       - postgres
+    volumes:
+      - ./user-service:/app
+      - /app/node_modules
 
   chat-service:
-    build: ./chat-service
+    build:
+      context: ./chat-service
+      dockerfile: Dockerfile
     ports:
       - "3002:3002"
     environment:
@@ -30,9 +42,14 @@ services:
       - CHAT_PORT=3002
     depends_on:
       - mongodb
+    volumes:
+      - ./chat-service:/app
+      - /app/node_modules
 
   group-service:
-    build: ./group-service
+    build:
+      context: ./group-service
+      dockerfile: Dockerfile
     ports:
       - "3003:3003"
     environment:
@@ -40,9 +57,14 @@ services:
       - GROUP_PORT=3003
     depends_on:
       - mongodb
+    volumes:
+      - ./group-service:/app
+      - /app/node_modules
 
   contact-service:
-    build: ./contact-service
+    build:
+      context: ./contact-service
+      dockerfile: Dockerfile
     ports:
       - "3004:3004"
     environment:
@@ -50,9 +72,14 @@ services:
       - CONTACT_PORT=3004
     depends_on:
       - mongodb
+    volumes:
+      - ./contact-service:/app
+      - /app/node_modules
 
   file-service:
-    build: ./file-service
+    build:
+      context: ./file-service
+      dockerfile: Dockerfile
     ports:
       - "3005:3005"
     environment:
@@ -60,26 +87,34 @@ services:
       - FILE_PORT=3005
     depends_on:
       - mongodb
+    volumes:
+      - ./file-service:/app
+      - /app/node_modules
 
   gateway:
-    build: ./gateway
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     environment:
       - NODE_ENV=development
       - GATEWAY_PORT=8000
+    volumes:
+      - ./gateway:/app
+      - /app/node_modules
 
   mongodb:
     image: mongo:latest
     ports:
-      - "27017:27017"
+      - "27018:27017"
     volumes:
       - mongodb_data:/data/db
 
   postgres:
     image: postgres:latest
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
       - POSTGRES_USER=user
       - POSTGRES_PASSWORD=password
