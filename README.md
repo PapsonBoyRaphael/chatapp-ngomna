@@ -15,7 +15,8 @@ Setup
 Clone the repository:git clone https://github.com/PapsonBoyRaphael/chatapp-microservices.git
 cd chatapp-microservices
 
-Install dependencies for each service:cd auth-service && npm install
+Install dependencies for each service:cd auth-service && npm install:
+
 cd ../user-service && npm install
 cd ../chat-service && npm install
 cd ../group-service && npm install
@@ -26,12 +27,9 @@ cd ../gateway && npm install
 Set up environment variables:
 Copy the .env files from the examples provided in each service folder.
 
-Start the services using Docker:docker-compose up --build
+Start the services using Docker: docker-compose up --build
 
 Development
 To run in development mode:
 cd <service-name>
 npm run dev
-
-License
-ISC
