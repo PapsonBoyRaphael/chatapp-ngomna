@@ -1,0 +1,92 @@
+version: "3.8"
+
+services:
+  auth-service:
+    build: ./auth-service
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - AUTH_PORT=3000
+    depends_on:
+      - mongodb
+
+  user-service:
+    build: ./user-service
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - USER_PORT=3001
+    depends_on:
+      - postgres
+
+  chat-service:
+    build: ./chat-service
+    ports:
+      - "3002:3002"
+    environment:
+      - NODE_ENV=development
+      - CHAT_PORT=3002
+    depends_on:
+      - mongodb
+
+  group-service:
+    build: ./group-service
+    ports:
+      - "3003:3003"
+    environment:
+      - NODE_ENV=development
+      - GROUP_PORT=3003
+    depends_on:
+      - mongodb
+
+  contact-service:
+    build: ./contact-service
+    ports:
+      - "3004:3004"
+    environment:
+      - NODE_ENV=development
+      - CONTACT_PORT=3004
+    depends_on:
+      - mongodb
+
+  file-service:
+    build: ./file-service
+    ports:
+      - "3005:3005"
+    environment:
+      - NODE_ENV=development
+      - FILE_PORT=3005
+    depends_on:
+      - mongodb
+
+  gateway:
+    build: ./gateway
+    ports:
+      - "8000:8000"
+    environment:
+      - NODE_ENV=development
+      - GATEWAY_PORT=8000
+
+  mongodb:
+    image: mongo:latest
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+
+  postgres:
+    image: postgres:latest
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=users_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  mongodb_data:
+  postgres_data:

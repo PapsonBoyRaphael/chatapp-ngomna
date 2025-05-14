@@ -1,0 +1,14 @@
+{
+  "name": "chat-service",
+  "scripts": {
+  "start": "NODE_ENV=production node src/app.js",
+  "dev": "nodemon src/app.js",
+  "test": "jest --coverage", 
+  "lint": "eslint ."         
+},
+  "dependencies": {
+    "socket.io": "^4.7.5",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2"
+  }
+}
