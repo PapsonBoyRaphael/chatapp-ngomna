@@ -3,7 +3,7 @@ const cors = require("cors");
 require("dotenv").config();
 const cookieParser = require("cookie-parser");
 const jwt = require("jsonwebtoken");
-const loginRoutes = require("./src/routes/loginRoutes");
+// const loginRoutes = require("./src/routes/loginRoutes");
 
 const app = express();
 
@@ -16,7 +16,7 @@ app.use(
 app.use(express.json());
 app.use(cookieParser());
 
-app.use("/api/login", loginRoutes);
+// app.use("/api/login", loginRoutes);
 
 app.post("/api/validate-token", (req, res) => {
   const { token } = req.body;

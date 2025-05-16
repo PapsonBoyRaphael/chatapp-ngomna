@@ -6,7 +6,7 @@ const cors = require("cors");
 require("dotenv").config();
 const cookieParser = require("cookie-parser");
 const axios = require("axios");
-const contactRoutes = require("./src/routes/contactRoutes");
+// const contactRoutes = require("./src/routes/contactRoutes");
 
 const app = express();
 
@@ -40,7 +40,7 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(bodyParser.json());
 
-app.use("/api/contacts", authenticateToken, contactRoutes);
+// app.use("/api/contacts", authenticateToken, contactRoutes);
 
 app.use(({ res }) => {
   const message = "Ressource non trouvée.";

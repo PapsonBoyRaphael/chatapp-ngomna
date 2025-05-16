@@ -1,7 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
-const userRoutes = require("./src/routes/userRoutes");
+// const userRoutes = require("./src/routes/userRoutes");
 const { Sequelize } = require("sequelize");
 
 const app = express();
@@ -39,7 +39,7 @@ const authenticateToken = async (req, res, next) => {
   }
 };
 
-app.use("/api/users", authenticateToken, userRoutes);
+// app.use("/api/users", authenticateToken, userRoutes);
 
 app.use(({ res }) => {
   const message = "Ressource non trouvée.";

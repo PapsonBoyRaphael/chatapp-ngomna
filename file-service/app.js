@@ -7,7 +7,7 @@ require("dotenv").config();
 const cookieParser = require("cookie-parser");
 const axios = require("axios");
 const cloudinary = require("cloudinary").v2;
-const fileRoutes = require("./src/routes/fileRoutes");
+// const fileRoutes = require("./src/routes/fileRoutes");
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -47,7 +47,7 @@ app.use(express.json());
 app.use(cookieParser());
 app.use(bodyParser.json());
 
-app.use("/api/files", authenticateToken, fileRoutes);
+// app.use("/api/files", authenticateToken, fileRoutes);
 
 app.use(({ res }) => {
   const message = "Ressource non trouvée.";
