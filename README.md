@@ -1,5 +1,5 @@
-ChatApp Microservices
-This repository contains the microservices architecture for a chat application.
+ChatApp server Microservices for application telegrafix
+- This repository contains the microservices architecture for a chat application.
 Services
 
 auth-service: Handles authentication (port 3000)
@@ -10,12 +10,13 @@ contact-service: Manages contacts with MongoDB (port 3004)
 file-service: Manages file uploads with MongoDB and Cloudinary (port 3005)
 gateway: Entry point for all requests (port 8000)
 
-Setup
+- Setup
 
 Clone the repository:git clone https://github.com/PapsonBoyRaphael/chatapp-microservices.git
 cd chatapp-microservices
 
-Install dependencies for each service:cd auth-service && npm install
+- Install dependencies for each service:cd auth-service && npm install
+
 cd ../user-service && npm install
 cd ../chat-service && npm install
 cd ../group-service && npm install
@@ -26,12 +27,10 @@ cd ../gateway && npm install
 Set up environment variables:
 Copy the .env files from the examples provided in each service folder.
 
-Start the services using Docker:docker-compose up --build
+- Start the services using Docker:docker-compose up --build
 
 Development
 To run in development mode:
 cd <service-name>
 npm run dev
 
-License
-ISC
