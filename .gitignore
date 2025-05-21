@@ -3,3 +3,5 @@ node_modules
 schemas.json
 dist
 *.log
+.html
+.png
