@@ -6,7 +6,7 @@ const ConversationModel = require("../models/conversation");
 
 mongoose
   .connect(process.env.MONGODB_URI)
-  .then(() => console.log("Connecté à chat_db (Messages)"))
+  .then(() => console.log("Connecté à chat_db (Messages & Conversations)"))
   .catch((err) => console.error("Erreur MongoDB (Chat):", err));
 
 module.exports = {

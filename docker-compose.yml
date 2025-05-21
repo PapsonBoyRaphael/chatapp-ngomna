@@ -118,7 +118,7 @@ services:
     environment:
       - POSTGRES_USER=user
       - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=users_db
+      - POSTGRES_DB=chatapp
     volumes:
       - postgres_data:/var/lib/postgresql/data
 

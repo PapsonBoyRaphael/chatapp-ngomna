@@ -2,13 +2,11 @@ const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
 // const userRoutes = require("./src/routes/userRoutes");
-const { Sequelize } = require("sequelize");
+// const { Sequelize } = require("sequelize");
+const { sequelize } = require("./src/config/db");
+const initDb = require("./src/config/initDb");
 
 const app = express();
-
-const sequelize = new Sequelize(process.env.POSTGRES_URI, {
-  dialect: "postgres",
-});
 
 app.use(
   cors({
@@ -17,6 +15,8 @@ app.use(
   })
 );
 app.use(express.json());
+
+// initDb();
 
 const axios = require("axios");
 const authenticateToken = async (req, res, next) => {
