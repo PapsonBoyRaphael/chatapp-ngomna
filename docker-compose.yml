@@ -1,127 +1,132 @@
 version: "3.8"
-
 services:
-  auth-service:
-    build:
-      context: ./auth-service
-      dockerfile: Dockerfile
+  gateway:
+    build: ./gateway
     ports:
       - "3000:3000"
-    environment:
-      - NODE_ENV=development
-      - AUTH_PORT=3000
     depends_on:
-      - mongodb
-    volumes:
-      - ./auth-service:/app
-      - /app/node_modules
+      - user-service
+      - auth-service
+      - chat-service
+      - group-service
+      - visibility-service
+      - file-service
+      - postgres
+      - mongo
 
   user-service:
-    build:
-      context: ./user-service
-      dockerfile: Dockerfile
+    build: ./user-service
     ports:
       - "3001:3001"
     environment:
-      - NODE_ENV=development
-      - USER_PORT=3001
+      - PORT=3001
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=chatapp_users
     depends_on:
       - postgres
-    volumes:
-      - ./user-service:/app
-      - /app/node_modules
 
-  chat-service:
-    build:
-      context: ./chat-service
-      dockerfile: Dockerfile
+  auth-service:
+    build: ./auth-service
     ports:
       - "3002:3002"
     environment:
-      - NODE_ENV=development
-      - CHAT_PORT=3002
+      - PORT=3002
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=password
+      - DB_NAME=chatapp_auth
+      - JWT_SECRET=your-secret-key
     depends_on:
-      - mongodb
-    volumes:
-      - ./chat-service:/app
-      - /app/node_modules
+      - postgres
 
-  group-service:
-    build:
-      context: ./group-service
-      dockerfile: Dockerfile
+  chat-service:
+    build: ./chat-service
     ports:
       - "3003:3003"
     environment:
-      - NODE_ENV=development
-      - GROUP_PORT=3003
+      - PORT=3003
+      - DB_HOST=mongo
+      - DB_PORT=27017
+      - DB_NAME=chatapp_messages
     depends_on:
-      - mongodb
-    volumes:
-      - ./group-service:/app
-      - /app/node_modules
+      - mongo
 
-  contact-service:
-    build:
-      context: ./contact-service
-      dockerfile: Dockerfile
+  group-service:
+    build: ./group-service
     ports:
       - "3004:3004"
     environment:
-      - NODE_ENV=development
-      - CONTACT_PORT=3004
+      - PORT=3004
+      - DB_HOST=mongo
+      - DB_PORT=27017
+      - DB_NAME=chatapp_groups
     depends_on:
-      - mongodb
-    volumes:
-      - ./contact-service:/app
-      - /app/node_modules
+      - mongo
 
-  file-service:
-    build:
-      context: ./file-service
-      dockerfile: Dockerfile
+  visibility-service:
+    build: ./visibility-service
     ports:
       - "3005:3005"
     environment:
-      - NODE_ENV=development
-      - FILE_PORT=3005
+      - PORT=3005
+      - DB_HOST=mongo
+      - DB_PORT=27017
+      - DB_NAME=chatapp_visibility
     depends_on:
-      - mongodb
-    volumes:
-      - ./file-service:/app
-      - /app/node_modules
+      - mongo
 
-  gateway:
-    build:
-      context: ./gateway
-      dockerfile: Dockerfile
+  file-service:
+    build: ./file-service
     ports:
-      - "8000:8000"
+      - "3006:3006"
     environment:
-      - NODE_ENV=development
-      - GATEWAY_PORT=8000
-    volumes:
-      - ./gateway:/app
-      - /app/node_modules
-
-  mongodb:
-    image: mongo:latest
-    ports:
-      - "27018:27017"
-    volumes:
-      - mongodb_data:/data/db
+      - PORT=3006
+      - DB_HOST=mongo
+      - DB_PORT=27017
+      - DB_NAME=chatapp_files
+    depends_on:
+      - mongo
 
   postgres:
-    image: postgres:latest
-    ports:
-      - "5433:5432"
+    image: postgres:15
     environment:
-      - POSTGRES_USER=user
+      - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=users_db
+      - POSTGRES_DB=chatapp_users
+    ports:
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  mongo:
+    image: mongo:6.0
+    environment:
+      - MONGO_INITDB_DATABASE=chatapp_messages
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  neo4j:
+    image: neo4j:5.9
+    ports:
+      - "7474:7474" # HTTP
+      - "7687:7687" # Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+    volumes:
+      - neo4j_data:/data
+      - neo4j_plugins:/plugins
+
 volumes:
-  mongodb_data:
   postgres_data:
+  mongo_data:
+  neo4j_data:
+  neo4j_plugins:

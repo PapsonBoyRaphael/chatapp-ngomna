@@ -17,14 +17,14 @@ app.use(
 app.use(express.json());
 
 app.use(express.static(path.join(__dirname, "public")));
-app.use(favicon(path.join(__dirname, "favicon.ico")));
+app.use(favicon(path.join(__dirname, "./public/favicon.ico")));
 
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
+  res.sendFile(path.join(__dirname, "./public/index.html"));
 });
 
 app.get("/home.html", (req, res) => {
-  res.sendFile(path.join(__dirname, "home.html"));
+  res.sendFile(path.join(__dirname, "./public/home.html"));
 });
 
 // Redirection vers les services
@@ -48,8 +48,8 @@ app.use("/api/groups", (req, res) => {
   proxy.web(req, res, { target: process.env.GROUP_SERVICE_URL });
 });
 
-app.use("/api/contacts", (req, res) => {
-  proxy.web(req, res, { target: process.env.CONTACT_SERVICE_URL });
+app.use("/api/visibility", (req, res) => {
+  proxy.web(req, res, { target: process.env.VISIBILITY_SERVICE_URL });
 });
 
 app.use("/api/files", (req, res) => {
