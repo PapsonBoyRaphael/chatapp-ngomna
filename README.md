@@ -1,4 +1,4 @@
-ChatApp server Microservices for application telegrafix
+ChatApp server Microservices for application nGomna
 - This repository contains the microservices architecture for a chat application.
 Services
 
