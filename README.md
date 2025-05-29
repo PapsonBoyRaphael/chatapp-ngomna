@@ -12,7 +12,7 @@ gateway: Entry point for all requests (port 8000)
 
 - Setup
 
-Clone the repository:git clone https://github.com/PapsonBoyRaphael/chatapp-microservices.git
+Clone the repository:git clone https://github.com/PapsonBoyRaphael/chatapp-ngomna.git
 cd chatapp-microservices
 
 - Install dependencies for each service:cd auth-service && npm install
