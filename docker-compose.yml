@@ -9,7 +9,7 @@ services:
       - auth-service
       - chat-service
       - group-service
-      - contact-service
+      - visibility-service
       - file-service
       - postgres
       - mongo
@@ -67,15 +67,15 @@ services:
     depends_on:
       - mongo
 
-  contact-service:
-    build: ./contact-service
+  visibility-service:
+    build: ./visibility-service
     ports:
       - "3005:3005"
     environment:
       - PORT=3005
       - DB_HOST=mongo
       - DB_PORT=27017
-      - DB_NAME=chatapp_contacts
+      - DB_NAME=chatapp_visibility
     depends_on:
       - mongo
 
@@ -111,6 +111,22 @@ services:
     volumes:
       - mongo_data:/data/db
 
+  neo4j:
+    image: neo4j:5.9
+    ports:
+      - "7474:7474" # HTTP
+      - "7687:7687" # Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/password
+      - NEO4J_apoc_export_file_enabled=true
+      - NEO4J_apoc_import_file_enabled=true
+      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
+    volumes:
+      - neo4j_data:/data
+      - neo4j_plugins:/plugins
+
 volumes:
   postgres_data:
   mongo_data:
+  neo4j_data:
+  neo4j_plugins:
