@@ -1,17 +1,22 @@
 const { DataTypes } = require("sequelize");
 const { sequelize } = require("../infrastructure/database/connection");
 
-const User = sequelize.define(
-  "User",
+const Personnel = sequelize.define(
+  "Personnel",
   {
-    matricule: {
-      type: DataTypes.STRING(20),
+    id: {
+      type: DataTypes.INTEGER,
       primaryKey: true,
-      allowNull: false,
+      autoIncrement: true,
+    },
+    agt_id: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+    },
+    matricule: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
       unique: true,
-      validate: {
-        notEmpty: true,
-      },
     },
     nom: {
       type: DataTypes.STRING(100),
@@ -28,36 +33,40 @@ const User = sequelize.define(
       },
     },
     sexe: {
-      type: DataTypes.ENUM("M", "F"),
-      allowNull: false,
+      type: DataTypes.STRING(10),
+      allowNull: true,
+    },
+    mmnaissance: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
       validate: {
-        isIn: [["M", "F"]],
+        min: 1,
+        max: 12,
       },
     },
-    rang: {
-      type: DataTypes.STRING(50),
-      allowNull: false,
+    aanaissance: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
       validate: {
-        notEmpty: true,
+        min: 1900,
+        max: new Date().getFullYear(),
       },
+    },
+    lieunaissance: {
+      type: DataTypes.STRING(200),
+      allowNull: true,
     },
     ministere: {
-      type: DataTypes.STRING(150),
-      allowNull: false,
-      validate: {
-        notEmpty: true,
-      },
-    },
-    password: {
-      type: DataTypes.STRING(255),
-      allowNull: false,
+      type: DataTypes.STRING(300),
+      allowNull: true,
     },
   },
   {
+    tableName: "personnel", // Force le nom de la table en minuscules
     timestamps: true,
     createdAt: "created_at",
-    updatedAt: "updated_at",
+    updatedAt: false, // Désactive la colonne updated_at
   }
 );
 
-module.exports = User;
+module.exports = Personnel;
