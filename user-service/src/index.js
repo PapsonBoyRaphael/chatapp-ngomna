@@ -1,33 +1,39 @@
 const express = require("express");
+const cors = require("cors");
+const { testConnection } = require("./infrastructure/config/database");
+const UserRepository = require("./infrastructure/repositories/UserRepository");
+const GetAllUsers = require("./application/use-cases/GetAllUsers");
+const UserController = require("./interfaces/http/controllers/userController");
+const createUserRoutes = require("./interfaces/http/routes/userRoutes");
 const chalk = require("chalk");
-const { testConnection } = require("./infrastructure/database/connection");
-const initDatabase = require("./infrastructure/database/init");
 require("dotenv").config();
 
 const app = express();
 app.use(express.json());
+app.use(cors());
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.USER_SERVICE_PORT || 8002;
+
+// Initialisation des dépendances
+const userRepository = new UserRepository();
+const getAllUsersUseCase = new GetAllUsers(userRepository);
+const userController = new UserController(getAllUsersUseCase);
+
+// Routes
+app.use("/", createUserRoutes(userController));
 
 const startServer = async () => {
   try {
-    // Test connexion BD
     const isConnected = await testConnection();
     if (!isConnected) {
       throw new Error("Échec de connexion à la base de données");
     }
 
-    // Initialisation BD
-    const isInitialized = await initDatabase();
-    if (!isInitialized) {
-      throw new Error("Échec initialisation de la base de données");
-    }
-
     app.listen(PORT, () => {
-      console.log(chalk.yellow(`user-service démarré sur le port ${PORT}`));
+      console.log(chalk.yellow(`User service démarré sur le port ${PORT}`));
     });
   } catch (error) {
-    console.error("Erreur de démarrage:", error);
+    console.error("❌ Erreur de démarrage:", error);
     process.exit(1);
   }
 };

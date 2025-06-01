@@ -3,7 +3,7 @@ services:
   gateway:
     build: ./gateway
     ports:
-      - "3000:3000"
+      - "8000:8000"
     depends_on:
       - user-service
       - auth-service
@@ -17,9 +17,9 @@ services:
   user-service:
     build: ./user-service
     ports:
-      - "3001:3001"
+      - "8001:8001"
     environment:
-      - PORT=3001
+      - PORT=8001
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_USER=postgres
@@ -31,9 +31,9 @@ services:
   auth-service:
     build: ./auth-service
     ports:
-      - "3002:3002"
+      - "8002:8002"
     environment:
-      - PORT=3002
+      - PORT=8002
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_USER=postgres
@@ -46,9 +46,9 @@ services:
   chat-service:
     build: ./chat-service
     ports:
-      - "3003:3003"
+      - "8003:8003"
     environment:
-      - PORT=3003
+      - PORT=8003
       - DB_HOST=mongo
       - DB_PORT=27017
       - DB_NAME=chatapp_messages
@@ -58,9 +58,9 @@ services:
   group-service:
     build: ./group-service
     ports:
-      - "3004:3004"
+      - "8004:8004"
     environment:
-      - PORT=3004
+      - PORT=8004
       - DB_HOST=mongo
       - DB_PORT=27017
       - DB_NAME=chatapp_groups
@@ -70,9 +70,9 @@ services:
   visibility-service:
     build: ./visibility-service
     ports:
-      - "3005:3005"
+      - "8005:8005"
     environment:
-      - PORT=3005
+      - PORT=8005
       - DB_HOST=mongo
       - DB_PORT=27017
       - DB_NAME=chatapp_visibility
@@ -82,9 +82,9 @@ services:
   file-service:
     build: ./file-service
     ports:
-      - "3006:3006"
+      - "8006:8006"
     environment:
-      - PORT=3006
+      - PORT=8006
       - DB_HOST=mongo
       - DB_PORT=27017
       - DB_NAME=chatapp_files

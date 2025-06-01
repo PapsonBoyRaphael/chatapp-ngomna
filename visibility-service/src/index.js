@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json());
 // app.use('/visibility', visibilityRoutes);
 
-const PORT = process.env.PORT || 3005;
+const PORT = process.env.PORT || 8005;
 
 const startServer = async () => {
   try {

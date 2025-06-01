@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chat Service Test</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="chat-container">
+      <div class="chat-sidebar">
+        <h2>Conversations</h2>
+        <ul id="conversation-list">
+          <!-- Les conversations s'afficheront ici -->
+        </ul>
+        <button id="contacts-button">Voir les contacts</button>
+      </div>
+      <div class="chat-main">
+        <div class="chat-header">
+          <div class="contact-info">
+            <div class="contact-details">
+              <h2 id="current-contact">Sélectionnez une conversation</h2>
+              <p class="last-seen">dernière vue récemment</p>
+            </div>
+          </div>
+        </div>
+        <div class="chat-messages" id="chat-messages">
+          <!-- Messages s'afficheront ici -->
+        </div>
+        <div class="chat-input">
+          <input
+            type="text"
+            id="message-input"
+            placeholder="Tapez votre message..."
+          />
+          <button id="send-button">Envoyer</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fenêtre modale pour les contacts -->
+    <div id="contacts-modal" class="modal">
+      <div class="modal-content">
+        <span id="close-modal" class="close">&times;</span>
+        <h2>Liste des contacts</h2>
+        <ul id="contacts-list">
+          <!-- Les contacts s'afficheront ici -->
+        </ul>
+      </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script>
+      const token = sessionStorage.getItem("token");
+      const socket = io("http://localhost:8003", {
+        auth: {
+          token, // Envoyer le token lors de la connexion
+        },
+      }); // Remplacez par l'URL de votre chat-service
+      const userId = "user1"; // ID de l'utilisateur actuel
+      let currentReceiverId = null;
+
+      // Rejoindre une salle
+      socket.emit("join", userId);
+
+      // Charger les conversations au démarrage
+      const loadConversations = async () => {
+        try {
+          const response = await fetch("http://localhost:8002/conversations"); // Exemple d'API pour les conversations
+          const conversations = await response.json();
+
+          const conversationList = document.getElementById("conversation-list");
+          conversationList.innerHTML = ""; // Réinitialiser la liste
+
+          conversations.forEach((conversation) => {
+            const li = document.createElement("li");
+            li.textContent = `${conversation.nom} ${conversation.prenom}`;
+            li.dataset.id = conversation.id;
+
+            li.addEventListener("click", () => {
+              // Mettre à jour l'en-tête avec la conversation sélectionnée
+              document.getElementById(
+                "current-contact"
+              ).textContent = `${conversation.nom} ${conversation.prenom}`;
+              currentReceiverId = conversation.id;
+
+              // Charger les messages de la conversation (simulé)
+              console.log(
+                `Chargement des messages pour ${conversation.nom} ${conversation.prenom}`
+              );
+            });
+
+            conversationList.appendChild(li);
+          });
+        } catch (error) {
+          console.error("Erreur lors du chargement des conversations :", error);
+        }
+      };
+
+      // Charger les contacts dans la fenêtre modale
+      const loadContacts = async () => {
+        try {
+          const response = await fetch("http://localhost:8002/users"); // URL de l'API user-service
+          const users = await response.json();
+
+          const contactsList = document.getElementById("contacts-list");
+          contactsList.innerHTML = ""; // Réinitialiser la liste
+
+          users.forEach((user) => {
+            const li = document.createElement("li");
+            li.textContent = `${user.nom} ${user.prenom}`;
+            li.dataset.id = user.id;
+
+            li.addEventListener("click", () => {
+              // Mettre à jour l'en-tête avec le contact sélectionné
+              document.getElementById(
+                "current-contact"
+              ).textContent = `${user.nom} ${user.prenom}`;
+              currentReceiverId = user.id;
+
+              // Fermer la fenêtre modale
+              closeModal();
+            });
+
+            contactsList.appendChild(li);
+          });
+        } catch (error) {
+          console.error("Erreur lors du chargement des utilisateurs :", error);
+        }
+      };
+
+      // Afficher la fenêtre modale
+      const openModal = () => {
+        document.getElementById("contacts-modal").style.display = "block";
+        loadContacts(); // Charger les contacts
+      };
+
+      // Fermer la fenêtre modale
+      const closeModal = () => {
+        document.getElementById("contacts-modal").style.display = "none";
+      };
+
+      // Ajouter les gestionnaires d'événements
+      document
+        .getElementById("contacts-button")
+        .addEventListener("click", openModal);
+      document
+        .getElementById("close-modal")
+        .addEventListener("click", closeModal);
+
+      // Charger les conversations au démarrage
+      loadConversations();
+
+      // Envoyer un message
+      document.getElementById("send-button").addEventListener("click", () => {
+        const messageInput = document.getElementById("message-input");
+        const message = messageInput.value;
+
+        if (message.trim() !== "" && currentReceiverId) {
+          socket.emit("privateMessage", {
+            senderId: userId,
+            receiverId: currentReceiverId,
+            content: message,
+          });
+
+          messageInput.value = "";
+        }
+      });
+
+      // Recevoir un message
+      socket.on("newMessage", (message) => {
+        const chatMessages = document.getElementById("chat-messages");
+        const messageElement = document.createElement("div");
+        messageElement.classList.add("message");
+        messageElement.textContent = `${message.senderId}: ${message.content}`;
+        chatMessages.appendChild(messageElement);
+      });
+    </script>
+  </body>
+</html>
