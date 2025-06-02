@@ -9,6 +9,13 @@
   <body>
     <div class="chat-container">
       <div class="chat-sidebar">
+        <div class="current-user">
+          <div class="user-info">
+            <h3 id="user-name"></h3>
+            <span id="user-status">En ligne</span>
+          </div>
+        </div>
+        <hr class="divider" />
         <h2>Conversations</h2>
         <ul id="conversation-list">
           <!-- Les conversations s'afficheront ici -->
@@ -51,51 +58,38 @@
 
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <script>
-      const token = sessionStorage.getItem("token");
+      const getCookie = (name) => {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+
+        if (name === "user") {
+          // Si le cookie est "user", on le décode
+          if (parts.length === 2)
+            return JSON.parse(
+              decodeURIComponent(parts.pop().split(";").shift())
+            );
+        } else if (parts.length === 2) return parts.pop().split(";").shift();
+      };
+
+      const token = getCookie("token");
+      const user = getCookie("user");
+      if (user) {
+        // Afficher le nom complet
+        document.getElementById(
+          "user-name"
+        ).textContent = `${user.nom} ${user.prenom}`;
+      }
+      console.log("user:", user);
       const socket = io("http://localhost:8003", {
         auth: {
           token, // Envoyer le token lors de la connexion
         },
       }); // Remplacez par l'URL de votre chat-service
-      const userId = "user1"; // ID de l'utilisateur actuel
+      const userId = user.id; // ID de l'utilisateur actuel
       let currentReceiverId = null;
 
       // Rejoindre une salle
       socket.emit("join", userId);
-
-      // Charger les conversations au démarrage
-      const loadConversations = async () => {
-        try {
-          const response = await fetch("http://localhost:8002/conversations"); // Exemple d'API pour les conversations
-          const conversations = await response.json();
-
-          const conversationList = document.getElementById("conversation-list");
-          conversationList.innerHTML = ""; // Réinitialiser la liste
-
-          conversations.forEach((conversation) => {
-            const li = document.createElement("li");
-            li.textContent = `${conversation.nom} ${conversation.prenom}`;
-            li.dataset.id = conversation.id;
-
-            li.addEventListener("click", () => {
-              // Mettre à jour l'en-tête avec la conversation sélectionnée
-              document.getElementById(
-                "current-contact"
-              ).textContent = `${conversation.nom} ${conversation.prenom}`;
-              currentReceiverId = conversation.id;
-
-              // Charger les messages de la conversation (simulé)
-              console.log(
-                `Chargement des messages pour ${conversation.nom} ${conversation.prenom}`
-              );
-            });
-
-            conversationList.appendChild(li);
-          });
-        } catch (error) {
-          console.error("Erreur lors du chargement des conversations :", error);
-        }
-      };
 
       // Charger les contacts dans la fenêtre modale
       const loadContacts = async () => {
@@ -148,13 +142,12 @@
         .getElementById("close-modal")
         .addEventListener("click", closeModal);
 
-      // Charger les conversations au démarrage
-      loadConversations();
-
       // Envoyer un message
       document.getElementById("send-button").addEventListener("click", () => {
         const messageInput = document.getElementById("message-input");
         const message = messageInput.value;
+
+        console.log("Message à envoyer :", message);
 
         if (message.trim() !== "" && currentReceiverId) {
           socket.emit("privateMessage", {
@@ -167,14 +160,175 @@
         }
       });
 
+      // Ajouter cette fonction avant les événements socket
+      const loadMessages = async (conversationId) => {
+        try {
+          // Nettoyer la zone des messages
+          const chatMessages = document.getElementById("chat-messages");
+          chatMessages.innerHTML = "";
+
+          // Émettre un événement pour demander les messages
+          socket.emit("getMessages", {
+            conversationId: conversationId,
+          });
+          // Marquer tous les messages comme lus
+          socket.emit("markRead", conversationId);
+        } catch (error) {
+          console.error("Erreur lors du chargement des messages:", error);
+        }
+      };
+
       // Recevoir un message
       socket.on("newMessage", (message) => {
         const chatMessages = document.getElementById("chat-messages");
         const messageElement = document.createElement("div");
         messageElement.classList.add("message");
-        messageElement.textContent = `${message.senderId}: ${message.content}`;
+
+        // Ajouter une classe différente selon l'expéditeur
+        if (message.senderId === userId) {
+          messageElement.classList.add("sent");
+        } else {
+          messageElement.classList.add("received");
+        }
+
+        messageElement.innerHTML = `
+      <div class="message-content">
+        <p>${message.content}</p>
+        <span class="message-time">${new Date(
+          message.createdAt
+        ).toLocaleTimeString()}</span>
+      </div>
+    `;
+
         chatMessages.appendChild(messageElement);
+
+        // Marquer le message comme livré dès réception
+        socket.emit("markDelivered", message.conversationId);
       });
+
+      // Écouter les nouvelles conversations en temps réel
+      socket.on("newConversation", (conversation) => {
+        console.log("Nouvelle conversation :", conversation);
+        const conversationList = document.getElementById("conversation-list");
+
+        const li = document.createElement("li");
+        li.textContent = `${conversation.nom} ${conversation.prenom}`;
+        li.dataset.id = conversation.id;
+
+        li.addEventListener("click", () => {
+          document.getElementById(
+            "current-contact"
+          ).textContent = `${conversation.nom} ${conversation.prenom}`;
+          currentReceiverId = conversation.id;
+        });
+
+        conversationList.appendChild(li);
+      });
+
+      // Émettre un événement pour demander les conversations
+      socket.emit("sidebar");
+
+      // Modifier l'écouteur sidebarData
+      socket.on("sidebarData", async (conversations) => {
+        const conversationList = document.getElementById("conversation-list");
+        conversationList.innerHTML = "";
+
+        console.log("Conversations reçues :", conversations);
+
+        conversations.forEach((conversation) => {
+          const otherParticipant = conversation.participants.find(
+            (p) => p.id !== userId
+          );
+
+          const li = document.createElement("li");
+          li.classList.add("conversation-item");
+
+          li.innerHTML = `
+      <div class="conversation-info">
+        <div class="participant-name">${otherParticipant.nom} ${
+            otherParticipant.prenom
+          }</div>
+        ${
+          conversation.lastMessage
+            ? `<div class="last-message">${conversation.lastMessage.content}</div>`
+            : ""
+        }
+      </div>
+      ${
+        conversation.unreadCount > 0
+          ? `<span class="unread-count">${conversation.unreadCount}</span>`
+          : ""
+      }
+    `;
+
+          li.dataset.id = conversation._id;
+          li.addEventListener("click", () => {
+            currentReceiverId = otherParticipant.id;
+            document.getElementById(
+              "current-contact"
+            ).textContent = `${otherParticipant.nom} ${otherParticipant.prenom}`;
+            loadMessages(conversation._id);
+          });
+
+          conversationList.appendChild(li);
+        });
+      });
+      // Ajouter cet écouteur après les autres événements socket
+      socket.on("messagesLoaded", (messages) => {
+        console.log("Messages reçus:", messages);
+        const chatMessages = document.getElementById("chat-messages");
+
+        messages.forEach((message) => {
+          const messageElement = document.createElement("div");
+          messageElement.classList.add("message");
+
+          // Ajouter une classe différente selon l'expéditeur
+          if (message.senderId === userId) {
+            messageElement.classList.add("sent");
+          } else {
+            messageElement.classList.add("received");
+          }
+
+          messageElement.innerHTML = `
+      <div class="message-content">
+        <p>${message.content}</p>
+        <span class="message-time">${new Date(
+          message.createdAt
+        ).toLocaleTimeString()}</span>
+      </div>
+    `;
+
+          chatMessages.appendChild(messageElement);
+        });
+
+        // Faire défiler jusqu'au dernier message
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      });
+
+      // Écouter les changements de statut des messages
+      socket.on("messagesDelivered", ({ conversationId, receiverId }) => {
+        // Mettre à jour l'interface pour montrer que les messages ont été livrés
+        updateMessagesStatus(conversationId, "DELIVERED");
+      });
+
+      socket.on("messagesRead", ({ conversationId, receiverId }) => {
+        // Mettre à jour l'interface pour montrer que les messages ont été lus
+        updateMessagesStatus(conversationId, "READ");
+      });
+
+      // Fonction pour mettre à jour visuellement le statut des messages
+      function updateMessagesStatus(conversationId, status) {
+        const messages = document.querySelectorAll(
+          `[data-conversation-id="${conversationId}"]`
+        );
+        messages.forEach((message) => {
+          const statusElement = message.querySelector(".message-status");
+          if (statusElement) {
+            statusElement.textContent = status === "READ" ? "✓✓" : "✓";
+            statusElement.className = `message-status ${status.toLowerCase()}`;
+          }
+        });
+      }
     </script>
   </body>
 </html>

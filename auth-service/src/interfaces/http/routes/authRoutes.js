@@ -1,4 +1,5 @@
 const express = require("express");
+const jwt = require("jsonwebtoken");
 
 const createAuthRoutes = (authController) => {
   const router = express.Router();
@@ -7,7 +8,7 @@ const createAuthRoutes = (authController) => {
     authController.login(req, res);
   });
 
-  router.post("/validate", (req, res) => {
+  router.post("/validate", async (req, res) => {
     const { token } = req.body;
 
     if (!token) {

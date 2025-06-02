@@ -3,6 +3,7 @@ const cors = require("cors");
 const { testConnection } = require("./infrastructure/config/database");
 const UserRepository = require("./infrastructure/repositories/UserRepository");
 const GetAllUsers = require("./application/use-cases/GetAllUsers");
+const GetUserById = require("./application/use-cases/GetUserById");
 const UserController = require("./interfaces/http/controllers/userController");
 const createUserRoutes = require("./interfaces/http/routes/userRoutes");
 const chalk = require("chalk");
@@ -17,7 +18,12 @@ const PORT = process.env.USER_SERVICE_PORT || 8002;
 // Initialisation des dépendances
 const userRepository = new UserRepository();
 const getAllUsersUseCase = new GetAllUsers(userRepository);
-const userController = new UserController(getAllUsersUseCase);
+const getUserByIdUseCase = new GetUserById(userRepository);
+
+const userController = new UserController(
+  getAllUsersUseCase,
+  getUserByIdUseCase
+);
 
 // Routes
 app.use("/", createUserRoutes(userController));

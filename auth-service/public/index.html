@@ -39,8 +39,13 @@
 
             if (response.ok) {
               // Stocker le token JWT et rediriger vers le chat-service
-              sessionStorage.setItem("token", data.token);
-              sessionStorage.setItem("user", JSON.stringify(data.user));
+              localStorage.setItem("token", data.token);
+              localStorage.setItem("user", JSON.stringify(data.user));
+              document.cookie = `token=${data.token}; path=/; secure; SameSite=None`;
+              document.cookie = `user=${encodeURIComponent(
+                JSON.stringify(data.user)
+              )}; path=/; secure; SameSite=None`;
+
               window.location.href = "http://localhost:8003";
             } else {
               document.getElementById("error-message").textContent =
