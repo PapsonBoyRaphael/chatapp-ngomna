@@ -1,11 +1,20 @@
 const Conversation = require("../mongodb/models/ConversationModel");
 
 class MongoConversationRepository {
+  async getConversationById(conversationId) {
+    return await Conversation.findById(conversationId)
+      .populate("lastMessage")
+      .lean();
+  }
+
   async getConversationsByUserId(userId) {
     try {
       const conversations = await Conversation.find({
         participants: userId,
-      }).populate("lastMessage");
+      })
+        .populate("lastMessage")
+        .sort({ "lastMessage.createdAt": -1 })
+        .lean();
 
       return conversations;
     } catch (error) {
@@ -15,20 +24,29 @@ class MongoConversationRepository {
   }
 
   async findOrCreateConversation(participants) {
-    let conversation = await Conversation.findOne({
+    // Utilisé uniquement pour le premier message
+    const conversation = await Conversation.findOne({
       participants: { $all: participants },
     });
-    if (!conversation) {
-      conversation = new Conversation({ participants });
-      await conversation.save();
+
+    if (conversation) {
+      return conversation;
     }
-    return conversation;
+
+    return await Conversation.create({
+      participants,
+      metadata: {
+        createdBy: participants[0],
+      },
+    });
   }
 
   async updateLastMessage(conversationId, messageId) {
-    return await Conversation.findByIdAndUpdate(conversationId, {
-      lastMessage: messageId,
-    });
+    return await Conversation.findByIdAndUpdate(
+      conversationId,
+      { lastMessage: messageId },
+      { new: true }
+    );
   }
 }
 

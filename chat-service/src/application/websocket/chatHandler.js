@@ -3,9 +3,10 @@ const axios = require("axios");
 module.exports = (
   io,
   sendMessageUseCase,
+  getConversationUseCase,
   getConversationsUseCase,
   getMessagesUseCase,
-  messageRepository
+  updateMessageStatusUseCase
 ) => {
   io.on("connection", async (socket) => {
     console.log("Nouveau client connecté:", socket.id);
@@ -82,11 +83,11 @@ module.exports = (
         }
       });
 
-      // Gérer les messages privés (mise à jour du gestionnaire existant)
+      // Gérer les messages privés
       socket.on("privateMessage", async (data) => {
         try {
           console.log("Message privé reçu:", data);
-          const { senderId, receiverId, content, conversationId } = data;
+          const { senderId, receiverId, content } = data;
 
           // Vérifier l'identité de l'expéditeur
           if (senderId !== userId) {
@@ -97,23 +98,36 @@ module.exports = (
             return;
           }
 
+          // Envoyer le message avec l'ID de conversation
           const message = await sendMessageUseCase.execute({
             senderId,
             receiverId,
             content,
-            conversationId,
           });
 
           // Envoyer le message aux deux participants
           io.to(receiverId).emit("newMessage", message);
-          socket.emit("messageSent", message);
+          socket.emit("newMessage", message);
 
-          // Mettre à jour la conversation dans la sidebar des deux participants
-          const updatedConversation = await getConversationsUseCase.execute(
-            userId
+          // Utiliser le conversationId retourné par le sendMessageUseCase
+          const updatedConversationSender =
+            await getConversationUseCase.execute(
+              message.conversationId,
+              userId
+            );
+
+          const updatedConversationReceiver =
+            await getConversationUseCase.execute(
+              message.conversationId,
+              receiverId
+            );
+
+          // Émettre l'événement de mise à jour de conversation
+          socket.emit("conversationUpdated", updatedConversationSender);
+          io.to(receiverId).emit(
+            "conversationUpdated",
+            updatedConversationReceiver
           );
-          socket.emit("sidebarData", updatedConversation);
-          io.to(receiverId).emit("sidebarData", updatedConversation);
         } catch (error) {
           console.error("Erreur lors de l'envoi du message:", error);
           socket.emit("messageError", {
@@ -121,26 +135,44 @@ module.exports = (
           });
         }
       });
-
-      // Marquer les messages comme livrés quand l'utilisateur se connecte
+      // Marquer les messages comme livrés
       socket.on("markDelivered", async (conversationId) => {
         try {
-          await messageRepository.updateMessagesStatus(
+          await updateMessageStatusUseCase.execute({
+            conversationId,
+            receiverId: userId,
+            status: "DELIVERED",
+          });
+
+          // Récupérer la conversation mise à jour
+          const updatedConversationReceiver =
+            await getConversationUseCase.execute(conversationId, userId);
+
+          // Mettre à jour la conversation pour le récepteur
+          socket.emit("conversationUpdated", updatedConversationReceiver);
+
+          // Notifier l'expéditeur du changement de statut
+          const messages = await getMessagesUseCase.execute({
             conversationId,
             userId,
-            "DELIVERED"
-          );
+          });
 
-          // Notifier l'expéditeur que ses messages ont été livrés
-          const messages = await messageRepository.getMessagesByConversationId(
-            conversationId
-          );
           const senderId = messages[0]?.senderId;
           if (senderId) {
             io.to(senderId).emit("messagesDelivered", {
               conversationId,
               receiverId: userId,
+              messages: messages.map((msg) => ({
+                id: msg._id,
+                status: "DELIVERED",
+              })),
             });
+            const updatedConversationSender =
+              await getConversationUseCase.execute(conversationId, senderId);
+            io.to(senderId).emit(
+              "conversationUpdated",
+              updatedConversationSender
+            );
           }
         } catch (error) {
           console.error(
@@ -153,22 +185,41 @@ module.exports = (
       // Marquer les messages comme lus
       socket.on("markRead", async (conversationId) => {
         try {
-          await messageRepository.updateMessagesStatus(
+          await updateMessageStatusUseCase.execute({
+            conversationId,
+            receiverId: userId,
+            status: "READ",
+          });
+
+          // Récupérer la conversation mise à jour
+          const updatedConversationReceiver =
+            await getConversationUseCase.execute(conversationId, userId);
+
+          // Mettre à jour la conversation pour le récepteur
+          socket.emit("conversationUpdated", updatedConversationReceiver);
+
+          // Notifier l'expéditeur du changement de statut
+          const messages = await getMessagesUseCase.execute({
             conversationId,
             userId,
-            "READ"
-          );
+          });
 
-          // Notifier l'expéditeur que ses messages ont été lus
-          const messages = await messageRepository.getMessagesByConversationId(
-            conversationId
-          );
           const senderId = messages[0]?.senderId;
           if (senderId) {
             io.to(senderId).emit("messagesRead", {
               conversationId,
               receiverId: userId,
+              messages: messages.map((msg) => ({
+                id: msg._id,
+                status: "READ",
+              })),
             });
+            const updatedConversationSender =
+              await getConversationUseCase.execute(conversationId, senderId);
+            io.to(senderId).emit(
+              "conversationUpdated",
+              updatedConversationSender
+            );
           }
         } catch (error) {
           console.error(

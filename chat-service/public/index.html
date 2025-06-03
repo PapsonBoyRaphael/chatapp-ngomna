@@ -180,18 +180,21 @@
 
       // Recevoir un message
       socket.on("newMessage", (message) => {
-        const chatMessages = document.getElementById("chat-messages");
-        const messageElement = document.createElement("div");
-        messageElement.classList.add("message");
-        messageElement.dataset.conversationId = message.conversationId;
-
-        if (message.senderId === userId) {
-          messageElement.classList.add("sent");
-        } else {
-          messageElement.classList.add("received");
+        console.log(message);
+        // Marquer le message comme livré dès réception
+        if (message.senderId !== userId) {
+          socket.emit("markDelivered", message.conversationId);
         }
 
-        messageElement.innerHTML = `
+        if (message.receiverId === currentReceiverId) {
+          const chatMessages = document.getElementById("chat-messages");
+          const messageElement = document.createElement("div");
+          messageElement.classList.add("message");
+          messageElement.dataset.conversationId = message.conversationId;
+
+          if (message.senderId === userId) {
+            messageElement.classList.add("sent");
+            messageElement.innerHTML = `
     <div class="message-content">
       <p>${message.content}</p>
       <div class="message-info">
@@ -199,18 +202,31 @@
           message.createdAt
         ).toLocaleTimeString()}</span>
         <span class="message-status ${message.status.toLowerCase()}">${
-          message.status === "READ" ? "✓✓" : "✓"
-        }</span>
+              message.status === "READ" ? "✓✓" : "✓"
+            }</span>
       </div>
     </div>
   `;
+          } else {
+            messageElement.classList.add("received");
 
-        chatMessages.appendChild(messageElement);
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+            messageElement.classList.add("received");
+            // Ajouter le contenu du message avec le statut
+            messageElement.innerHTML = `
+      <div class="message-content">
+        <p>${message.content}</p>
+        <div class="message-info">
+          <span class="message-time">${new Date(
+            message.createdAt
+          ).toLocaleTimeString()}</span>
+          
+        </div>
+      </div>
+    `;
+          }
 
-        // Marquer le message comme livré dès réception
-        if (message.senderId !== userId) {
-          socket.emit("markDelivered", message.conversationId);
+          chatMessages.appendChild(messageElement);
+          chatMessages.scrollTop = chatMessages.scrollHeight;
         }
       });
       // Écouter les nouvelles conversations en temps réel
@@ -280,6 +296,57 @@
           conversationList.appendChild(li);
         });
       });
+
+      // Ajouter l'écouteur pour la mise à jour d'une conversation
+      socket.on("conversationUpdated", (conversation) => {
+        console.log(conversation);
+        const conversationList = document.getElementById("conversation-list");
+        const existingConversation = conversationList.querySelector(
+          `[data-id="${conversation._id}"]`
+        );
+
+        const otherParticipant = conversation.participants.find(
+          (p) => p.id !== userId
+        );
+
+        const conversationHTML = `
+    <div class="conversation-info">
+      <div class="participant-name">${otherParticipant.nom} ${
+          otherParticipant.prenom
+        }</div>
+      ${
+        conversation.lastMessage
+          ? `<div class="last-message">${conversation.lastMessage.content}</div>`
+          : ""
+      }
+    </div>
+    ${
+      conversation.unreadCount > 0
+        ? `<span class="unread-count">${conversation.unreadCount}</span>`
+        : ""
+    }
+  `;
+
+        if (existingConversation) {
+          // Mettre à jour la conversation existante
+          existingConversation.innerHTML = conversationHTML;
+        } else {
+          // Créer un nouvel élément de conversation
+          const li = document.createElement("li");
+          li.classList.add("conversation-item");
+          li.dataset.id = conversation._id;
+          li.innerHTML = conversationHTML;
+          li.addEventListener("click", () => {
+            currentReceiverId = otherParticipant.id;
+            document.getElementById(
+              "current-contact"
+            ).textContent = `${otherParticipant.nom} ${otherParticipant.prenom}`;
+            loadMessages(conversation._id);
+          });
+          conversationList.appendChild(li);
+        }
+      });
+
       // Ajouter cet écouteur après les autres événements socket
       socket.on("messagesLoaded", (messages) => {
         console.log("Messages reçus:", messages);
@@ -332,28 +399,92 @@
       });
 
       // Écouter les changements de statut des messages
-      socket.on("messagesDelivered", ({ conversationId, receiverId }) => {
-        // Mettre à jour l'interface pour montrer que les messages ont été livrés
-        updateMessagesStatus(conversationId, "DELIVERED");
-      });
+      socket.on(
+        "messagesDelivered",
+        ({ conversationId, receiverId, messages }) => {
+          // Mettre à jour l'interface pour montrer que les messages ont été livrés
+          updateMessagesStatus(conversationId, "DELIVERED");
+        }
+      );
 
-      socket.on("messagesRead", ({ conversationId, receiverId }) => {
-        // Mettre à jour l'interface pour montrer que les messages ont été lus
+      socket.on("messagesRead", ({ conversationId, receiverId, messages }) => {
+        // Mettre à jour le statut des messages envoyés
         updateMessagesStatus(conversationId, "READ");
       });
 
-      // Fonction pour mettre à jour visuellement le statut des messages
+      socket.on("conversationUpdated", (conversation) => {
+        // Mettre à jour la conversation dans la sidebar
+        updateConversationInSidebar(conversation);
+      });
+
+      // Optimisation de la fonction updateMessagesStatus
       function updateMessagesStatus(conversationId, status) {
+        const statusIcon = status === "READ" ? "✓✓" : "✓";
         const messages = document.querySelectorAll(
-          `[data-conversation-id="${conversationId}"]`
+          `.message.sent[data-conversation-id="${conversationId}"]`
         );
+
         messages.forEach((message) => {
           const statusElement = message.querySelector(".message-status");
           if (statusElement) {
-            statusElement.textContent = status === "READ" ? "✓✓" : "✓";
+            statusElement.textContent = statusIcon;
             statusElement.className = `message-status ${status.toLowerCase()}`;
           }
         });
+      }
+
+      // Optimisation de updateConversationInSidebar
+      function updateConversationInSidebar(conversation) {
+        if (!conversation || !conversation.participants) return;
+
+        const conversationList = document.getElementById("conversation-list");
+        const otherParticipant = conversation.participants.find(
+          (p) => p.id !== userId
+        );
+
+        if (!otherParticipant) return;
+
+        let conversationElement = conversationList.querySelector(
+          `[data-id="${conversation._id}"]`
+        );
+
+        const conversationHTML = `
+    <div class="conversation-info">
+      <div class="participant-name">${otherParticipant.nom} ${
+          otherParticipant.prenom
+        }</div>
+      ${
+        conversation.lastMessage
+          ? `<div class="last-message">${conversation.lastMessage.content}</div>`
+          : ""
+      }
+    </div>
+    ${
+      conversation.unreadCount > 0
+        ? `<span class="unread-count">${conversation.unreadCount}</span>`
+        : ""
+    }
+  `;
+
+        if (conversationElement) {
+          conversationElement.innerHTML = conversationHTML;
+        } else {
+          conversationElement = document.createElement("li");
+          conversationElement.classList.add("conversation-item");
+          conversationElement.dataset.id = conversation._id;
+          conversationElement.innerHTML = conversationHTML;
+          conversationElement.addEventListener("click", () => {
+            currentReceiverId = otherParticipant.id;
+            document.getElementById(
+              "current-contact"
+            ).textContent = `${otherParticipant.nom} ${otherParticipant.prenom}`;
+            loadMessages(conversation._id);
+          });
+          conversationList.insertBefore(
+            conversationElement,
+            conversationList.firstChild
+          );
+        }
       }
     </script>
   </body>

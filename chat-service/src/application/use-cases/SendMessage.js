@@ -4,25 +4,33 @@ class SendMessage {
     this.conversationRepository = conversationRepository;
   }
 
-  async execute({ senderId, receiverId, content, type = "TEXT" }) {
-    const participants = [senderId, receiverId];
-    const conversation =
-      await this.conversationRepository.findOrCreateConversation(participants);
+  async execute({ senderId, receiverId, content, conversationId }) {
+    // Si pas de conversationId, c'est un nouveau chat
+    if (!conversationId) {
+      const conversation =
+        await this.conversationRepository.findOrCreateConversation([
+          senderId,
+          receiverId,
+        ]);
+      conversationId = conversation._id;
+    }
 
     const message = await this.messageRepository.saveMessage({
-      conversationId: conversation._id,
+      conversationId,
       senderId,
       receiverId,
       content,
-      type,
     });
 
     await this.conversationRepository.updateLastMessage(
-      conversation._id,
+      conversationId,
       message._id
     );
 
-    return message;
+    return {
+      ...message.toObject(),
+      conversationId,
+    };
   }
 }
 

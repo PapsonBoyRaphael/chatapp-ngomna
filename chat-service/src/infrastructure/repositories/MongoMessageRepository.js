@@ -1,18 +1,12 @@
 const Message = require("../mongodb/models/MessageModel");
 const Conversation = require("../mongodb/models/ConversationModel");
+
 class MongoMessageRepository {
   async getMessagesByConversationId(conversationId) {
     try {
-      // Récupérer d'abord les participants de la conversation
-      const conversation = await Conversation.findById(conversationId);
-      if (!conversation) {
-        throw new Error("Conversation non trouvée");
-      }
-
-      // Utiliser la méthode existante avec les participants
-      const messages = await this.getMessagesByConversation(
-        conversation.participants
-      );
+      const messages = await Message.find({ conversationId })
+        .sort({ createdAt: 1 })
+        .lean();
 
       return messages;
     } catch (error) {
@@ -23,23 +17,27 @@ class MongoMessageRepository {
 
   async saveMessage(messageData) {
     try {
-      // Trouver ou créer la conversation
-      let conversation = await Conversation.findOne({
-        participants: {
-          $all: [messageData.senderId, messageData.receiverId],
-        },
-      });
+      const { conversationId } = messageData;
 
+      // Vérifier que la conversation existe
+      const conversation = await Conversation.findById(conversationId);
       if (!conversation) {
-        conversation = new Conversation({
-          participants: [messageData.senderId, messageData.receiverId],
-        });
+        throw new Error("Conversation non trouvée");
+      }
+
+      // Vérifier que l'expéditeur et le destinataire font partie de la conversation
+      if (
+        !conversation.participants.includes(messageData.senderId) ||
+        !conversation.participants.includes(messageData.receiverId)
+      ) {
+        throw new Error(
+          "Les participants ne font pas partie de cette conversation"
+        );
       }
 
       // Créer le message
       const message = new Message({
         ...messageData,
-        conversationId: conversation._id,
         status: "SENT",
       });
 
@@ -57,20 +55,8 @@ class MongoMessageRepository {
     }
   }
 
-  async getMessagesByConversation(participants) {
-    return await Message.find({
-      $or: [
-        { senderId: participants[0], receiverId: participants[1] },
-        { senderId: participants[1], receiverId: participants[0] },
-      ],
-    }).sort({ createdAt: 1 });
-  }
-
   async updateMessagesStatus(conversationId, receiverId, status) {
     try {
-      console.log(
-        `Mise à jour du statut des messages pour la conversation ${conversationId}, destinataire ${receiverId}, statut ${status}`
-      );
       if (!conversationId) {
         throw new Error("L'ID de conversation est requis");
       }
@@ -80,42 +66,35 @@ class MongoMessageRepository {
         throw new Error("Conversation non trouvée");
       }
 
-      // Vérifier que le receiverId fait partie de la conversation
+      // Vérifier que le destinataire fait partie de la conversation
       if (!conversation.participants.includes(receiverId)) {
         throw new Error(
           "Le destinataire n'appartient pas à cette conversation"
         );
       }
 
-      // Mettre à jour uniquement les messages de cette conversation
+      // Mettre à jour les messages
       const result = await Message.updateMany(
         {
-          conversationId: conversationId,
-          receiverId: receiverId,
+          conversationId,
+          receiverId,
           status: { $ne: status },
         },
-        {
-          $set: { status: status },
-        }
+        { $set: { status } }
       );
 
-      // Récupérer et afficher les messages mis à jour
-      const updatedMessages = await Message.find({
-        conversationId: conversationId,
-        receiverId: receiverId,
-      });
+      // Log pour le débogage
+      if (result.modifiedCount > 0) {
+        const updatedMessages = await Message.find({
+          conversationId,
+          receiverId,
+        }).select("content status createdAt");
 
-      console.log(`Nombre de messages mis à jour : ${result.modifiedCount}`);
-      console.log(
-        "Messages après mise à jour :",
-        updatedMessages.map((msg) => ({
-          content: msg.content,
-          status: msg.status,
-          createdAt: msg.createdAt,
-        }))
-      );
+        console.log(`${result.modifiedCount} message(s) mis à jour`);
+        console.log("Messages après mise à jour:", updatedMessages);
+      }
 
-      return true;
+      return result.modifiedCount;
     } catch (error) {
       console.error(
         "Erreur lors de la mise à jour du statut des messages:",
@@ -127,12 +106,11 @@ class MongoMessageRepository {
 
   async getUnreadMessagesCount(conversationId, userId) {
     try {
-      const count = await Message.countDocuments({
+      return await Message.countDocuments({
         conversationId,
         receiverId: userId,
         status: { $ne: "READ" },
       });
-      return count;
     } catch (error) {
       console.error("Erreur lors du comptage des messages non lus:", error);
       return 0;

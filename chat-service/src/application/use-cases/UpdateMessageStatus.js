@@ -4,7 +4,7 @@ class UpdateMessageStatus {
   }
 
   async execute({ conversationId, receiverId, status }) {
-    if (!["DELIVERED", "READ"].includes(status)) {
+    if (!["SENT", "DELIVERED", "READ"].includes(status)) {
       throw new Error("Statut invalide");
     }
 

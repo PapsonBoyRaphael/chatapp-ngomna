@@ -6,9 +6,11 @@ const cors = require("cors");
 const connectDB = require("./infrastructure/mongodb/connection");
 const MongoMessageRepository = require("./infrastructure/repositories/MongoMessageRepository");
 const MongoConversationRepository = require("./infrastructure/repositories/MongoConversationRepository");
+const GetConversation = require("./application/use-cases/GetConversation");
 const GetConversations = require("./application/use-cases/GetConversations");
 const GetMessages = require("./application/use-cases/GetMessages");
 const SendMessage = require("./application/use-cases/SendMessage");
+const UpdateMessageStatus = require("./application/use-cases/UpdateMessageStatus");
 const chatHandler = require("./application/websocket/chatHandler");
 const messageRoutes = require("./interfaces/http/routes/messageRoutes");
 require("dotenv").config();
@@ -49,18 +51,26 @@ const startServer = async () => {
       conversationRepository
     );
 
+    const getConversationUseCase = new GetConversation(
+      conversationRepository,
+      messageRepository
+    );
     const getConversationsUseCase = new GetConversations(
       conversationRepository,
       messageRepository
     );
     const getMessagesUseCase = new GetMessages(messageRepository);
+    const updateMessageStatusUseCase = new UpdateMessageStatus(
+      messageRepository
+    );
 
     chatHandler(
       io,
       sendMessageUseCase,
+      getConversationUseCase,
       getConversationsUseCase,
       getMessagesUseCase,
-      messageRepository
+      updateMessageStatusUseCase
     );
 
     server.listen(PORT, () => {

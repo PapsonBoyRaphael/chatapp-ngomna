@@ -42,7 +42,7 @@ class GetConversations {
         );
 
         return {
-          ...conversation.toObject(),
+          ...conversation,
           participants: participantsInfo,
           unreadCount,
         };
