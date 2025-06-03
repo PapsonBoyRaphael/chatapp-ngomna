@@ -22,8 +22,39 @@ class MongoMessageRepository {
   }
 
   async saveMessage(messageData) {
-    const message = new Message(messageData);
-    return await message.save();
+    try {
+      // Trouver ou créer la conversation
+      let conversation = await Conversation.findOne({
+        participants: {
+          $all: [messageData.senderId, messageData.receiverId],
+        },
+      });
+
+      if (!conversation) {
+        conversation = new Conversation({
+          participants: [messageData.senderId, messageData.receiverId],
+        });
+      }
+
+      // Créer le message
+      const message = new Message({
+        ...messageData,
+        conversationId: conversation._id,
+        status: "SENT",
+      });
+
+      // Sauvegarder le message
+      await message.save();
+
+      // Mettre à jour le dernier message de la conversation
+      conversation.lastMessage = message;
+      await conversation.save();
+
+      return message;
+    } catch (error) {
+      console.error("Erreur lors de la sauvegarde du message:", error);
+      throw error;
+    }
   }
 
   async getMessagesByConversation(participants) {
@@ -37,19 +68,51 @@ class MongoMessageRepository {
 
   async updateMessagesStatus(conversationId, receiverId, status) {
     try {
+      console.log(
+        `Mise à jour du statut des messages pour la conversation ${conversationId}, destinataire ${receiverId}, statut ${status}`
+      );
+      if (!conversationId) {
+        throw new Error("L'ID de conversation est requis");
+      }
+
       const conversation = await Conversation.findById(conversationId);
       if (!conversation) {
         throw new Error("Conversation non trouvée");
       }
 
-      // Mettre à jour le statut des messages non lus
-      await Message.updateMany(
+      // Vérifier que le receiverId fait partie de la conversation
+      if (!conversation.participants.includes(receiverId)) {
+        throw new Error(
+          "Le destinataire n'appartient pas à cette conversation"
+        );
+      }
+
+      // Mettre à jour uniquement les messages de cette conversation
+      const result = await Message.updateMany(
         {
-          receiverId: receiverId,
-          status: { $ne: status }, // Ne pas mettre à jour si déjà au statut souhaité
           conversationId: conversationId,
+          receiverId: receiverId,
+          status: { $ne: status },
         },
-        { $set: { status: status } }
+        {
+          $set: { status: status },
+        }
+      );
+
+      // Récupérer et afficher les messages mis à jour
+      const updatedMessages = await Message.find({
+        conversationId: conversationId,
+        receiverId: receiverId,
+      });
+
+      console.log(`Nombre de messages mis à jour : ${result.modifiedCount}`);
+      console.log(
+        "Messages après mise à jour :",
+        updatedMessages.map((msg) => ({
+          content: msg.content,
+          status: msg.status,
+          createdAt: msg.createdAt,
+        }))
       );
 
       return true;

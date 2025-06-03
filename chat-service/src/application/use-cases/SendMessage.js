@@ -10,6 +10,7 @@ class SendMessage {
       await this.conversationRepository.findOrCreateConversation(participants);
 
     const message = await this.messageRepository.saveMessage({
+      conversationId: conversation._id,
       senderId,
       receiverId,
       content,

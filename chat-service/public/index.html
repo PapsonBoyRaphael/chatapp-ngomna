@@ -183,8 +183,8 @@
         const chatMessages = document.getElementById("chat-messages");
         const messageElement = document.createElement("div");
         messageElement.classList.add("message");
+        messageElement.dataset.conversationId = message.conversationId;
 
-        // Ajouter une classe différente selon l'expéditeur
         if (message.senderId === userId) {
           messageElement.classList.add("sent");
         } else {
@@ -192,20 +192,27 @@
         }
 
         messageElement.innerHTML = `
-      <div class="message-content">
-        <p>${message.content}</p>
+    <div class="message-content">
+      <p>${message.content}</p>
+      <div class="message-info">
         <span class="message-time">${new Date(
           message.createdAt
         ).toLocaleTimeString()}</span>
+        <span class="message-status ${message.status.toLowerCase()}">${
+          message.status === "READ" ? "✓✓" : "✓"
+        }</span>
       </div>
-    `;
+    </div>
+  `;
 
         chatMessages.appendChild(messageElement);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
 
         // Marquer le message comme livré dès réception
-        socket.emit("markDelivered", message.conversationId);
+        if (message.senderId !== userId) {
+          socket.emit("markDelivered", message.conversationId);
+        }
       });
-
       // Écouter les nouvelles conversations en temps réel
       socket.on("newConversation", (conversation) => {
         console.log("Nouvelle conversation :", conversation);
@@ -277,26 +284,45 @@
       socket.on("messagesLoaded", (messages) => {
         console.log("Messages reçus:", messages);
         const chatMessages = document.getElementById("chat-messages");
+        chatMessages.innerHTML = ""; // Nettoyer la zone des messages
 
         messages.forEach((message) => {
           const messageElement = document.createElement("div");
           messageElement.classList.add("message");
+          messageElement.dataset.conversationId = message.conversationId; // Ajouter l'ID de conversation
 
           // Ajouter une classe différente selon l'expéditeur
           if (message.senderId === userId) {
             messageElement.classList.add("sent");
-          } else {
-            messageElement.classList.add("received");
-          }
-
-          messageElement.innerHTML = `
+            // Ajouter le contenu du message avec le statut
+            messageElement.innerHTML = `
       <div class="message-content">
         <p>${message.content}</p>
-        <span class="message-time">${new Date(
-          message.createdAt
-        ).toLocaleTimeString()}</span>
+        <div class="message-info">
+          <span class="message-time">${new Date(
+            message.createdAt
+          ).toLocaleTimeString()}</span>
+          <span class="message-status ${message.status.toLowerCase()}">${
+              message.status === "READ" ? "✓✓" : "✓"
+            }</span>
+        </div>
       </div>
     `;
+          } else {
+            messageElement.classList.add("received");
+            // Ajouter le contenu du message avec le statut
+            messageElement.innerHTML = `
+      <div class="message-content">
+        <p>${message.content}</p>
+        <div class="message-info">
+          <span class="message-time">${new Date(
+            message.createdAt
+          ).toLocaleTimeString()}</span>
+          
+        </div>
+      </div>
+    `;
+          }
 
           chatMessages.appendChild(messageElement);
         });
