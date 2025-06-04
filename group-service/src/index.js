@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json());
 // app.use("/groups", groupRoutes);
 
-const PORT = process.env.PORT || 3004;
+const PORT = process.env.PORT || 8004;
 
 const startServer = async () => {
   try {

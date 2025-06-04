@@ -1,21 +1,46 @@
 const express = require("express");
-// const initDb = require("./src/infrastructure/database/initDb");
-// const userRoutes = require("./src/application/routes/userRoutes");
+const cors = require("cors");
+const { testConnection } = require("./infrastructure/config/database");
+const UserRepository = require("./infrastructure/repositories/UserRepository");
+const GetAllUsers = require("./application/use-cases/GetAllUsers");
+const GetUserById = require("./application/use-cases/GetUserById");
+const UserController = require("./interfaces/http/controllers/userController");
+const createUserRoutes = require("./interfaces/http/routes/userRoutes");
+const chalk = require("chalk");
+require("dotenv").config();
 
 const app = express();
 app.use(express.json());
-// app.use("/users", userRoutes);
+app.use(cors());
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.USER_SERVICE_PORT || 8002;
+
+// Initialisation des dépendances
+const userRepository = new UserRepository();
+const getAllUsersUseCase = new GetAllUsers(userRepository);
+const getUserByIdUseCase = new GetUserById(userRepository);
+
+const userController = new UserController(
+  getAllUsersUseCase,
+  getUserByIdUseCase
+);
+
+// Routes
+app.use("/", createUserRoutes(userController));
 
 const startServer = async () => {
   try {
-    // await initDb();
+    const isConnected = await testConnection();
+    if (!isConnected) {
+      throw new Error("Échec de connexion à la base de données");
+    }
+
     app.listen(PORT, () => {
-      console.log(`user-service running on port ${PORT}`);
+      console.log(chalk.yellow(`User service démarré sur le port ${PORT}`));
     });
   } catch (error) {
-    console.error("Failed to start user-service:", error);
+    console.error("❌ Erreur de démarrage:", error);
+    process.exit(1);
   }
 };
 

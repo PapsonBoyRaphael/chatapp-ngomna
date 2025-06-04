@@ -47,7 +47,7 @@ app.use(({ res }) => {
   res.status(404).json({ message });
 });
 
-const port = process.env.GROUP_PORT || 3003;
+const port = process.env.GROUP_PORT || 8003;
 app.listen(port, () =>
   console.log(
     `group-service démarré sur: ${chalk.green(`http://localhost:${port}`)}`

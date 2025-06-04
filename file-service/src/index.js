@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json());
 // app.use("/files", fileRoutes);
 
-const PORT = process.env.PORT || 3006;
+const PORT = process.env.PORT || 8006;
 
 const startServer = async () => {
   try {
