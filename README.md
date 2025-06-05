@@ -7,8 +7,8 @@ auth-service: Handles authentication (port 8001)
 user-service: Manages user data with PostgreSQL (port 8002)
 chat-service: Manages messages and conversations with MongoDB (port 8003)
 group-service: Manages groups with MongoDB (port 8004)
-contact-service: Manages contacts with MongoDB (port 8005)
-file-service: Manages file uploads with MongoDB and Cloudinary (port 8006)
+visibility-service: Manages visibility with MongoDB (port 8005)
+file-service: Manages file uploads (port 8006)
 gateway: Entry point for all requests (port 8000)
 
 - Setup
