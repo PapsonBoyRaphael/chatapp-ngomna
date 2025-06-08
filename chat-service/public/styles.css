@@ -336,7 +336,7 @@ body {
 .unread-count {
   background-color: #0084ff;
   color: white;
-  border-radius: 50%;
+  border-radius: 150px;
   padding: 2px 8px;
   font-size: 0.8em;
   min-width: 20px;
@@ -365,7 +365,7 @@ body {
 }
 
 .message-status.read {
-  color: white;
+  color: rgb(0, 255, 0);
 }
 
 .message.sent .message-info {

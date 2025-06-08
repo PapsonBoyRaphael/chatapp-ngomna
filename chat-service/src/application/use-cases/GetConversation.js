@@ -16,6 +16,8 @@ class GetConversation {
     }
 
     // Vérifier que l'utilisateur fait partie de la conversation
+    userId = Number(userId);
+
     if (!conversation.participants.includes(userId)) {
       throw new Error("Accès non autorisé à cette conversation");
     }

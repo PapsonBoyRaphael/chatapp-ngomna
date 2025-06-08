@@ -73,12 +73,25 @@ class MongoMessageRepository {
         );
       }
 
-      // Mettre à jour les messages
+      // Définir les conditions de mise à jour selon le statut
+      const statusHierarchy = {
+        SENT: 1,
+        DELIVERED: 2,
+        READ: 3,
+      };
+
+      const targetStatusLevel = statusHierarchy[status];
+
+      // Mettre à jour uniquement les messages avec un statut inférieur
       const result = await Message.updateMany(
         {
           conversationId,
           receiverId,
-          status: { $ne: status },
+          status: {
+            $in: Object.keys(statusHierarchy).filter(
+              (s) => statusHierarchy[s] < targetStatusLevel
+            ),
+          },
         },
         { $set: { status } }
       );
@@ -91,7 +104,7 @@ class MongoMessageRepository {
         }).select("content status createdAt");
 
         console.log(`${result.modifiedCount} message(s) mis à jour`);
-        console.log("Messages après mise à jour:", updatedMessages);
+        // console.log("Messages après mise à jour:", updatedMessages);
       }
 
       return result.modifiedCount;

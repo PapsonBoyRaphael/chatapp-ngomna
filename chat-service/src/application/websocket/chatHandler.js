@@ -23,9 +23,12 @@ module.exports = (
 
     try {
       // Valider le token auprès de l'auth-service
-      const response = await axios.post(process.env.AUTH_SERVICE_URL, {
-        token,
-      });
+      const response = await axios.post(
+        `${process.env.AUTH_SERVICE_URL}/validate`,
+        {
+          token,
+        }
+      );
 
       const userData = response.data; // Récupérer les données utilisateur
       const userId = userData.id; // Supposons que l'auth-service renvoie un champ `id`
@@ -138,6 +141,10 @@ module.exports = (
       // Marquer les messages comme livrés
       socket.on("markDelivered", async (conversationId) => {
         try {
+          console.log(
+            "Marquage des messages comme livrés pour la conversation:",
+            conversationId
+          );
           await updateMessageStatusUseCase.execute({
             conversationId,
             receiverId: userId,
@@ -148,25 +155,47 @@ module.exports = (
           const updatedConversationReceiver =
             await getConversationUseCase.execute(conversationId, userId);
 
-          // Mettre à jour la conversation pour le récepteur
-          socket.emit("conversationUpdated", updatedConversationReceiver);
-
-          // Notifier l'expéditeur du changement de statut
+          // Récupérer tous les messages
           const messages = await getMessagesUseCase.execute({
             conversationId,
             userId,
           });
 
-          const senderId = messages[0]?.senderId;
-          if (senderId) {
+          // Grouper les messages par expéditeur
+          const messagesBySender = messages.reduce((acc, msg) => {
+            if (msg.senderId !== userId) {
+              // Ne traiter que les messages reçus
+              if (!acc[msg.senderId]) {
+                acc[msg.senderId] = [];
+              }
+              acc[msg.senderId].push(msg);
+            }
+            return acc;
+          }, {});
+
+          // Mettre à jour la conversation pour le récepteur
+          socket.emit("conversationUpdated", updatedConversationReceiver);
+
+          // Notifier chaque expéditeur pour ses messages
+          for (const [senderId, senderMessages] of Object.entries(
+            messagesBySender
+          )) {
+            const messagesInfo = senderMessages.map((msg) => ({
+              _id: msg._id,
+              senderId: msg.senderId,
+              receiverId: msg.receiverId,
+              content: msg.content,
+              status: "DELIVERED",
+              createdAt: msg.createdAt,
+              updatedAt: msg.updatedAt,
+            }));
+
             io.to(senderId).emit("messagesDelivered", {
               conversationId,
               receiverId: userId,
-              messages: messages.map((msg) => ({
-                id: msg._id,
-                status: "DELIVERED",
-              })),
+              messages: messagesInfo,
             });
+
             const updatedConversationSender =
               await getConversationUseCase.execute(conversationId, senderId);
             io.to(senderId).emit(
@@ -195,25 +224,47 @@ module.exports = (
           const updatedConversationReceiver =
             await getConversationUseCase.execute(conversationId, userId);
 
-          // Mettre à jour la conversation pour le récepteur
-          socket.emit("conversationUpdated", updatedConversationReceiver);
-
-          // Notifier l'expéditeur du changement de statut
+          // Récupérer tous les messages
           const messages = await getMessagesUseCase.execute({
             conversationId,
             userId,
           });
 
-          const senderId = messages[0]?.senderId;
-          if (senderId) {
+          // Grouper les messages par expéditeur
+          const messagesBySender = messages.reduce((acc, msg) => {
+            if (msg.senderId !== userId) {
+              // Ne traiter que les messages reçus
+              if (!acc[msg.senderId]) {
+                acc[msg.senderId] = [];
+              }
+              acc[msg.senderId].push(msg);
+            }
+            return acc;
+          }, {});
+
+          // Mettre à jour la conversation pour le récepteur
+          socket.emit("conversationUpdated", updatedConversationReceiver);
+
+          // Notifier chaque expéditeur pour ses messages
+          for (const [senderId, senderMessages] of Object.entries(
+            messagesBySender
+          )) {
+            const messagesInfo = senderMessages.map((msg) => ({
+              _id: msg._id,
+              senderId: msg.senderId,
+              receiverId: msg.receiverId,
+              content: msg.content,
+              status: "READ",
+              createdAt: msg.createdAt,
+              updatedAt: msg.updatedAt,
+            }));
+
             io.to(senderId).emit("messagesRead", {
               conversationId,
               receiverId: userId,
-              messages: messages.map((msg) => ({
-                id: msg._id,
-                status: "READ",
-              })),
+              messages: messagesInfo,
             });
+
             const updatedConversationSender =
               await getConversationUseCase.execute(conversationId, senderId);
             io.to(senderId).emit(
