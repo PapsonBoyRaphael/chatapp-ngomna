@@ -92,6 +92,25 @@
       // Rejoindre une salle
       socket.emit("join", userId);
 
+      // Écouter les utilisateurs en ligne
+      socket.on("onlineUsers", (users) => {
+        console.log("Utilisateurs en ligne:", users);
+        // Mettre à jour votre interface utilisateur
+      });
+
+      // Écouter les salons créés
+      socket.on("createdRooms", (rooms) => {
+        console.log("Salons créés:", rooms);
+        // Mettre à jour votre interface utilisateur
+      });
+
+      // Obtenir les statistiques
+      socket.emit("getStats");
+      socket.on("stats", (stats) => {
+        console.log("Statistiques:", stats);
+        // Afficher dans votre interface
+      });
+
       // Charger les contacts dans la fenêtre modale
       const loadContacts = async () => {
         try {
@@ -396,6 +415,7 @@
 
       socket.on("conversationUpdated", (conversation) => {
         // Mettre à jour la conversation dans la sidebar
+        console.log("Conversation mise à jour:", conversation);
         updateConversationInSidebar(conversation);
       });
 
