@@ -64,8 +64,9 @@ const startServer = async () => {
 
     app.listen(PORT, () => {
       console.log(
-        chalk.yellow(`🚀 Auth-User Service démarré sur le port ${PORT}`),
-        chalk.blue(`http://localhost:${PORT}`)
+        `🚀 Auth-User Service démarré sur le port ${PORT} : ${chalk.blue(
+          `http://localhost:${PORT}`
+        )}`
       );
     });
   } catch (error) {
