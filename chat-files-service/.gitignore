@@ -1,0 +1,9 @@
+
+# Chat-Files-Service specific
+chat-files-service/node_modules
+chat-files-service/.env
+chat-files-service/dist
+chat-files-service/*.log
+chat-files-service/logs/
+chat-files-service/temp/
+chat-files-service/coverage/

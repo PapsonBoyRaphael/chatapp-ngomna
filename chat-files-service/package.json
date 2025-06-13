@@ -1,0 +1,60 @@
+{
+  "name": "chat-files-service",
+  "version": "1.0.0",
+  "description": "Service de messagerie et gestion fichiers pour CENADI Chat",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:e2e": "jest --config jest.e2e.config.js",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "migration:run": "node src/interfaces/cli/migrations.js",
+    "seed": "node src/interfaces/cli/seeders.js",
+    "cleanup": "node src/interfaces/cli/cleanup.js"
+  },
+  "dependencies": {
+    "@fastify/compress": "^6.5.0",
+    "@fastify/cors": "^8.4.2",
+    "@fastify/helmet": "^11.1.1",
+    "@fastify/multipart": "^8.0.0",
+    "@fastify/rate-limit": "^9.1.0",
+    "axios": "^1.6.2",
+    "bcryptjs": "^2.4.3",
+    "dotenv": "^16.3.1",
+    "fastify": "^4.24.3",
+    "fluent-ffmpeg": "^2.1.2",
+    "joi": "^17.11.0",
+    "jsonwebtoken": "^9.0.2",
+    "kafkajs": "^2.2.4",
+    "mongodb": "^6.3.0",
+    "mongoose": "^8.0.3",
+    "redis": "^4.6.12",
+    "sharp": "^0.33.1",
+    "socket.io": "^4.7.5",
+    "uuid": "^9.0.1",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.6",
+    "eslint": "^8.56.0",
+    "jest": "^29.7.0",
+    "mongodb-memory-server": "^9.1.3",
+    "nodemon": "^3.0.2",
+    "pino-pretty": "^13.0.0",
+    "prettier": "^3.1.1",
+    "supertest": "^6.3.3"
+  },
+  "keywords": [
+    "chat",
+    "messaging",
+    "files",
+    "cenadi",
+    "government"
+  ],
+  "author": "CENADI Team",
+  "license": "PROPRIETARY"
+}
