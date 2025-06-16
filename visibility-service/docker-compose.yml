@@ -1,0 +1,62 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    depends_on:
+      - neo4j
+      - postgres
+      - redis
+    volumes:
+      - ./src:/app/src
+      - ./scripts:/app/scripts
+    networks:
+      - visibility-network
+
+  neo4j:
+    image: neo4j:5.24
+    environment:
+      - NEO4J_AUTH=neo4j/your_password
+    ports:
+      - "7687:7687"
+      - "7474:7474"
+    volumes:
+      - neo4j-data:/data
+    networks:
+      - visibility-network
+
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_DB=visibility
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=your_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    networks:
+      - visibility-network
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - visibility-network
+
+volumes:
+  neo4j-data:
+  postgres-data:
+  redis-data:
+
+networks:
+  visibility-network:
+    driver: bridge
