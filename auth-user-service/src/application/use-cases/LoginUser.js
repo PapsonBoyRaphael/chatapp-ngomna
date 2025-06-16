@@ -15,7 +15,8 @@ class LoginUser {
       id: user.id,
       matricule: user.matricule,
       nom: user.nom,
-      prenom: user.prenom
+      prenom: user.prenom,
+      ministere: user.ministere,
     });
 
     return { user, token };

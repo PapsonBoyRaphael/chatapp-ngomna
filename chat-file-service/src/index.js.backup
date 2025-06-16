@@ -39,21 +39,17 @@ const MessageController = require("./application/controllers/MessageController")
 const ConversationController = require("./application/controllers/ConversationController");
 const HealthController = require("./application/controllers/HealthController");
 
-// Middleware
-const {
-  authMiddleware,
-  rateLimitMiddleware,
-  cacheMiddleware,
-  validationMiddleware,
-} = require("./interfaces/http/middleware");
-
 // Routes
 const createMessageRoutes = require("./interfaces/http/routes/messageRoutes");
 const createFileRoutes = require("./interfaces/http/routes/fileRoutes");
 const createConversationRoutes = require("./interfaces/http/routes/conversationRoutes");
 const createHealthRoutes = require("./interfaces/http/routes/healthRoutes");
+const createMessageRoutes = require("./interfaces/http/routes/messageRoutes");
+const createFileRoutes = require("./interfaces/http/routes/fileRoutes");
 
 // WebSocket Handler
+// Middleware
+const { authMiddleware, rateLimitMiddleware, cacheMiddleware, validationMiddleware } = require("./interfaces/http/middleware");
 const chatHandler = require("./application/websocket/chatHandler");
 
 const app = express();
@@ -63,7 +59,7 @@ const startServer = async () => {
   try {
     // Connexion à MongoDB
     await connectDB();
-    console.log("✅ MongoDB connecté");
+    console.log(chalk.green("✅ MongoDB connecté"));
 
     // Tentative de connexion à Redis avec retry
     let redisClient = null;
@@ -73,10 +69,12 @@ const startServer = async () => {
       if (redisConnected) {
         redisClient = redisConfig.getClient();
         redisStatus = "connected";
-        console.log("✅ Redis connecté");
+        console.log(chalk.green("✅ Redis connecté"));
       }
     } catch (error) {
-      console.log("⚠️ Redis non disponible, mode développement activé");
+      console.log(
+        chalk.yellow("⚠️ Redis non disponible, mode développement activé")
+      );
     }
 
     // Tentative de connexion à Kafka avec retry
@@ -91,10 +89,12 @@ const startServer = async () => {
           fileProducer: new FileProducer(kafkaConfig.getProducer()),
         };
         kafkaStatus = "connected";
-        console.log("✅ Kafka connecté");
+        console.log(chalk.green("✅ Kafka connecté"));
       }
     } catch (error) {
-      console.log("⚠️ Kafka non disponible, mode développement activé");
+      console.log(
+        chalk.yellow("⚠️ Kafka non disponible, mode développement activé")
+      );
     }
 
     // Configuration Socket.IO avec adapter conditionnel
@@ -114,9 +114,11 @@ const startServer = async () => {
         io.adapter(
           createAdapter(redisConfig.getPubClient(), redisConfig.getSubClient())
         );
-        console.log("✅ Redis adapter configuré");
+        console.log(chalk.green("✅ Redis adapter configuré"));
       } catch (error) {
-        console.warn("⚠️ Erreur configuration Redis adapter:", error.message);
+        console.warn(
+          chalk.yellow("⚠️ Erreur configuration Redis adapter:", error.message)
+        );
       }
     }
 
@@ -132,13 +134,15 @@ const startServer = async () => {
 
         // Démarrer les consumers
         await kafkaConsumers.notificationConsumer.start();
-        console.log("✅ Kafka consumers démarrés");
+        console.log(chalk.green("✅ Kafka consumers démarrés"));
       } catch (error) {
-        console.warn("⚠️ Erreur démarrage consumers:", error.message);
+        console.warn(
+          chalk.yellow("⚠️ Erreur démarrage consumers:", error.message)
+        );
       }
     }
 
-    // Middleware Express de base
+    // Middleware Express
     app.use(cors());
     app.use(express.json());
 
@@ -147,6 +151,10 @@ const startServer = async () => {
 
     // Middleware globaux
     app.use(rateLimitMiddleware.apiLimit);
+
+// Appliquer les middleware globaux
+app.use(rateLimitMiddleware.apiLimit);
+app.locals.redisClient = redisClient; // Pour les middleware de cache
 
     // Servir les fichiers statiques
     app.use(express.static(path.join(__dirname, "../public")));
@@ -161,40 +169,42 @@ const startServer = async () => {
     const sendMessageUseCase = new SendMessage(
       messageRepository,
       conversationRepository,
-      kafkaProducers?.messageProducer || null
+      kafkaProducers?.messageProducer || null // Ajouter le producer
     );
 
-    const getMessagesUseCase = new GetMessages(messageRepository, redisClient);
+    const getMessagesUseCase = new GetMessages(
+      messageRepository,
+      redisClient // Ajouter Redis pour le cache
+    );
 
     const getConversationUseCase = new GetConversation(
       conversationRepository,
       messageRepository,
-      redisClient
+      redisClient // Ajouter Redis
     );
 
     const getConversationsUseCase = new GetConversations(
       conversationRepository,
       messageRepository,
-      redisClient
+      redisClient // Ajouter Redis
     );
 
     const updateMessageStatusUseCase = new UpdateMessageStatus(
       messageRepository,
       conversationRepository,
-      kafkaProducers?.messageProducer || null
+      kafkaProducers?.messageProducer || null // Ajouter le producer
     );
 
     const uploadFileUseCase = new UploadFile(
       fileRepository,
       messageRepository,
       conversationRepository,
-      kafkaProducers?.fileProducer || null
+      kafkaProducers?.fileProducer || null // Ajouter le producer
     );
-
     const getFileUseCase = new GetFile(
       fileRepository,
-      kafkaProducers?.fileProducer || null,
-      redisClient
+      kafkaProducers?.fileProducer || null, // Ajouter le producer
+      redisClient // Ajouter Redis
     );
 
     // Initialiser les contrôleurs avec Redis et Kafka
@@ -230,6 +240,8 @@ const startServer = async () => {
       createConversationRoutes(conversationController)
     );
     app.use("/api/health", createHealthRoutes(healthController));
+    app.use("/api/files", createFileRoutes(fileController));
+    app.use("/api/messages", createMessageRoutes(messageController));
 
     // Route de health check détaillée
     app.get("/health", async (req, res) => {
@@ -256,8 +268,8 @@ const startServer = async () => {
         endpoints: {
           files: "/api/files",
           messages: "/api/messages",
-          conversations: "/api/conversations",
-          health: "/api/health",
+          interface: "/index.html",
+          health: "/health",
         },
       };
       res.json(health);
@@ -273,8 +285,8 @@ const startServer = async () => {
         endpoints: {
           files: "/api/files",
           messages: "/api/messages",
-          conversations: "/api/conversations",
-          health: "/api/health",
+          interface: "/index.html",
+          health: "/health",
         },
         features: {
           chat: "✅ Chat en temps réel",
@@ -296,50 +308,75 @@ const startServer = async () => {
       getConversationsUseCase,
       getMessagesUseCase,
       updateMessageStatusUseCase,
-      kafkaProducers
+      kafkaProducers // Ajouter les producers Kafka
     );
 
     const PORT = process.env.CHAT_FILE_SERVICE_PORT || 8003;
     server.listen(PORT, () => {
-      console.log(`🚀 Chat-File Service démarré sur le port ${PORT}`);
-      console.log(`🌍 Serveur ID: ${process.env.SERVER_ID || "chat-file-1"}`);
+      console.log(
+        chalk.blue(`🚀 Chat-File Service démarré sur le port ${PORT}`)
+      );
+      console.log(
+        chalk.yellow(`🌍 Serveur ID: ${process.env.SERVER_ID || "chat-file-1"}`)
+      );
 
-      console.log("📋 Fonctionnalités disponibles:");
-      console.log("   💬 Chat en temps réel");
-      console.log("   📁 Upload/Download de fichiers");
-      console.log("   🖼️ Traitement d'images");
-      console.log("   📱 Interface web");
+      console.log(chalk.cyan("📋 Fonctionnalités disponibles:"));
+      console.log(chalk.green("   💬 Chat en temps réel"));
+      console.log(chalk.green("   📁 Upload/Download de fichiers"));
+      console.log(chalk.green("   🖼️ Traitement d'images"));
+      console.log(chalk.green("   📱 Interface web"));
 
       // Afficher le statut des services
-      console.log("\n📊 Statut des services:");
-      console.log(`   MongoDB: ✅ Connecté`);
+      console.log(chalk.cyan("\n📊 Statut des services:"));
+      console.log(chalk.white(`   MongoDB: ✅ Connecté`));
       console.log(
-        `   Redis:   ${redisClient ? "✅ Connecté" : "⚠️ Mode mémoire locale"}`
+        chalk.white(
+          `   Redis:   ${
+            redisClient ? "✅ Connecté" : "⚠️ Mode mémoire locale"
+          }`
+        )
       );
       console.log(
-        `   Kafka:   ${
-          kafkaProducers ? "✅ Connecté" : "⚠️ Mode développement"
-        }`
+        chalk.white(
+          `   Kafka:   ${
+            kafkaProducers ? "✅ Connecté" : "⚠️ Mode développement"
+          }`
+        )
       );
 
+      if (!redisClient) {
+        console.log(chalk.yellow("\n💡 Pour activer Redis:"));
+        console.log(chalk.yellow("   sudo systemctl start redis-server"));
+      }
+
+      if (!kafkaProducers) {
+        console.log(chalk.yellow("\n💡 Pour activer Kafka:"));
+        console.log(chalk.yellow("   ./start-kafka-dev.sh"));
+      }
+
       // Afficher les liens utiles
-      console.log("\n" + "=".repeat(60));
-      console.log("🎯 LIENS RAPIDES - CHAT-FILE-SERVICE");
-      console.log("=".repeat(60));
-      console.log(`🌐 Interface Web     : http://localhost:${PORT}/`);
-      console.log(`📁 API Fichiers     : http://localhost:${PORT}/api/files`);
+      console.log(chalk.cyan("\n" + "=".repeat(60)));
+      console.log(chalk.cyan("🎯 LIENS RAPIDES - CHAT-FILE-SERVICE"));
+      console.log(chalk.cyan("=".repeat(60)));
       console.log(
-        `💬 API Messages     : http://localhost:${PORT}/api/messages`
+        chalk.white(`🌐 Interface Web     : http://localhost:${PORT}/`)
       );
       console.log(
-        `🗣️ API Conversations: http://localhost:${PORT}/api/conversations`
+        chalk.white(`📁 API Fichiers     : http://localhost:${PORT}/api/files`)
       );
-      console.log(`🔌 WebSocket        : ws://localhost:${PORT}`);
-      console.log(`❤️ Health Check     : http://localhost:${PORT}/health`);
-      console.log("=".repeat(60) + "\n");
+      console.log(
+        chalk.white(
+          `💬 API Messages     : http://localhost:${PORT}/api/messages`
+        )
+      );
+      console.log(chalk.white(`🔌 WebSocket        : ws://localhost:${PORT}`));
+      console.log(
+        chalk.white(`❤️ Health Check     : http://localhost:${PORT}/health`)
+      );
+      console.log(chalk.cyan("=".repeat(60) + "\n"));
     });
   } catch (error) {
-    console.error("❌ Erreur au démarrage:", error);
+    console.error(chalk.red("❌ Erreur au démarrage:"), error);
     process.exit(1);
   }
 };
