@@ -1,115 +1,788 @@
 const Message = require("../mongodb/models/MessageModel");
-const Conversation = require("../mongodb/models/ConversationModel");
 
 class MongoMessageRepository {
-  async getMessagesByConversationId(conversationId) {
-    try {
-      const messages = await Message.find({ conversationId })
-        .sort({ createdAt: 1 })
-        .lean();
-      return messages;
-    } catch (error) {
-      console.error("Erreur lors de la récupération des messages:", error);
-      throw error;
-    }
+  constructor(redisClient = null, kafkaProducer = null) {
+    this.redisClient = redisClient;
+    this.kafkaProducer = kafkaProducer;
+    this.cachePrefix = "msg:";
+    this.defaultTTL = 3600; // 1 heure
   }
 
-  async saveMessage(messageData) {
+  // ===============================
+  // MÉTHODES PRINCIPALES
+  // ===============================
+
+  async save(message) {
+    const startTime = Date.now();
+
     try {
-      const { conversationId } = messageData;
+      // Valider l'entité
+      message.validate();
 
-      const conversation = await Conversation.findById(conversationId);
-      if (!conversation) {
-        throw new Error("Conversation non trouvée");
-      }
-
-      if (
-        !conversation.participants.includes(messageData.senderId) ||
-        !conversation.participants.includes(messageData.receiverId)
-      ) {
-        throw new Error(
-          "Les participants ne font pas partie de cette conversation"
-        );
-      }
-
-      const message = new Message({
-        ...messageData,
-        status: "SENT",
-      });
-
-      await message.save();
-      conversation.lastMessage = message;
-      await conversation.save();
-
-      return message;
-    } catch (error) {
-      console.error("Erreur lors de la sauvegarde du message:", error);
-      throw error;
-    }
-  }
-
-  async updateMessagesStatus(conversationId, receiverId, status) {
-    try {
-      if (!conversationId) {
-        throw new Error("L'ID de conversation est requis");
-      }
-
-      const conversation = await Conversation.findById(conversationId);
-      if (!conversation) {
-        throw new Error("Conversation non trouvée");
-      }
-
-      if (!conversation.participants.includes(receiverId)) {
-        throw new Error(
-          "Le destinataire n'appartient pas à cette conversation"
-        );
-      }
-
-      const statusHierarchy = {
-        SENT: 1,
-        DELIVERED: 2,
-        READ: 3,
-      };
-
-      const targetStatusLevel = statusHierarchy[status];
-
-      const result = await Message.updateMany(
+      // Sauvegarder en base
+      const savedMessage = await Message.findByIdAndUpdate(
+        message._id,
+        message.toObject(),
         {
-          conversationId,
-          receiverId,
-          status: {
-            $in: Object.keys(statusHierarchy).filter(
-              (s) => statusHierarchy[s] < targetStatusLevel
-            ),
-          },
-        },
-        { $set: { status } }
+          new: true,
+          upsert: true,
+          runValidators: true,
+          setDefaultsOnInsert: true,
+        }
       );
 
-      if (result.modifiedCount > 0) {
-        console.log(`${result.modifiedCount} message(s) mis à jour`);
+      const processingTime = Date.now() - startTime;
+
+      // 🚀 MISE EN CACHE REDIS
+      if (this.redisClient) {
+        try {
+          await this._cacheMessage(savedMessage);
+          await this._invalidateRelatedCaches(savedMessage);
+        } catch (cacheError) {
+          console.warn("⚠️ Erreur cache message:", cacheError.message);
+        }
       }
 
-      return result.modifiedCount;
+      // 🚀 PUBLIER ÉVÉNEMENT KAFKA
+      if (this.kafkaProducer) {
+        try {
+          await this._publishMessageEvent("MESSAGE_SAVED", savedMessage, {
+            processingTime,
+            isNew: !message._id,
+          });
+        } catch (kafkaError) {
+          console.warn("⚠️ Erreur publication message:", kafkaError.message);
+        }
+      }
+
+      console.log(
+        `💾 Message sauvegardé: ${savedMessage._id} (${processingTime}ms)`
+      );
+      return savedMessage;
+    } catch (error) {
+      console.error("❌ Erreur sauvegarde message:", error);
+
+      // Publier l'erreur dans Kafka
+      if (this.kafkaProducer) {
+        try {
+          await this._publishMessageEvent("MESSAGE_SAVE_FAILED", message, {
+            error: error.message,
+            processingTime: Date.now() - startTime,
+          });
+        } catch (kafkaError) {
+          console.warn("⚠️ Erreur publication échec:", kafkaError.message);
+        }
+      }
+
+      throw error;
+    }
+  }
+
+  async findById(messageId, useCache = true) {
+    const startTime = Date.now();
+
+    try {
+      // 🚀 TENTATIVE CACHE REDIS D'ABORD
+      if (this.redisClient && useCache) {
+        try {
+          const cached = await this._getCachedMessage(messageId);
+          if (cached) {
+            console.log(
+              `📦 Message depuis cache: ${messageId} (${
+                Date.now() - startTime
+              }ms)`
+            );
+            return cached;
+          }
+        } catch (cacheError) {
+          console.warn("⚠️ Erreur lecture cache:", cacheError.message);
+        }
+      }
+
+      // Récupération depuis MongoDB
+      const message = await Message.findById(messageId).lean();
+
+      if (!message) {
+        throw new Error(`Message ${messageId} non trouvé`);
+      }
+
+      const processingTime = Date.now() - startTime;
+
+      // Mettre en cache si Redis disponible
+      if (this.redisClient && useCache) {
+        try {
+          await this._cacheMessage(message);
+        } catch (cacheError) {
+          console.warn("⚠️ Erreur mise en cache:", cacheError.message);
+        }
+      }
+
+      console.log(`🔍 Message trouvé: ${messageId} (${processingTime}ms)`);
+      return message;
+    } catch (error) {
+      console.error(`❌ Erreur recherche message ${messageId}:`, error);
+      throw error;
+    }
+  }
+
+  async findByConversation(conversationId, options = {}) {
+    const {
+      page = 1,
+      limit = 50,
+      useCache = true,
+      sortBy = "createdAt",
+      sortOrder = -1,
+    } = options;
+
+    const startTime = Date.now();
+    const cacheKey = `${this.cachePrefix}conv:${conversationId}:p${page}:l${limit}:s${sortBy}${sortOrder}`;
+
+    try {
+      // 🚀 VÉRIFIER LE CACHE REDIS
+      if (this.redisClient && useCache) {
+        try {
+          const cached = await this.redisClient.get(cacheKey);
+          if (cached) {
+            const data = JSON.parse(cached);
+            console.log(
+              `📦 Messages conversation depuis cache: ${conversationId} (${
+                Date.now() - startTime
+              }ms)`
+            );
+            return {
+              ...data,
+              fromCache: true,
+            };
+          }
+        } catch (cacheError) {
+          console.warn(
+            "⚠️ Erreur lecture cache conversation:",
+            cacheError.message
+          );
+        }
+      }
+
+      // Récupération depuis MongoDB avec pagination
+      const skip = (page - 1) * limit;
+      const sortObj = { [sortBy]: sortOrder };
+
+      const [messages, totalCount] = await Promise.all([
+        Message.find({ conversationId })
+          .sort(sortObj)
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        Message.countDocuments({ conversationId }),
+      ]);
+
+      const result = {
+        messages,
+        pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(totalCount / limit),
+          totalCount,
+          hasNext: page * limit < totalCount,
+          hasPrevious: page > 1,
+        },
+        fromCache: false,
+      };
+
+      const processingTime = Date.now() - startTime;
+
+      // Mettre en cache si Redis disponible
+      if (this.redisClient && useCache && messages.length > 0) {
+        try {
+          await this.redisClient.setex(
+            cacheKey,
+            this.defaultTTL,
+            JSON.stringify(result)
+          );
+        } catch (cacheError) {
+          console.warn(
+            "⚠️ Erreur mise en cache conversation:",
+            cacheError.message
+          );
+        }
+      }
+
+      console.log(
+        `🔍 Messages conversation: ${conversationId} (${messages.length} msg, ${processingTime}ms)`
+      );
+      return result;
     } catch (error) {
       console.error(
-        "Erreur lors de la mise à jour du statut des messages:",
+        `❌ Erreur recherche messages conversation ${conversationId}:`,
         error
       );
       throw error;
     }
   }
 
-  async getUnreadMessagesCount(conversationId, userId) {
+  async updateMessageStatus(
+    conversationId,
+    receiverId,
+    status,
+    messageIds = []
+  ) {
+    const startTime = Date.now();
+
     try {
-      return await Message.countDocuments({
+      const filter = {
         conversationId,
-        receiverId: userId,
-        status: { $ne: "READ" },
+        receiverId,
+        status: { $ne: status }, // Ne pas mettre à jour si déjà au bon statut
+      };
+
+      // Si des IDs spécifiques sont fournis
+      if (messageIds.length > 0) {
+        filter._id = { $in: messageIds };
+      }
+
+      const updateResult = await Message.updateMany(filter, {
+        $set: {
+          status,
+          updatedAt: new Date(),
+        },
       });
+
+      const processingTime = Date.now() - startTime;
+
+      // 🗑️ INVALIDER LES CACHES LIÉS
+      if (this.redisClient && updateResult.modifiedCount > 0) {
+        try {
+          await this._invalidateConversationCaches(conversationId);
+          await this._invalidateUserCaches(receiverId);
+        } catch (cacheError) {
+          console.warn(
+            "⚠️ Erreur invalidation cache statut:",
+            cacheError.message
+          );
+        }
+      }
+
+      // 🚀 PUBLIER ÉVÉNEMENT KAFKA
+      if (this.kafkaProducer && updateResult.modifiedCount > 0) {
+        try {
+          await this._publishMessageEvent("MESSAGE_STATUS_UPDATED", null, {
+            conversationId,
+            receiverId,
+            status,
+            modifiedCount: updateResult.modifiedCount,
+            processingTime,
+          });
+        } catch (kafkaError) {
+          console.warn("⚠️ Erreur publication statut:", kafkaError.message);
+        }
+      }
+
+      console.log(
+        `📝 Statut mis à jour: ${updateResult.modifiedCount} messages (${processingTime}ms)`
+      );
+      return updateResult;
     } catch (error) {
-      console.error("Erreur lors du comptage des messages non lus:", error);
-      return 0;
+      console.error("❌ Erreur mise à jour statut:", error);
+      throw error;
+    }
+  }
+
+  async deleteById(messageId) {
+    const startTime = Date.now();
+
+    try {
+      // Récupérer le message avant suppression
+      const message = await Message.findById(messageId);
+      if (!message) {
+        throw new Error(`Message ${messageId} non trouvé`);
+      }
+
+      // Soft delete
+      const deletedMessage = await Message.findByIdAndUpdate(
+        messageId,
+        {
+          deletedAt: new Date(),
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+
+      const processingTime = Date.now() - startTime;
+
+      // 🗑️ INVALIDER LES CACHES
+      if (this.redisClient) {
+        try {
+          await this._invalidateMessageCache(messageId);
+          await this._invalidateConversationCaches(message.conversationId);
+        } catch (cacheError) {
+          console.warn(
+            "⚠️ Erreur invalidation cache suppression:",
+            cacheError.message
+          );
+        }
+      }
+
+      // 🚀 PUBLIER ÉVÉNEMENT KAFKA
+      if (this.kafkaProducer) {
+        try {
+          await this._publishMessageEvent("MESSAGE_DELETED", deletedMessage, {
+            processingTime,
+          });
+        } catch (kafkaError) {
+          console.warn(
+            "⚠️ Erreur publication suppression:",
+            kafkaError.message
+          );
+        }
+      }
+
+      console.log(`🗑️ Message supprimé: ${messageId} (${processingTime}ms)`);
+      return deletedMessage;
+    } catch (error) {
+      console.error(`❌ Erreur suppression message ${messageId}:`, error);
+      throw error;
+    }
+  }
+
+  async getUnreadCount(userId, conversationId = null) {
+    const startTime = Date.now();
+
+    try {
+      const cacheKey = conversationId
+        ? `${this.cachePrefix}unread:${userId}:${conversationId}`
+        : `${this.cachePrefix}unread:${userId}:total`;
+
+      // 🚀 VÉRIFIER LE CACHE
+      if (this.redisClient) {
+        try {
+          const cached = await this.redisClient.get(cacheKey);
+          if (cached !== null) {
+            console.log(
+              `📦 Compteur non-lus depuis cache: ${userId} (${
+                Date.now() - startTime
+              }ms)`
+            );
+            return parseInt(cached);
+          }
+        } catch (cacheError) {
+          console.warn("⚠️ Erreur lecture cache compteur:", cacheError.message);
+        }
+      }
+
+      // Compter depuis MongoDB
+      const filter = {
+        receiverId: userId,
+        status: { $ne: "read" },
+      };
+
+      if (conversationId) {
+        filter.conversationId = conversationId;
+      }
+
+      const count = await Message.countDocuments(filter);
+      const processingTime = Date.now() - startTime;
+
+      // Mettre en cache
+      if (this.redisClient) {
+        try {
+          await this.redisClient.setex(cacheKey, 300, count.toString()); // 5 minutes
+        } catch (cacheError) {
+          console.warn("⚠️ Erreur cache compteur:", cacheError.message);
+        }
+      }
+
+      console.log(
+        `🔢 Compteur non-lus: ${userId} = ${count} (${processingTime}ms)`
+      );
+      return count;
+    } catch (error) {
+      console.error(`❌ Erreur compteur non-lus ${userId}:`, error);
+      throw error;
+    }
+  }
+
+  // ===============================
+  // MÉTHODES DE RECHERCHE AVANCÉE
+  // ===============================
+
+  async searchMessages(query, options = {}) {
+    const {
+      conversationId,
+      userId,
+      type,
+      dateFrom,
+      dateTo,
+      limit = 20,
+      useCache = true,
+    } = options;
+
+    const startTime = Date.now();
+    const cacheKey = `${this.cachePrefix}search:${JSON.stringify({
+      query,
+      options,
+    })}`;
+
+    try {
+      // Vérifier le cache
+      if (this.redisClient && useCache) {
+        try {
+          const cached = await this.redisClient.get(cacheKey);
+          if (cached) {
+            console.log(
+              `📦 Recherche depuis cache (${Date.now() - startTime}ms)`
+            );
+            return JSON.parse(cached);
+          }
+        } catch (cacheError) {
+          console.warn("⚠️ Erreur cache recherche:", cacheError.message);
+        }
+      }
+
+      // Construire le filtre de recherche
+      const filter = {
+        $text: { $search: query },
+      };
+
+      if (conversationId) filter.conversationId = conversationId;
+      if (userId) filter.$or = [{ senderId: userId }, { receiverId: userId }];
+      if (type) filter.type = type;
+      if (dateFrom || dateTo) {
+        filter.createdAt = {};
+        if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
+        if (dateTo) filter.createdAt.$lte = new Date(dateTo);
+      }
+
+      const messages = await Message.find(filter)
+        .sort({ score: { $meta: "textScore" }, createdAt: -1 })
+        .limit(limit)
+        .lean();
+
+      const result = {
+        messages,
+        totalFound: messages.length,
+        query,
+        searchTime: Date.now() - startTime,
+      };
+
+      // Mettre en cache
+      if (this.redisClient && useCache) {
+        try {
+          await this.redisClient.setex(cacheKey, 600, JSON.stringify(result)); // 10 minutes
+        } catch (cacheError) {
+          console.warn("⚠️ Erreur cache recherche:", cacheError.message);
+        }
+      }
+
+      console.log(
+        `🔍 Recherche: "${query}" = ${messages.length} résultats (${result.searchTime}ms)`
+      );
+      return result;
+    } catch (error) {
+      console.error("❌ Erreur recherche messages:", error);
+      throw error;
+    }
+  }
+
+  async getStatistics(conversationId) {
+    const startTime = Date.now();
+    const cacheKey = `${this.cachePrefix}stats:${conversationId}`;
+
+    try {
+      // Vérifier le cache
+      if (this.redisClient) {
+        try {
+          const cached = await this.redisClient.get(cacheKey);
+          if (cached) {
+            console.log(
+              `📦 Statistiques depuis cache: ${conversationId} (${
+                Date.now() - startTime
+              }ms)`
+            );
+            return JSON.parse(cached);
+          }
+        } catch (cacheError) {
+          console.warn("⚠️ Erreur cache statistiques:", cacheError.message);
+        }
+      }
+
+      // Calculer les statistiques
+      const stats = await Message.aggregate([
+        { $match: { conversationId } },
+        {
+          $group: {
+            _id: null,
+            totalMessages: { $sum: 1 },
+            messagesByType: {
+              $push: {
+                k: "$type",
+                v: 1,
+              },
+            },
+            messagesByUser: {
+              $push: {
+                k: "$senderId",
+                v: 1,
+              },
+            },
+            lastMessage: { $max: "$createdAt" },
+            firstMessage: { $min: "$createdAt" },
+            averageLength: { $avg: { $strLenCP: "$content" } },
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            totalMessages: 1,
+            messagesByType: { $arrayToObject: "$messagesByType" },
+            messagesByUser: { $arrayToObject: "$messagesByUser" },
+            lastMessage: 1,
+            firstMessage: 1,
+            averageLength: { $round: ["$averageLength", 2] },
+          },
+        },
+      ]);
+
+      const result = stats[0] || {
+        totalMessages: 0,
+        messagesByType: {},
+        messagesByUser: {},
+        lastMessage: null,
+        firstMessage: null,
+        averageLength: 0,
+      };
+
+      const processingTime = Date.now() - startTime;
+      result.calculatedAt = new Date().toISOString();
+      result.processingTime = processingTime;
+
+      // Mettre en cache
+      if (this.redisClient) {
+        try {
+          await this.redisClient.setex(cacheKey, 1800, JSON.stringify(result)); // 30 minutes
+        } catch (cacheError) {
+          console.warn("⚠️ Erreur cache statistiques:", cacheError.message);
+        }
+      }
+
+      console.log(
+        `📊 Statistiques calculées: ${conversationId} (${processingTime}ms)`
+      );
+      return result;
+    } catch (error) {
+      console.error(`❌ Erreur statistiques ${conversationId}:`, error);
+      throw error;
+    }
+  }
+
+  // ===============================
+  // MÉTHODES PRIVÉES - CACHE
+  // ===============================
+
+  async _cacheMessage(message) {
+    if (!this.redisClient) return;
+
+    const cacheKey = `${this.cachePrefix}${message._id}`;
+    const ttl = this._calculateTTL(message);
+
+    await this.redisClient.setex(cacheKey, ttl, JSON.stringify(message));
+  }
+
+  async _getCachedMessage(messageId) {
+    if (!this.redisClient) return null;
+
+    const cacheKey = `${this.cachePrefix}${messageId}`;
+    const cached = await this.redisClient.get(cacheKey);
+
+    return cached ? JSON.parse(cached) : null;
+  }
+
+  async _invalidateMessageCache(messageId) {
+    if (!this.redisClient) return;
+
+    const cacheKey = `${this.cachePrefix}${messageId}`;
+    await this.redisClient.del(cacheKey);
+  }
+
+  async _invalidateRelatedCaches(message) {
+    if (!this.redisClient) return;
+
+    const patterns = [
+      `${this.cachePrefix}conv:${message.conversationId}:*`,
+      `${this.cachePrefix}unread:${message.senderId}:*`,
+      `${this.cachePrefix}unread:${message.receiverId}:*`,
+      `${this.cachePrefix}stats:${message.conversationId}`,
+    ];
+
+    for (const pattern of patterns) {
+      try {
+        const keys = await this.redisClient.keys(pattern);
+        if (keys.length > 0) {
+          await this.redisClient.del(keys);
+        }
+      } catch (error) {
+        console.warn(
+          `⚠️ Erreur invalidation pattern ${pattern}:`,
+          error.message
+        );
+      }
+    }
+  }
+
+  async _invalidateConversationCaches(conversationId) {
+    if (!this.redisClient) return;
+
+    const patterns = [
+      `${this.cachePrefix}conv:${conversationId}:*`,
+      `${this.cachePrefix}stats:${conversationId}`,
+    ];
+
+    for (const pattern of patterns) {
+      try {
+        const keys = await this.redisClient.keys(pattern);
+        if (keys.length > 0) {
+          await this.redisClient.del(keys);
+        }
+      } catch (error) {
+        console.warn(
+          `⚠️ Erreur invalidation conversation ${pattern}:`,
+          error.message
+        );
+      }
+    }
+  }
+
+  async _invalidateUserCaches(userId) {
+    if (!this.redisClient) return;
+
+    const patterns = [`${this.cachePrefix}unread:${userId}:*`];
+
+    for (const pattern of patterns) {
+      try {
+        const keys = await this.redisClient.keys(pattern);
+        if (keys.length > 0) {
+          await this.redisClient.del(keys);
+        }
+      } catch (error) {
+        console.warn(
+          `⚠️ Erreur invalidation utilisateur ${pattern}:`,
+          error.message
+        );
+      }
+    }
+  }
+
+  _calculateTTL(message) {
+    // TTL selon le type de message
+    const ttlMap = {
+      TEXT: 3600, // 1 heure
+      IMAGE: 7200, // 2 heures
+      VIDEO: 1800, // 30 minutes (plus lourd)
+      AUDIO: 3600, // 1 heure
+      FILE: 7200, // 2 heures
+      SYSTEM: 300, // 5 minutes (moins important)
+    };
+
+    return ttlMap[message.type] || this.defaultTTL;
+  }
+
+  // ===============================
+  // MÉTHODES PRIVÉES - KAFKA
+  // ===============================
+
+  async _publishMessageEvent(eventType, message, additionalData = {}) {
+    if (!this.kafkaProducer) return;
+
+    const eventData = {
+      eventType,
+      timestamp: new Date().toISOString(),
+      service: "message-repository",
+      ...additionalData,
+    };
+
+    if (message) {
+      eventData.messageId = message._id;
+      eventData.conversationId = message.conversationId;
+      eventData.senderId = message.senderId;
+      eventData.receiverId = message.receiverId;
+      eventData.type = message.type;
+      eventData.status = message.status;
+    }
+
+    await this.kafkaProducer.publishMessage(eventData);
+  }
+
+  // ===============================
+  // MÉTHODES UTILITAIRES
+  // ===============================
+
+  async getHealthStatus() {
+    try {
+      const healthData = {
+        mongodb: { status: "unknown", responseTime: null },
+        redis: { status: "unknown", responseTime: null },
+        kafka: { status: "unknown" },
+      };
+
+      // Test MongoDB
+      const mongoStart = Date.now();
+      try {
+        await Message.findOne().lean();
+        healthData.mongodb = {
+          status: "connected",
+          responseTime: Date.now() - mongoStart,
+        };
+      } catch (error) {
+        healthData.mongodb = {
+          status: "disconnected",
+          error: error.message,
+        };
+      }
+
+      // Test Redis
+      if (this.redisClient) {
+        const redisStart = Date.now();
+        try {
+          await this.redisClient.ping();
+          healthData.redis = {
+            status: "connected",
+            responseTime: Date.now() - redisStart,
+          };
+        } catch (error) {
+          healthData.redis = {
+            status: "disconnected",
+            error: error.message,
+          };
+        }
+      } else {
+        healthData.redis.status = "disabled";
+      }
+
+      // Kafka status
+      healthData.kafka.status = this.kafkaProducer ? "enabled" : "disabled";
+
+      return healthData;
+    } catch (error) {
+      console.error("❌ Erreur health check repository:", error);
+      throw error;
+    }
+  }
+
+  async clearCache(pattern = null) {
+    if (!this.redisClient) {
+      return { cleared: 0, message: "Redis non disponible" };
+    }
+
+    try {
+      const searchPattern = pattern || `${this.cachePrefix}*`;
+      const keys = await this.redisClient.keys(searchPattern);
+
+      if (keys.length > 0) {
+        await this.redisClient.del(keys);
+      }
+
+      console.log(`🗑️ Cache nettoyé: ${keys.length} clés supprimées`);
+      return { cleared: keys.length, pattern: searchPattern };
+    } catch (error) {
+      console.error("❌ Erreur nettoyage cache:", error);
+      throw error;
     }
   }
 }

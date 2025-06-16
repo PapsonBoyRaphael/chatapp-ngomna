@@ -1,507 +1,581 @@
 <!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Chat Service Test</title>
-    <link rel="stylesheet" href="styles.css" />
-  </head>
-  <body>
-    <div class="chat-container">
-      <div class="chat-sidebar">
-        <div class="current-user">
-          <div class="user-info">
-            <h3 id="user-name"></h3>
-            <span id="user-status">En ligne</span>
-          </div>
-        </div>
-        <hr class="divider" />
-        <h2>Conversations</h2>
-        <ul id="conversation-list">
-          <!-- Les conversations s'afficheront ici -->
-        </ul>
-        <button id="contacts-button">Voir les contacts</button>
-      </div>
-      <div class="chat-main">
-        <div class="chat-header">
-          <div class="contact-info">
-            <div class="contact-details">
-              <h2 id="current-contact">Sélectionnez une conversation</h2>
-              <p class="last-seen">dernière vue récemment</p>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CENADI Chat-File Service</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header Navigation -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo">
+                    <i class="fas fa-comments"></i>
+                    <span>CENADI Chat</span>
+                </div>
+                <nav class="nav-links">
+                    <a href="#chat" class="nav-link active" data-section="chat">
+                        <i class="fas fa-comments"></i>
+                        <span>Chat</span>
+                    </a>
+                    <a href="#files" class="nav-link" data-section="files">
+                        <i class="fas fa-folder"></i>
+                        <span>Fichiers</span>
+                    </a>
+                    <a href="#api" class="nav-link" data-section="api">
+                        <i class="fas fa-code"></i>
+                        <span>API</span>
+                    </a>
+                    <a href="#health" class="nav-link" data-section="health">
+                        <i class="fas fa-heartbeat"></i>
+                        <span>Santé</span>
+                    </a>
+                </nav>
+                <div class="user-section">
+                    <div class="connection-status" id="connectionStatus">
+                        <i class="fas fa-circle"></i>
+                        <span>Connecté</span>
+                    </div>
+                    <button class="settings-btn" id="settingsBtn">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                </div>
             </div>
-          </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Chat Section -->
+            <section id="chatSection" class="content-section active">
+                <div class="chat-container">
+                    <div class="conversations-sidebar">
+                        <div class="sidebar-header">
+                            <h3>Conversations</h3>
+                            <button class="new-chat-btn" id="newChatBtn">
+                                <i class="fas fa-plus"></i>
+                            </button>
+                        </div>
+                        <div class="search-bar">
+                            <i class="fas fa-search"></i>
+                            <input type="text" placeholder="Rechercher une conversation..." id="searchConversations">
+                        </div>
+                        <div class="conversations-list" id="conversationsList">
+                            <!-- Les conversations seront chargées dynamiquement -->
+                        </div>
+                    </div>
+
+                    <div class="chat-main">
+                        <div class="chat-header" id="chatHeader">
+                            <div class="chat-info">
+                                <div class="avatar">
+                                    <i class="fas fa-user"></i>
+                                </div>
+                                <div class="chat-details">
+                                    <h3>Sélectionnez une conversation</h3>
+                                    <span class="status">En ligne</span>
+                                </div>
+                            </div>
+                            <div class="chat-actions">
+                                <button class="action-btn" id="callBtn">
+                                    <i class="fas fa-phone"></i>
+                                </button>
+                                <button class="action-btn" id="videoBtn">
+                                    <i class="fas fa-video"></i>
+                                </button>
+                                <button class="action-btn" id="infoBtn">
+                                    <i class="fas fa-info-circle"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="messages-container" id="messagesContainer">
+                            <div class="welcome-message">
+                                <i class="fas fa-comments"></i>
+                                <h3>Bienvenue dans CENADI Chat</h3>
+                                <p>Sélectionnez une conversation pour commencer à discuter</p>
+                            </div>
+                        </div>
+
+                        <div class="message-input-container" id="messageInputContainer">
+                            <div class="input-actions">
+                                <button class="input-btn" id="attachBtn">
+                                    <i class="fas fa-paperclip"></i>
+                                </button>
+                                <button class="input-btn" id="emojiBtn">
+                                    <i class="fas fa-smile"></i>
+                                </button>
+                            </div>
+                            <div class="message-input">
+                                <textarea placeholder="Tapez votre message..." id="messageInput"></textarea>
+                            </div>
+                            <button class="send-btn" id="sendBtn">
+                                <i class="fas fa-paper-plane"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Files Section -->
+            <section id="filesSection" class="content-section">
+                <div class="files-container">
+                    <div class="files-header">
+                        <h2>Gestionnaire de Fichiers</h2>
+                        <div class="files-actions">
+                            <button class="btn btn-primary" id="uploadBtn">
+                                <i class="fas fa-upload"></i>
+                                Téléverser
+                            </button>
+                            <div class="view-toggle">
+                                <button class="view-btn active" data-view="grid">
+                                    <i class="fas fa-th"></i>
+                                </button>
+                                <button class="view-btn" data-view="list">
+                                    <i class="fas fa-list"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="files-filters">
+                        <div class="filter-group">
+                            <label>Type:</label>
+                            <select id="fileTypeFilter">
+                                <option value="">Tous</option>
+                                <option value="image">Images</option>
+                                <option value="document">Documents</option>
+                                <option value="video">Vidéos</option>
+                                <option value="audio">Audio</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label>Taille:</label>
+                            <select id="fileSizeFilter">
+                                <option value="">Toutes</option>
+                                <option value="small">< 1MB</option>
+                                <option value="medium">1-10MB</option>
+                                <option value="large">> 10MB</option>
+                            </select>
+                        </div>
+                        <div class="search-files">
+                            <i class="fas fa-search"></i>
+                            <input type="text" placeholder="Rechercher des fichiers..." id="searchFiles">
+                        </div>
+                    </div>
+
+                    <div class="files-grid" id="filesGrid">
+                        <!-- Les fichiers seront chargés dynamiquement -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- API Section -->
+            <section id="apiSection" class="content-section">
+                <div class="api-container">
+                    <div class="api-header">
+                        <h2>Documentation API</h2>
+                        <div class="api-status">
+                            <span class="status-indicator active"></span>
+                            <span>Service actif</span>
+                        </div>
+                    </div>
+
+                    <div class="api-endpoints">
+                        <div class="endpoint-group">
+                            <h3>Messages</h3>
+                            <div class="endpoint">
+                                <span class="method get">GET</span>
+                                <span class="url">/api/messages/:conversationId</span>
+                                <span class="description">Récupérer les messages</span>
+                            </div>
+                            <div class="endpoint">
+                                <span class="method post">POST</span>
+                                <span class="url">/api/messages</span>
+                                <span class="description">Envoyer un message</span>
+                            </div>
+                        </div>
+
+                        <div class="endpoint-group">
+                            <h3>Fichiers</h3>
+                            <div class="endpoint">
+                                <span class="method post">POST</span>
+                                <span class="url">/api/files/upload</span>
+                                <span class="description">Téléverser un fichier</span>
+                            </div>
+                            <div class="endpoint">
+                                <span class="method get">GET</span>
+                                <span class="url">/api/files/:fileId</span>
+                                <span class="description">Télécharger un fichier</span>
+                            </div>
+                        </div>
+
+                        <div class="endpoint-group">
+                            <h3>Conversations</h3>
+                            <div class="endpoint">
+                                <span class="method get">GET</span>
+                                <span class="url">/api/conversations</span>
+                                <span class="description">Liste des conversations</span>
+                            </div>
+                            <div class="endpoint">
+                                <span class="method post">POST</span>
+                                <span class="url">/api/conversations</span>
+                                <span class="description">Créer une conversation</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Health Section -->
+            <section id="healthSection" class="content-section">
+                <div class="health-container">
+                    <div class="health-header">
+                        <h2>État du Service</h2>
+                        <button class="btn btn-secondary" id="refreshHealthBtn">
+                            <i class="fas fa-sync-alt"></i>
+                            Actualiser
+                        </button>
+                    </div>
+
+                    <div class="health-cards">
+                        <div class="health-card" id="mongoCard">
+                            <div class="card-header">
+                                <i class="fas fa-database"></i>
+                                <h3>MongoDB</h3>
+                            </div>
+                            <div class="card-status">
+                                <span class="status-indicator"></span>
+                                <span class="status-text">Vérification...</span>
+                            </div>
+                        </div>
+
+                        <div class="health-card" id="redisCard">
+                            <div class="card-header">
+                                <i class="fas fa-memory"></i>
+                                <h3>Redis</h3>
+                            </div>
+                            <div class="card-status">
+                                <span class="status-indicator"></span>
+                                <span class="status-text">Vérification...</span>
+                            </div>
+                        </div>
+
+                        <div class="health-card" id="kafkaCard">
+                            <div class="card-header">
+                                <i class="fas fa-stream"></i>
+                                <h3>Kafka</h3>
+                            </div>
+                            <div class="card-status">
+                                <span class="status-indicator"></span>
+                                <span class="status-text">Vérification...</span>
+                            </div>
+                        </div>
+
+                        <div class="health-card" id="websocketCard">
+                            <div class="card-header">
+                                <i class="fas fa-plug"></i>
+                                <h3>WebSocket</h3>
+                            </div>
+                            <div class="card-status">
+                                <span class="status-indicator"></span>
+                                <span class="status-text">Vérification...</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="system-info" id="systemInfo">
+                        <h3>Informations Système</h3>
+                        <div class="info-grid">
+                            <div class="info-item">
+                                <label>Version:</label>
+                                <span>1.0.0</span>
+                            </div>
+                            <div class="info-item">
+                                <label>Démarré:</label>
+                                <span id="uptime">--</span>
+                            </div>
+                            <div class="info-item">
+                                <label>Environnement:</label>
+                                <span>Développement</span>
+                            </div>
+                            <div class="info-item">
+                                <label>Port:</label>
+                                <span>8003</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Upload Modal -->
+        <div class="modal" id="uploadModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Téléverser un fichier</h3>
+                    <button class="close-btn" id="closeUploadModal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="upload-area" id="uploadArea">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <p>Glissez-déposez vos fichiers ici ou <button class="browse-btn">parcourir</button></p>
+                        <input type="file" id="fileInput" multiple accept="*/*">
+                    </div>
+                    <div class="upload-progress" id="uploadProgress" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill"></div>
+                        </div>
+                        <span class="progress-text" id="progressText">0%</span>
+                    </div>
+                </div>
+            </div>
         </div>
-        <div class="chat-messages" id="chat-messages">
-          <!-- Messages s'afficheront ici -->
+
+        <!-- Settings Modal -->
+        <div class="modal" id="settingsModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Paramètres</h3>
+                    <button class="close-btn" id="closeSettingsModal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="setting-group">
+                        <label>Thème:</label>
+                        <select id="themeSelect">
+                            <option value="light">Clair</option>
+                            <option value="dark">Sombre</option>
+                            <option value="auto">Automatique</option>
+                        </select>
+                    </div>
+                    <div class="setting-group">
+                        <label>Notifications:</label>
+                        <label class="switch">
+                            <input type="checkbox" id="notificationsToggle" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="setting-group">
+                        <label>Son:</label>
+                        <label class="switch">
+                            <input type="checkbox" id="soundToggle" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+            </div>
         </div>
-        <div class="chat-input">
-          <input
-            type="text"
-            id="message-input"
-            placeholder="Tapez votre message..."
-          />
-          <button id="send-button">Envoyer</button>
-        </div>
-      </div>
     </div>
 
-    <!-- Fenêtre modale pour les contacts -->
-    <div id="contacts-modal" class="modal">
-      <div class="modal-content">
-        <span id="close-modal" class="close">&times;</span>
-        <h2>Liste des contacts</h2>
-        <ul id="contacts-list">
-          <!-- Les contacts s'afficheront ici -->
-        </ul>
-      </div>
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
+        
+        <!-- Chat Section -->
+        <section id="chatSection" class="content-section active">
+            <div class="chat-container">
+                <div class="conversations-panel">
+                    <div class="panel-header">
+                        <h3>Conversations</h3>
+                        <input type="text" id="searchConversations" placeholder="Rechercher..." class="search-input">
+                    </div>
+                    <div id="conversationsList" class="conversations-list">
+                        <!-- Conversations seront chargées ici -->
+                    </div>
+                </div>
+                
+                <div class="chat-panel">
+                    <div id="chatHeader" class="chat-header">
+                        <div class="chat-details">
+                            <h3>Sélectionnez une conversation</h3>
+                        </div>
+                    </div>
+                    
+                    <div id="messagesContainer" class="messages-container">
+                        <!-- Messages seront chargés ici -->
+                    </div>
+                    
+                    <div class="message-input-container">
+                        <input type="text" id="messageInput" placeholder="Tapez votre message..." class="message-input">
+                        <button id="sendBtn" class="send-btn">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Files Section -->
+        <section id="filesSection" class="content-section">
+            <div class="files-container">
+                <div class="files-header">
+                    <h2>Gestionnaire de fichiers</h2>
+                    <div class="files-actions">
+                        <input type="text" id="searchFiles" placeholder="Rechercher des fichiers..." class="search-input">
+                        <button id="uploadBtn" class="btn btn-primary">
+                            <i class="fas fa-upload"></i>
+                            Téléverser
+                        </button>
+                    </div>
+                </div>
+                
+                <div id="filesGrid" class="files-grid">
+                    <!-- Fichiers seront chargés ici -->
+                </div>
+            </div>
+        </section>
+
+        <!-- Health Section -->
+        <section id="healthSection" class="content-section">
+            <div class="health-container">
+                <div class="health-header">
+                    <h2>État des services</h2>
+                    <button id="refreshHealthBtn" class="btn btn-secondary">
+                        <i class="fas fa-sync-alt"></i>
+                        Actualiser
+                    </button>
+                </div>
+                
+                <div class="health-cards">
+                    <div id="mongoCard" class="health-card">
+                        <div class="health-card-header">
+                            <i class="fas fa-database"></i>
+                            <h3>MongoDB</h3>
+                        </div>
+                        <div class="health-card-body">
+                            <div class="status-indicator"></div>
+                            <span class="status-text">Vérification...</span>
+                        </div>
+                    </div>
+                    
+                    <div id="redisCard" class="health-card">
+                        <div class="health-card-header">
+                            <i class="fas fa-memory"></i>
+                            <h3>Redis</h3>
+                        </div>
+                        <div class="health-card-body">
+                            <div class="status-indicator"></div>
+                            <span class="status-text">Vérification...</span>
+                        </div>
+                    </div>
+                    
+                    <div id="kafkaCard" class="health-card">
+                        <div class="health-card-header">
+                            <i class="fas fa-stream"></i>
+                            <h3>Kafka</h3>
+                        </div>
+                        <div class="health-card-body">
+                            <div class="status-indicator"></div>
+                            <span class="status-text">Vérification...</span>
+                        </div>
+                    </div>
+                    
+                    <div id="websocketCard" class="health-card">
+                        <div class="health-card-header">
+                            <i class="fas fa-plug"></i>
+                            <h3>WebSocket</h3>
+                        </div>
+                        <div class="health-card-body">
+                            <div class="status-indicator"></div>
+                            <span class="status-text">Vérification...</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="system-info">
+                    <h3>Informations système</h3>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <label>Temps de fonctionnement:</label>
+                            <span id="uptime">-</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <div id="connectionStatus" class="connection-status">
+                <i class="fas fa-circle"></i>
+                <span>Connexion...</span>
+            </div>
+        </div>
+        
+        <!-- Upload Modal -->
+        <div id="uploadModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Téléverser un fichier</h3>
+                    <button class="close-btn">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div id="uploadArea" class="upload-area">
+                        <i class="fas fa-cloud-upload-alt"></i>
+                        <p>Glissez-déposez vos fichiers ici ou cliquez pour sélectionner</p>
+                        <input type="file" id="fileInput" multiple hidden>
+                    </div>
+                    <div id="uploadProgress" class="upload-progress" style="display: none;">
+                        <div class="progress-bar">
+                            <div id="progressFill" class="progress-fill"></div>
+                        </div>
+                        <span id="progressText">0%</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Settings Modal -->
+        <div id="settingsModal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Paramètres</h3>
+                    <button class="close-btn">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="setting-group">
+                        <label for="themeSelect">Thème:</label>
+                        <select id="themeSelect">
+                            <option value="light">Clair</option>
+                            <option value="dark">Sombre</option>
+                        </select>
+                    </div>
+                    <div class="setting-group">
+                        <label for="notificationsToggle">Notifications:</label>
+                        <input type="checkbox" id="notificationsToggle">
+                    </div>
+                    <div class="setting-group">
+                        <label for="soundToggle">Son:</label>
+                        <input type="checkbox" id="soundToggle">
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Toast Container -->
+        <div id="toastContainer" class="toast-container"></div>
     </div>
 
-    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
-    <script>
-      const getCookie = (name) => {
-        const value = `; ${document.cookie}`;
-        const parts = value.split(`; ${name}=`);
-
-        if (name === "user") {
-          // Si le cookie est "user", on le décode
-          if (parts.length === 2)
-            return JSON.parse(
-              decodeURIComponent(parts.pop().split(";").shift())
-            );
-        } else if (parts.length === 2) return parts.pop().split(";").shift();
-      };
-
-      const token = getCookie("token");
-      const user = getCookie("user");
-      if (user) {
-        // Afficher le nom complet
-        document.getElementById(
-          "user-name"
-        ).textContent = `${user.nom} ${user.prenom}`;
-      }
-      console.log("user:", user);
-      const socket = io("http://localhost:8003", {
-        auth: {
-          token, // Envoyer le token lors de la connexion
-        },
-      }); // Remplacez par l'URL de votre chat-service
-      const userId = user.id; // ID de l'utilisateur actuel
-      let currentReceiverId = null;
-      let activeConversationId = null;
-
-      // Rejoindre une salle
-      socket.emit("join", userId);
-
-      // Écouter les utilisateurs en ligne
-      socket.on("onlineUsers", (users) => {
-        console.log("Utilisateurs en ligne:", users);
-        // Mettre à jour votre interface utilisateur
-      });
-
-      // Écouter les salons créés
-      socket.on("createdRooms", (rooms) => {
-        console.log("Salons créés:", rooms);
-        // Mettre à jour votre interface utilisateur
-      });
-
-      // Obtenir les statistiques
-      socket.emit("getStats");
-      socket.on("stats", (stats) => {
-        console.log("Statistiques:", stats);
-        // Afficher dans votre interface
-      });
-
-      // Charger les contacts dans la fenêtre modale
-      const loadContacts = async () => {
-        try {
-          const response = await fetch("http://localhost:8002/users"); // URL de l'API user-service
-          const users = await response.json();
-
-          const contactsList = document.getElementById("contacts-list");
-          contactsList.innerHTML = ""; // Réinitialiser la liste
-
-          users.forEach((user) => {
-            const li = document.createElement("li");
-            li.textContent = `${user.nom} ${user.prenom}`;
-            li.dataset.id = user.id;
-
-            li.addEventListener("click", () => {
-              // Mettre à jour l'en-tête avec le contact sélectionné
-              document.getElementById(
-                "current-contact"
-              ).textContent = `${user.nom} ${user.prenom}`;
-              currentReceiverId = user.id;
-
-              // Fermer la fenêtre modale
-              closeModal();
-            });
-
-            contactsList.appendChild(li);
-          });
-        } catch (error) {
-          console.error("Erreur lors du chargement des utilisateurs :", error);
-        }
-      };
-
-      // Afficher la fenêtre modale
-      const openModal = () => {
-        document.getElementById("contacts-modal").style.display = "block";
-        loadContacts(); // Charger les contacts
-      };
-
-      // Fermer la fenêtre modale
-      const closeModal = () => {
-        document.getElementById("contacts-modal").style.display = "none";
-      };
-
-      // Ajouter les gestionnaires d'événements
-      document
-        .getElementById("contacts-button")
-        .addEventListener("click", openModal);
-      document
-        .getElementById("close-modal")
-        .addEventListener("click", closeModal);
-
-      // Envoyer un message
-      document.getElementById("send-button").addEventListener("click", () => {
-        const messageInput = document.getElementById("message-input");
-        const message = messageInput.value;
-
-        console.log("Message à envoyer :", message);
-
-        if (message.trim() !== "" && currentReceiverId) {
-          socket.emit("privateMessage", {
-            senderId: userId,
-            receiverId: currentReceiverId,
-            content: message,
-          });
-
-          messageInput.value = "";
-        }
-      });
-
-      // Ajouter cette fonction avant les événements socket
-      const loadMessages = async (conversationId) => {
-        try {
-          activeConversationId = conversationId; // Définir la conversation active
-
-          // Nettoyer la zone des messages
-          const chatMessages = document.getElementById("chat-messages");
-          chatMessages.innerHTML = "";
-
-          // Marquer tous les messages comme lus
-          socket.emit("markRead", conversationId);
-
-          // Émettre un événement pour demander les messages
-          socket.emit("getMessages", {
-            conversationId: conversationId,
-          });
-        } catch (error) {
-          console.error("Erreur lors du chargement des messages:", error);
-        }
-      };
-
-      // Recevoir un message
-      socket.on("newMessage", (message) => {
-        console.log("Message reçu:", message);
-
-        // Marquer le message comme livré dès réception
-        if (message.senderId !== userId) {
-          socket.emit("markDelivered", message.conversationId);
-
-          // Si on est dans la conversation, marquer comme lu immédiatement
-          if (message.conversationId === activeConversationId) {
-            socket.emit("markRead", message.conversationId);
-          }
-        }
-
-        // Vérifier si nous sommes impliqués dans ce message (expéditeur ou destinataire)
-        if (
-          message.senderId === userId ||
-          message.senderId === currentReceiverId ||
-          message.receiverId === userId ||
-          message.receiverId === currentReceiverId
-        ) {
-          const chatMessages = document.getElementById("chat-messages");
-          const messageElement = document.createElement("div");
-          messageElement.classList.add("message");
-          messageElement.dataset.messageId = message._id;
-          messageElement.dataset.conversationId = message.conversationId;
-
-          // N'afficher le message que si on est dans la bonne conversation
-          if (message.conversationId === activeConversationId) {
-            if (message.senderId === userId) {
-              messageElement.classList.add("sent");
-              messageElement.innerHTML = `
-          <div class="message-content">
-            <p>${message.content}</p>
-            <div class="message-info">
-              <span class="message-time">${new Date(
-                message.createdAt
-              ).toLocaleTimeString()}</span>
-              <span class="message-status ${message.status.toLowerCase()}">${
-                message.status === "READ" || message.status === "DELIVERED"
-                  ? "✓✓"
-                  : "✓"
-              }</span>
-            </div>
-          </div>
-        `;
-            } else {
-              messageElement.classList.add("received");
-              messageElement.innerHTML = `
-          <div class="message-content">
-            <p>${message.content}</p>
-            <div class="message-info">
-              <span class="message-time">${new Date(
-                message.createdAt
-              ).toLocaleTimeString()}</span>
-            </div>
-          </div>
-        `;
-            }
-
-            chatMessages.appendChild(messageElement);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-          }
-        }
-      });
-
-      // Écouter les nouvelles conversations en temps réel
-      socket.on("newConversation", (conversation) => {
-        console.log("Nouvelle conversation :", conversation);
-        const conversationList = document.getElementById("conversation-list");
-
-        const li = document.createElement("li");
-        li.textContent = `${conversation.nom} ${conversation.prenom}`;
-        li.dataset.id = conversation.id;
-
-        li.addEventListener("click", () => {
-          document.getElementById(
-            "current-contact"
-          ).textContent = `${conversation.nom} ${conversation.prenom}`;
-          currentReceiverId = conversation.id;
-        });
-
-        conversationList.appendChild(li);
-      });
-
-      // Émettre un événement pour demander les conversations
-      socket.emit("sidebar");
-
-      // Modifier l'écouteur sidebarData
-      socket.on("sidebarData", async (conversations) => {
-        const conversationList = document.getElementById("conversation-list");
-        conversationList.innerHTML = "";
-
-        console.log("Conversations reçues :", conversations);
-
-        conversations.forEach((conversation) => {
-          console.log("MarkDelivered");
-          socket.emit("markDelivered", conversation._id);
-          const otherParticipant = conversation.participants.find(
-            (p) => p.id !== userId
-          );
-
-          const li = document.createElement("li");
-          li.classList.add("conversation-item");
-
-          li.innerHTML = `
-      <div class="conversation-info">
-        <div class="participant-name">${otherParticipant.nom} ${
-            otherParticipant.prenom
-          }</div>
-        ${
-          conversation.lastMessage
-            ? `<div class="last-message">${conversation.lastMessage.content}</div>`
-            : ""
-        }
-      </div>
-      ${
-        conversation.unreadCount > 0
-          ? `<span class="unread-count">${conversation.unreadCount}</span>`
-          : ""
-      }
-    `;
-
-          li.dataset.id = conversation._id;
-          li.addEventListener("click", () => {
-            currentReceiverId = otherParticipant.id;
-            document.getElementById(
-              "current-contact"
-            ).textContent = `${otherParticipant.nom} ${otherParticipant.prenom}`;
-            loadMessages(conversation._id);
-          });
-
-          conversationList.appendChild(li);
-        });
-      });
-
-      // Ajouter cet écouteur après les autres événements socket
-      socket.on("messagesLoaded", (messages) => {
-        console.log("Messages reçus:", messages);
-        const chatMessages = document.getElementById("chat-messages");
-        chatMessages.innerHTML = ""; // Nettoyer la zone des messages
-
-        messages.forEach((message) => {
-          const messageElement = document.createElement("div");
-          messageElement.classList.add("message");
-          messageElement.dataset.conversationId = message.conversationId; // Ajouter l'ID de conversation
-
-          // Ajouter une classe différente selon l'expéditeur
-          if (message.senderId === userId) {
-            messageElement.classList.add("sent");
-            // Ajouter le contenu du message avec le statut
-            messageElement.innerHTML = `
-      <div class="message-content">
-        <p>${message.content}</p>
-        <div class="message-info">
-          <span class="message-time">${new Date(
-            message.createdAt
-          ).toLocaleTimeString()}</span>
-          <span class="message-status ${message.status.toLowerCase()}">${
-              message.status === "READ" || message.status === "DELIVERED"
-                ? "✓✓"
-                : "✓"
-            }</span>
-        </div>
-      </div>
-    `;
-          } else {
-            messageElement.classList.add("received");
-            // Ajouter le contenu du message avec le statut
-            messageElement.innerHTML = `
-      <div class="message-content">
-        <p>${message.content}</p>
-        <div class="message-info">
-          <span class="message-time">${new Date(
-            message.createdAt
-          ).toLocaleTimeString()}</span>
-          
-        </div>
-      </div>
-    `;
-          }
-
-          chatMessages.appendChild(messageElement);
-        });
-
-        // Faire défiler jusqu'au dernier message
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-      });
-
-      // Écouter les changements de statut des messages
-      socket.on(
-        "messagesDelivered",
-        ({ conversationId, receiverId, messagesInfos }) => {
-          console.log(
-            `Messages livrés pour la conversation ${conversationId} : ${messagesInfos}`
-          );
-          // Mettre à jour l'interface pour montrer que les messages ont été livrés
-          updateMessagesStatus(conversationId, "DELIVERED", messagesInfos);
-        }
-      );
-
-      socket.on(
-        "messagesRead",
-        ({ conversationId, receiverId, messagesInfos }) => {
-          console.log(
-            `Messages lus pour la conversation ${conversationId} : ${messagesInfos}`
-          );
-          // Mettre à jour le statut des messages envoyés
-          updateMessagesStatus(conversationId, "READ", messagesInfos);
-        }
-      );
-
-      socket.on("conversationUpdated", (conversation) => {
-        // Mettre à jour la conversation dans la sidebar
-        console.log("Conversation mise à jour:", conversation);
-        updateConversationInSidebar(conversation);
-      });
-
-      // Optimisation de la fonction updateMessagesStatus
-      function updateMessagesStatus(conversationId, status, messagesInfos) {
-        const statusIcon = "✓✓";
-
-        // Sélectionner uniquement les messages spécifiés
-        messagesInfos.forEach((messageInfo) => {
-          const message = document.querySelector(
-            `.message.sent[data-message-id="${messageInfo._id}"][data-conversation-id="${conversationId}"]`
-          );
-
-          if (message) {
-            const statusElement = message.querySelector(".message-status");
-            const currentStatus = statusElement?.className.split(" ")[1]; // récupérer le statut actuel
-
-            // Ne mettre à jour que si le nouveau statut est "supérieur" à l'ancien
-            if (shouldUpdateStatus(currentStatus, status)) {
-              if (statusElement) {
-                statusElement.textContent = statusIcon;
-                statusElement.className = `message-status ${status.toLowerCase()}`;
-              }
-            }
-          }
-        });
-      }
-
-      // Optimisation de updateConversationInSidebar
-      function updateConversationInSidebar(conversation) {
-        if (!conversation || !conversation.participants) return;
-
-        const conversationList = document.getElementById("conversation-list");
-        const otherParticipant = conversation.participants.find(
-          (p) => p.id !== userId
-        );
-
-        if (!otherParticipant) return;
-
-        let conversationElement = conversationList.querySelector(
-          `[data-id="${conversation._id}"]`
-        );
-
-        // Ne pas afficher le compteur non lu si c'est la conversation active
-        const showUnreadCount =
-          conversation.unreadCount > 0 &&
-          conversation._id !== activeConversationId;
-
-        const conversationHTML = `
-    <div class="conversation-info">
-      <div class="participant-name">${otherParticipant.nom} ${
-          otherParticipant.prenom
-        }</div>
-      ${
-        conversation.lastMessage
-          ? `<div class="last-message">${conversation.lastMessage.content}</div>`
-          : ""
-      }
-    </div>
-    ${
-      showUnreadCount
-        ? `<span class="unread-count">${conversation.unreadCount}</span>`
-        : ""
-    }
-  `;
-
-        if (conversationElement) {
-          conversationElement.innerHTML = conversationHTML;
-        } else {
-          conversationElement = document.createElement("li");
-          conversationElement.classList.add("conversation-item");
-          conversationElement.dataset.id = conversation._id;
-          conversationElement.innerHTML = conversationHTML;
-          conversationElement.addEventListener("click", () => {
-            currentReceiverId = otherParticipant.id;
-            document.getElementById(
-              "current-contact"
-            ).textContent = `${otherParticipant.nom} ${otherParticipant.prenom}`;
-            loadMessages(conversation._id);
-          });
-          conversationList.insertBefore(
-            conversationElement,
-            conversationList.firstChild
-          );
-        }
-      }
-    </script>
-  </body>
+    <!-- Socket.IO -->
+    <script src="/socket.io/socket.io.js"></script>
+    
+    <!-- Application Script -->
+    <script src="app.js"></script>
+</body>
 </html>
