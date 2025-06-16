@@ -1,32 +1,28 @@
 {
-  "name": "visibility-service",
+  "name": "visibility",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "Visibility microservice for chat app",
+  "main": "src/infrastructure/web/main.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node src/infrastructure/web/main.js",
     "dev": "nodemon src/infrastructure/web/main.js",
     "lint": "eslint src",
     "format": "prettier --write src"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "description": "",
+  "author": "Your Name",
+  "license": "MIT",
   "dependencies": {
-    "dotenv": "^16.5.0",
+    "dotenv": "^16.4.5",
     "ejs": "^3.1.10",
-    "express": "^4.21.2",
+    "express": "^4.21.0",
     "express-async-errors": "^3.1.1",
-    "neo4j-driver": "^5.28.1",
-    "pg": "^8.16.0"
+    "neo4j-driver": "^5.24.1",
+    "pg": "^8.13.0",
+    "redis": "^5.5.6"
   },
   "devDependencies": {
-    "@eslint/js": "^9.29.0",
-    "eslint": "^9.28.0",
-    "globals": "^16.2.0",
-    "nodemon": "^3.1.10",
-    "prettier": "^3.5.3"
+    "eslint": "^8.57.1",
+    "nodemon": "^3.1.7",
+    "prettier": "^3.3.3"
   }
 }
