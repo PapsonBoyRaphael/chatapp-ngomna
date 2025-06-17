@@ -350,7 +350,7 @@ conversationSchema.methods.publishKafkaEvent = async function (
   additionalData = {}
 ) {
   try {
-    const kafkaProducers = require("../../../index").kafkaProducers;
+    const indexModule = require("../../../index"); const kafkaProducers = indexModule.kafkaProducers ? indexModule.kafkaProducers() : null;
 
     if (!kafkaProducers?.messageProducer) {
       console.warn("⚠️ Kafka producer non disponible pour", eventType);

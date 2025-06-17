@@ -1,273 +1,356 @@
 class RoomManager {
-  constructor(redisClient) {
-    this.redis = redisClient;
-    this.roomsKey = 'chat:rooms';
-    this.roomDataPrefix = 'chat:room_data';
-    this.roomParticipantsPrefix = 'chat:room_participants';
+  constructor(redis) {
+    this.redis = redis;
+    this.roomPrefix = "rooms";
+    this.roomUsersPrefix = "room_users";
+    this.userRoomsPrefix = "user_rooms";
+    this.roomDataPrefix = "room_data";
   }
 
-  async createRoom(roomId, roomData) {
+  // ✅ CORRIGER addUserToRoom AVEC VALIDATION DES TYPES
+  async addUserToRoom(roomName, userId, userData = {}) {
     try {
-      const room = {
-        id: roomId,
-        name: roomData.name || `Room ${roomId}`,
-        type: roomData.type || 'conversation',
-        creator: roomData.creator,
-        createdAt: roomData.createdAt || new Date().toISOString(),
-        isActive: true,
-        metadata: roomData.metadata || {}
-      };
+      // ✅ VALIDATION ET CONVERSION DES TYPES
+      const roomNameString = String(roomName);
+      const userIdString = String(userId);
 
-      // Ajouter à la liste des salons
-      await this.redis.sAdd(this.roomsKey, roomId);
-      
-      // Stocker les données du salon
-      await this.redis.hSet(`${this.roomDataPrefix}:${roomId}`, room);
-
-      // Initialiser la liste des participants
-      if (roomData.participants && roomData.participants.length > 0) {
-        await this.redis.sAdd(
-          `${this.roomParticipantsPrefix}:${roomId}`,
-          ...roomData.participants
+      if (
+        !roomNameString ||
+        !userIdString ||
+        userIdString === "undefined" ||
+        userIdString === "null"
+      ) {
+        throw new Error(
+          `Paramètres invalides: roomName=${roomName}, userId=${userId}`
         );
       }
 
-      console.log(`🏠 Salon créé: ${roomId} (${room.name})`);
-      return room;
+      // ✅ PRÉPARER LES DONNÉES AVEC SÉRIALISATION
+      const userInfo = {
+        userId: userIdString,
+        userName: userData.userName
+          ? String(userData.userName)
+          : userData.nom
+          ? String(userData.nom)
+          : "Unknown",
+        joinedAt: userData.joinedAt
+          ? userData.joinedAt instanceof Date
+            ? userData.joinedAt.toISOString()
+            : String(userData.joinedAt)
+          : new Date().toISOString(),
+        lastActivity: userData.lastActivity
+          ? userData.lastActivity instanceof Date
+            ? userData.lastActivity.toISOString()
+            : String(userData.lastActivity)
+          : new Date().toISOString(),
+        conversationId: userData.conversationId
+          ? String(userData.conversationId)
+          : null,
+      };
+
+      // ✅ AJOUTER L'UTILISATEUR À LA ROOM (AVEC STRINGS)
+      await this.redis.sAdd(
+        `${this.roomUsersPrefix}:${roomNameString}`,
+        userIdString
+      );
+
+      // ✅ AJOUTER LA ROOM À LA LISTE DES ROOMS DE L'UTILISATEUR
+      await this.redis.sAdd(
+        `${this.userRoomsPrefix}:${userIdString}`,
+        roomNameString
+      );
+
+      // ✅ STOCKER LES DONNÉES UTILISATEUR DANS LA ROOM (AVEC CONVERSION)
+      const redisData = {};
+      for (const [key, value] of Object.entries(userInfo)) {
+        if (value !== null && value !== undefined) {
+          redisData[key] = String(value);
+        }
+      }
+
+      await this.redis.hSet(
+        `${this.roomDataPrefix}:${roomNameString}:${userIdString}`,
+        redisData
+      );
+
+      // ✅ METTRE À JOUR LES MÉTADONNÉES DE LA ROOM
+      await this.redis.hSet(`${this.roomPrefix}:${roomNameString}`, {
+        lastActivity: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+
+      // Expiration automatique
+      await this.redis.expire(
+        `${this.roomDataPrefix}:${roomNameString}:${userIdString}`,
+        7200
+      ); // 2 heures
+      await this.redis.expire(`${this.roomPrefix}:${roomNameString}`, 7200);
+
+      console.log(
+        `🏠 Utilisateur ${userIdString} (${userInfo.userName}) ajouté à la room ${roomNameString}`
+      );
+      return true;
     } catch (error) {
-      console.error('Erreur création salon:', error);
-      return null;
+      console.error("❌ Erreur addUserToRoom:", error);
+      return false;
     }
   }
 
-  async getRooms() {
+  // ✅ CORRIGER removeUserFromRoom AVEC VALIDATION
+  async removeUserFromRoom(roomName, userId) {
     try {
-      const roomIds = await this.redis.sMembers(this.roomsKey);
+      const roomNameString = String(roomName);
+      const userIdString = String(userId);
+
+      if (!roomNameString || !userIdString) {
+        console.warn("⚠️ Paramètres invalides pour removeUserFromRoom:", {
+          roomName,
+          userId,
+        });
+        return false;
+      }
+
+      // Supprimer l'utilisateur de la room
+      await this.redis.sRem(
+        `${this.roomUsersPrefix}:${roomNameString}`,
+        userIdString
+      );
+
+      // Supprimer la room de la liste des rooms de l'utilisateur
+      await this.redis.sRem(
+        `${this.userRoomsPrefix}:${userIdString}`,
+        roomNameString
+      );
+
+      // Supprimer les données utilisateur de la room
+      await this.redis.del(
+        `${this.roomDataPrefix}:${roomNameString}:${userIdString}`
+      );
+
+      // Vérifier si la room est vide
+      const usersCount = await this.redis.sCard(
+        `${this.roomUsersPrefix}:${roomNameString}`
+      );
+      if (usersCount === 0) {
+        // Supprimer la room si elle est vide
+        await this.redis.del(`${this.roomPrefix}:${roomNameString}`);
+        console.log(`🏠 Room ${roomNameString} supprimée (vide)`);
+      }
+
+      console.log(
+        `👋 Utilisateur ${userIdString} retiré de la room ${roomNameString}`
+      );
+      return true;
+    } catch (error) {
+      console.error("❌ Erreur removeUserFromRoom:", error);
+      return false;
+    }
+  }
+
+  async createRoom(roomName, options = {}) {
+    try {
+      const roomNameString = String(roomName);
+
+      const roomData = {
+        name: roomNameString,
+        type: options.type ? String(options.type) : "CONVERSATION",
+        createdAt: new Date().toISOString(),
+        lastActivity: new Date().toISOString(),
+        maxUsers: options.maxUsers ? String(options.maxUsers) : "100",
+        isPrivate: options.isPrivate ? String(options.isPrivate) : "false",
+        description: options.description ? String(options.description) : "",
+      };
+
+      await this.redis.hSet(`${this.roomPrefix}:${roomNameString}`, roomData);
+      await this.redis.expire(`${this.roomPrefix}:${roomNameString}`, 7200);
+
+      console.log(`🏠 Room ${roomNameString} créée`);
+      return true;
+    } catch (error) {
+      console.error("❌ Erreur createRoom:", error);
+      return false;
+    }
+  }
+
+  async getRoomUsers(roomName) {
+    try {
+      const roomNameString = String(roomName);
+      const userIds = await this.redis.sMembers(
+        `${this.roomUsersPrefix}:${roomNameString}`
+      );
+      const users = [];
+
+      for (const userId of userIds) {
+        const userData = await this.redis.hGetAll(
+          `${this.roomDataPrefix}:${roomNameString}:${userId}`
+        );
+        if (Object.keys(userData).length > 0) {
+          users.push(userData);
+        }
+      }
+
+      return users;
+    } catch (error) {
+      console.error("❌ Erreur getRoomUsers:", error);
+      return [];
+    }
+  }
+
+  async getUserRooms(userId) {
+    try {
+      const userIdString = String(userId);
+      const roomNames = await this.redis.sMembers(
+        `${this.userRoomsPrefix}:${userIdString}`
+      );
       const rooms = [];
 
-      for (const roomId of roomIds) {
-        const roomData = await this.redis.hGetAll(`${this.roomDataPrefix}:${roomId}`);
-        
+      for (const roomName of roomNames) {
+        const roomData = await this.redis.hGetAll(
+          `${this.roomPrefix}:${roomName}`
+        );
         if (Object.keys(roomData).length > 0) {
-          // Récupérer les participants
-          const participants = await this.redis.sMembers(
-            `${this.roomParticipantsPrefix}:${roomId}`
+          const usersCount = await this.redis.sCard(
+            `${this.roomUsersPrefix}:${roomName}`
           );
-          
           rooms.push({
             ...roomData,
-            participants
+            name: roomName,
+            usersCount,
           });
-        } else {
-          // Nettoyer les salons sans données
-          await this.redis.sRem(this.roomsKey, roomId);
         }
       }
 
       return rooms;
     } catch (error) {
-      console.error('Erreur récupération salons:', error);
+      console.error("❌ Erreur getUserRooms:", error);
       return [];
+    }
+  }
+
+  async isUserInRoom(roomName, userId) {
+    try {
+      const roomNameString = String(roomName);
+      const userIdString = String(userId);
+      return await this.redis.sIsMember(
+        `${this.roomUsersPrefix}:${roomNameString}`,
+        userIdString
+      );
+    } catch (error) {
+      console.error("❌ Erreur isUserInRoom:", error);
+      return false;
     }
   }
 
   async getRoomsCount() {
     try {
-      return await this.redis.sCard(this.roomsKey);
+      const keys = await this.redis.keys(`${this.roomPrefix}:*`);
+      return keys.length;
     } catch (error) {
-      console.error('Erreur comptage salons:', error);
+      console.error("❌ Erreur getRoomsCount:", error);
       return 0;
     }
   }
 
-  async getRoomData(roomId) {
+  async getRooms() {
     try {
-      const roomData = await this.redis.hGetAll(`${this.roomDataPrefix}:${roomId}`);
-      
-      if (Object.keys(roomData).length === 0) {
-        return null;
-      }
+      const keys = await this.redis.keys(`${this.roomPrefix}:*`);
+      const rooms = [];
 
-      // Récupérer les participants
-      const participants = await this.redis.sMembers(
-        `${this.roomParticipantsPrefix}:${roomId}`
-      );
-
-      return {
-        ...roomData,
-        participants
-      };
-    } catch (error) {
-      console.error('Erreur récupération données salon:', error);
-      return null;
-    }
-  }
-
-  async addParticipant(roomId, userId) {
-    try {
-      // Vérifier que le salon existe
-      const exists = await this.redis.sIsMember(this.roomsKey, roomId);
-      if (!exists) {
-        console.warn(`Salon ${roomId} n'existe pas`);
-        return false;
-      }
-
-      // Ajouter le participant
-      await this.redis.sAdd(`${this.roomParticipantsPrefix}:${roomId}`, userId);
-      
-      // Mettre à jour la date de dernière activité
-      await this.redis.hSet(
-        `${this.roomDataPrefix}:${roomId}`,
-        'lastActivity',
-        new Date().toISOString()
-      );
-
-      console.log(`👤 ${userId} ajouté au salon ${roomId}`);
-      return true;
-    } catch (error) {
-      console.error('Erreur ajout participant:', error);
-      return false;
-    }
-  }
-
-  async removeParticipant(roomId, userId) {
-    try {
-      await this.redis.sRem(`${this.roomParticipantsPrefix}:${roomId}`, userId);
-      
-      // Mettre à jour la date de dernière activité
-      await this.redis.hSet(
-        `${this.roomDataPrefix}:${roomId}`,
-        'lastActivity',
-        new Date().toISOString()
-      );
-
-      console.log(`👤 ${userId} retiré du salon ${roomId}`);
-      return true;
-    } catch (error) {
-      console.error('Erreur suppression participant:', error);
-      return false;
-    }
-  }
-
-  async getRoomParticipants(roomId) {
-    try {
-      return await this.redis.sMembers(`${this.roomParticipantsPrefix}:${roomId}`);
-    } catch (error) {
-      console.error('Erreur récupération participants:', error);
-      return [];
-    }
-  }
-
-  async isParticipant(roomId, userId) {
-    try {
-      return await this.redis.sIsMember(
-        `${this.roomParticipantsPrefix}:${roomId}`,
-        userId
-      );
-    } catch (error) {
-      console.error('Erreur vérification participant:', error);
-      return false;
-    }
-  }
-
-  async deleteRoom(roomId) {
-    try {
-      // Supprimer de la liste des salons
-      await this.redis.sRem(this.roomsKey, roomId);
-      
-      // Supprimer les données du salon
-      await this.redis.del(`${this.roomDataPrefix}:${roomId}`);
-      
-      // Supprimer la liste des participants
-      await this.redis.del(`${this.roomParticipantsPrefix}:${roomId}`);
-
-      console.log(`🗑️ Salon ${roomId} supprimé`);
-      return true;
-    } catch (error) {
-      console.error('Erreur suppression salon:', error);
-      return false;
-    }
-  }
-
-  async updateRoomActivity(roomId) {
-    try {
-      await this.redis.hSet(
-        `${this.roomDataPrefix}:${roomId}`,
-        'lastActivity',
-        new Date().toISOString()
-      );
-      return true;
-    } catch (error) {
-      console.error('Erreur mise à jour activité salon:', error);
-      return false;
-    }
-  }
-
-  async getRoomsByUser(userId) {
-    try {
-      const roomIds = await this.redis.sMembers(this.roomsKey);
-      const userRooms = [];
-
-      for (const roomId of roomIds) {
-        const isParticipant = await this.redis.sIsMember(
-          `${this.roomParticipantsPrefix}:${roomId}`,
-          userId
+      for (const key of keys) {
+        const roomName = key.replace(`${this.roomPrefix}:`, "");
+        const roomData = await this.redis.hGetAll(key);
+        const usersCount = await this.redis.sCard(
+          `${this.roomUsersPrefix}:${roomName}`
         );
 
-        if (isParticipant) {
-          const roomData = await this.getRoomData(roomId);
-          if (roomData) {
-            userRooms.push(roomData);
-          }
-        }
+        rooms.push({
+          ...roomData,
+          name: roomName,
+          usersCount,
+        });
       }
 
-      return userRooms;
+      return rooms;
     } catch (error) {
-      console.error('Erreur récupération salons utilisateur:', error);
+      console.error("❌ Erreur getRooms:", error);
       return [];
     }
   }
 
   async cleanupInactiveRooms() {
     try {
-      const roomIds = await this.redis.sMembers(this.roomsKey);
+      const keys = await this.redis.keys(`${this.roomPrefix}:*`);
       let cleanedCount = 0;
 
-      for (const roomId of roomIds) {
-        const roomData = await this.redis.hGetAll(`${this.roomDataPrefix}:${roomId}`);
-        
-        if (Object.keys(roomData).length === 0) {
-          // Pas de données -> supprimer
-          await this.deleteRoom(roomId);
+      for (const key of keys) {
+        const roomName = key.replace(`${this.roomPrefix}:`, "");
+        const usersCount = await this.redis.sCard(
+          `${this.roomUsersPrefix}:${roomName}`
+        );
+
+        if (usersCount === 0) {
+          // Room vide, supprimer
+          await this.redis.del(key);
           cleanedCount++;
-        } else if (roomData.lastActivity) {
-          // Vérifier l'inactivité (plus de 7 jours)
-          const lastActivity = new Date(roomData.lastActivity);
-          const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-          
-          if (lastActivity < weekAgo) {
-            // Vérifier s'il y a encore des participants
-            const participantCount = await this.redis.sCard(
-              `${this.roomParticipantsPrefix}:${roomId}`
-            );
-            
-            if (participantCount === 0) {
-              await this.deleteRoom(roomId);
+        } else {
+          // Vérifier l'activité
+          const roomData = await this.redis.hGetAll(key);
+          if (roomData.lastActivity) {
+            const lastActivity = new Date(roomData.lastActivity);
+            const now = new Date();
+            const diffHours = (now - lastActivity) / (1000 * 60 * 60);
+
+            if (diffHours > 2) {
+              // Pas d'activité depuis 2h, supprimer
+              await this.redis.del(key);
+              await this.redis.del(`${this.roomUsersPrefix}:${roomName}`);
               cleanedCount++;
             }
           }
         }
       }
 
-      if (cleanedCount > 0) {
-        console.log(`🧹 ${cleanedCount} salons inactifs nettoyés`);
-      }
-
+      console.log(`🧹 ${cleanedCount} rooms inactives nettoyées`);
       return cleanedCount;
     } catch (error) {
-      console.error('Erreur nettoyage salons:', error);
+      console.error("❌ Erreur cleanupInactiveRooms:", error);
       return 0;
+    }
+  }
+
+  async updateRoomActivity(roomName) {
+    try {
+      const roomNameString = String(roomName);
+      await this.redis.hSet(
+        `${this.roomPrefix}:${roomNameString}`,
+        "lastActivity",
+        new Date().toISOString()
+      );
+      return true;
+    } catch (error) {
+      console.error("❌ Erreur updateRoomActivity:", error);
+      return false;
+    }
+  }
+
+  async getStats() {
+    try {
+      const totalRooms = await this.getRoomsCount();
+      const rooms = await this.getRooms();
+
+      return {
+        totalRooms,
+        rooms: rooms.map((room) => ({
+          name: room.name,
+          usersCount: room.usersCount,
+          lastActivity: room.lastActivity,
+          type: room.type,
+        })),
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      console.error("❌ Erreur getStats:", error);
+      return { totalRooms: 0, rooms: [], error: error.message };
     }
   }
 }

@@ -313,20 +313,47 @@ class Conversation {
     };
   }
 
+  // Conversion vers objet simple
+  toObject() {
+    return {
+      _id: this._id,
+      type: this.type,
+      name: this.name,
+      description: this.description,
+      participants: this.participants,
+      createdBy: this.createdBy,
+      lastMessage: this.lastMessage,
+      lastActivity: this.lastActivity,
+      unreadCounts: this.unreadCounts,
+      archivedBy: this.archivedBy,
+      mutedBy: this.mutedBy,
+      pinnedBy: this.pinnedBy,
+      settings: this.settings,
+      metadata: this.metadata,
+      createdAt: this.createdAt,
+      updatedAt: this.updatedAt,
+    };
+  }
+
+  // Méthode statique pour créer depuis un objet
+  static fromObject(obj) {
+    return new Conversation(obj);
+  }
+
   // Sérialisation pour Kafka
   toKafkaPayload() {
     return {
       conversationId: this._id,
-      participants: this.participants,
       type: this.type,
       name: this.name,
-      lastMessage: this.lastMessage,
-      lastMessageAt: this.lastMessageAt,
-      statistics: this.metadata.statistics,
-      updatedAt: this.updatedAt,
+      participants: this.participants,
+      createdBy: this.createdBy,
+      lastActivity: this.lastActivity,
+      participantCount: this.participants.length,
+      timestamp: this.updatedAt,
       metadata: {
         kafkaMetadata: {
-          ...this.metadata.kafkaMetadata,
+          topic: "chat.conversations",
           serializedAt: new Date().toISOString(),
         },
       },
@@ -337,60 +364,24 @@ class Conversation {
   toRedisPayload() {
     return {
       _id: this._id,
-      participants: this.participants,
       type: this.type,
       name: this.name,
-      description: this.description,
-      avatar: this.avatar,
+      participants: this.participants,
+      createdBy: this.createdBy,
       lastMessage: this.lastMessage,
-      lastMessageAt: this.lastMessageAt,
+      lastActivity: this.lastActivity,
       unreadCounts: this.unreadCounts,
       settings: this.settings,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
-      archivedBy: this.archivedBy,
-      mutedBy: this.mutedBy,
-      pinnedBy: this.pinnedBy,
       metadata: {
         ...this.metadata,
         redisMetadata: {
-          ...this.metadata.redisMetadata,
+          cacheKey: `conversation:${this._id}`,
           cachedAt: new Date().toISOString(),
         },
       },
     };
-  }
-
-  // Conversion vers objet simple
-  toObject() {
-    return {
-      _id: this._id,
-      participants: this.participants,
-      type: this.type,
-      name: this.name,
-      description: this.description,
-      avatar: this.avatar,
-      lastMessage: this.lastMessage,
-      lastMessageAt: this.lastMessageAt,
-      unreadCounts: this.unreadCounts,
-      settings: this.settings,
-      metadata: this.metadata,
-      createdAt: this.createdAt,
-      updatedAt: this.updatedAt,
-      archivedBy: this.archivedBy,
-      mutedBy: this.mutedBy,
-      pinnedBy: this.pinnedBy,
-    };
-  }
-
-  // Méthodes statiques
-  static fromObject(obj) {
-    return new Conversation(obj);
-  }
-
-  static fromRedisPayload(payload) {
-    const parsed = typeof payload === "string" ? JSON.parse(payload) : payload;
-    return new Conversation(parsed);
   }
 
   // Créer une conversation privée

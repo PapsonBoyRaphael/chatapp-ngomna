@@ -82,24 +82,27 @@ class MongoMessageRepository {
     const startTime = Date.now();
 
     try {
-      // 🚀 TENTATIVE CACHE REDIS D'ABORD
+      // Cache Redis
       if (this.redisClient && useCache) {
         try {
           const cached = await this._getCachedMessage(messageId);
           if (cached) {
+            this.metrics.cacheHits++;
             console.log(
               `📦 Message depuis cache: ${messageId} (${
                 Date.now() - startTime
               }ms)`
             );
             return cached;
+          } else {
+            this.metrics.cacheMisses++;
           }
         } catch (cacheError) {
-          console.warn("⚠️ Erreur lecture cache:", cacheError.message);
+          console.warn("⚠️ Erreur lecture cache message:", cacheError.message);
         }
       }
 
-      // Récupération depuis MongoDB
+      this.metrics.dbQueries++;
       const message = await Message.findById(messageId).lean();
 
       if (!message) {
@@ -108,18 +111,19 @@ class MongoMessageRepository {
 
       const processingTime = Date.now() - startTime;
 
-      // Mettre en cache si Redis disponible
+      // Mettre en cache
       if (this.redisClient && useCache) {
         try {
           await this._cacheMessage(message);
         } catch (cacheError) {
-          console.warn("⚠️ Erreur mise en cache:", cacheError.message);
+          console.warn("⚠️ Erreur mise en cache message:", cacheError.message);
         }
       }
 
       console.log(`🔍 Message trouvé: ${messageId} (${processingTime}ms)`);
       return message;
     } catch (error) {
+      this.metrics.errors++;
       console.error(`❌ Erreur recherche message ${messageId}:`, error);
       throw error;
     }
@@ -577,28 +581,69 @@ class MongoMessageRepository {
   // ===============================
 
   async _cacheMessage(message) {
-    if (!this.redisClient) return;
+    try {
+      const cacheKey = `${this.cachePrefix}${message._id}`;
+      const cacheData = {
+        ...message,
+        cached: true,
+        cachedAt: new Date().toISOString(),
+      };
 
-    const cacheKey = `${this.cachePrefix}${message._id}`;
-    const ttl = this._calculateTTL(message);
-
-    await this.redisClient.setex(cacheKey, ttl, JSON.stringify(message));
+      await this.redisClient.setex(
+        cacheKey,
+        this.defaultTTL,
+        JSON.stringify(cacheData)
+      );
+      console.log(`💾 Message mis en cache: ${message._id}`);
+      return true;
+    } catch (error) {
+      console.warn(`⚠️ Erreur cache message ${message._id}:`, error.message);
+      return false;
+    }
   }
 
   async _getCachedMessage(messageId) {
-    if (!this.redisClient) return null;
+    try {
+      const cacheKey = `${this.cachePrefix}${messageId}`;
+      const cached = await this.redisClient.get(cacheKey);
 
-    const cacheKey = `${this.cachePrefix}${messageId}`;
-    const cached = await this.redisClient.get(cacheKey);
+      if (!cached) {
+        return null;
+      }
 
-    return cached ? JSON.parse(cached) : null;
+      const data = JSON.parse(cached);
+      return data;
+    } catch (error) {
+      console.warn(`⚠️ Erreur lecture cache ${messageId}:`, error.message);
+      return null;
+    }
   }
 
-  async _invalidateMessageCache(messageId) {
-    if (!this.redisClient) return;
+  async _invalidateMessageCaches(messageId, conversationId) {
+    try {
+      const patterns = [
+        `${this.cachePrefix}${messageId}`,
+        `${this.cachePrefix}conv:${conversationId}:*`,
+        `conversations:*`,
+      ];
 
-    const cacheKey = `${this.cachePrefix}${messageId}`;
-    await this.redisClient.del(cacheKey);
+      for (const pattern of patterns) {
+        if (pattern.includes("*")) {
+          const keys = await this.redisClient.keys(pattern);
+          if (keys.length > 0) {
+            await this.redisClient.del(keys);
+          }
+        } else {
+          await this.redisClient.del(pattern);
+        }
+      }
+
+      console.log(`🗑️ Cache message invalidé: ${messageId}`);
+      return true;
+    } catch (error) {
+      console.warn(`⚠️ Erreur invalidation ${messageId}:`, error.message);
+      return false;
+    }
   }
 
   async _invalidateRelatedCaches(message) {

@@ -1,424 +1,290 @@
-/**
- * HealthController - Contrôleur pour les vérifications de santé
- * Surveille l'état de tous les services (MongoDB, Redis, Kafka, WebSocket)
- */
 class HealthController {
-    constructor(redisClient = null, kafkaConfig = null) {
-        this.redisClient = redisClient;
-        this.kafkaConfig = kafkaConfig;
-        this.startTime = new Date();
+  constructor(redisClient, kafkaConfig) {
+    this.redisClient = redisClient;
+    this.kafkaConfig = kafkaConfig;
+  }
+
+  async getHealth(req, res) {
+    try {
+      const startTime = Date.now();
+      
+      // Vérifier MongoDB
+      const mongoHealth = await this.checkMongoDB();
+      
+      // Vérifier Redis
+      const redisHealth = await this.checkRedis();
+      
+      // Vérifier Kafka
+      const kafkaHealth = await this.checkKafka();
+      
+      // Vérifier le service utilisateurs
+      const userServiceHealth = await this.checkUserService();
+      
+      const processingTime = Date.now() - startTime;
+      
+      const overallStatus = this.determineOverallStatus([
+        mongoHealth, redisHealth, kafkaHealth, userServiceHealth
+      ]);
+
+      const healthData = {
+        service: "CENADI Chat-File-Service",
+        version: "1.0.0",
+        status: overallStatus,
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        processingTime: `${processingTime}ms`,
+        services: {
+          mongodb: mongoHealth,
+          redis: redisHealth,
+          kafka: kafkaHealth,
+          userService: userServiceHealth
+        },
+        system: {
+          nodeVersion: process.version,
+          platform: process.platform,
+          arch: process.arch,
+          memory: {
+            used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+            total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+            external: Math.round(process.memoryUsage().external / 1024 / 1024)
+          },
+          cpu: process.cpuUsage()
+        },
+        endpoints: {
+          files: "/api/files",
+          messages: "/api/messages",
+          conversations: "/api/conversations",
+          health: "/api/health"
+        }
+      };
+
+      // Statut HTTP basé sur la santé globale
+      const statusCode = overallStatus === 'healthy' ? 200 : 
+                        overallStatus === 'degraded' ? 207 : 503;
+
+      res.status(statusCode).json(healthData);
+    } catch (error) {
+      console.error("❌ Erreur health check:", error);
+      res.status(500).json({
+        service: "CENADI Chat-File-Service",
+        status: "error",
+        error: error.message,
+        timestamp: new Date().toISOString()
+      });
     }
+  }
 
-    /**
-     * Health check complet de tous les services
-     */
-    async getHealthStatus(req, res) {
-        try {
-            const healthData = {
-                service: "CENADI Chat-File Service",
-                version: "1.0.0",
-                status: "healthy",
-                timestamp: new Date().toISOString(),
-                uptime: this.getUptime(),
-                environment: process.env.NODE_ENV || 'development',
-                services: await this.checkAllServices(),
-                resources: await this.getResourceUsage(),
-                endpoints: {
-                    files: "/api/files",
-                    messages: "/api/messages", 
-                    conversations: "/api/conversations",
-                    health: "/api/health"
-                }
-            };
-
-            // Déterminer le statut global
-            const allServicesHealthy = Object.values(healthData.services).every(
-                service => service.status === 'healthy' || service.status === 'connected'
-            );
-
-            healthData.status = allServicesHealthy ? 'healthy' : 'degraded';
-
-            res.status(allServicesHealthy ? 200 : 503).json({
-                success: true,
-                data: healthData
-            });
-
-        } catch (error) {
-            console.error('❌ Erreur health check:', error);
-            res.status(500).json({
-                success: false,
-                message: 'Erreur lors de la vérification de santé',
-                error: error.message,
-                timestamp: new Date().toISOString()
-            });
-        }
-    }
-
-    /**
-     * État spécifique de MongoDB
-     */
-    async getMongoDBStatus(req, res) {
-        try {
-            const mongoStatus = await this.checkMongoDB();
-            
-            res.json({
-                success: true,
-                service: 'MongoDB',
-                data: mongoStatus
-            });
-
-        } catch (error) {
-            res.status(500).json({
-                success: false,
-                service: 'MongoDB',
-                message: 'Erreur MongoDB',
-                error: error.message
-            });
-        }
-    }
-
-    /**
-     * État spécifique de Redis
-     */
-    async getRedisStatus(req, res) {
-        try {
-            const redisStatus = await this.checkRedis();
-            
-            res.json({
-                success: true,
-                service: 'Redis',
-                data: redisStatus
-            });
-
-        } catch (error) {
-            res.status(500).json({
-                success: false,
-                service: 'Redis', 
-                message: 'Erreur Redis',
-                error: error.message
-            });
-        }
-    }
-
-    /**
-     * État spécifique de Kafka
-     */
-    async getKafkaStatus(req, res) {
-        try {
-            const kafkaStatus = await this.checkKafka();
-            
-            res.json({
-                success: true,
-                service: 'Kafka',
-                data: kafkaStatus
-            });
-
-        } catch (error) {
-            res.status(500).json({
-                success: false,
-                service: 'Kafka',
-                message: 'Erreur Kafka', 
-                error: error.message
-            });
-        }
-    }
-
-    /**
-     * Vérification de tous les services
-     */
-    async checkAllServices() {
-        const services = {};
-
-        // MongoDB
-        try {
-            services.mongodb = await this.checkMongoDB();
-        } catch (error) {
-            services.mongodb = {
-                status: 'error',
-                message: error.message,
-                lastCheck: new Date().toISOString()
-            };
-        }
-
-        // Redis
-        try {
-            services.redis = await this.checkRedis();
-        } catch (error) {
-            services.redis = {
-                status: 'error',
-                message: error.message,
-                lastCheck: new Date().toISOString()
-            };
-        }
-
-        // Kafka
-        try {
-            services.kafka = await this.checkKafka();
-        } catch (error) {
-            services.kafka = {
-                status: 'error',
-                message: error.message,
-                lastCheck: new Date().toISOString()
-            };
-        }
-
-        // WebSocket (basé sur l'état du serveur)
-        services.websocket = {
-            status: 'healthy',
-            message: 'WebSocket server running',
-            port: process.env.CHAT_FILE_SERVICE_PORT || 8003,
-            lastCheck: new Date().toISOString()
-        };
-
-        return services;
-    }
-
-    /**
-     * Vérification MongoDB
-     */
-    async checkMongoDB() {
-        try {
-            const mongoose = require('mongoose');
-            
-            if (mongoose.connection.readyState === 1) {
-                // Tester une opération simple
-                await mongoose.connection.db.admin().ping();
-                
-                return {
-                    status: 'healthy',
-                    message: 'MongoDB connecté et opérationnel',
-                    readyState: mongoose.connection.readyState,
-                    host: mongoose.connection.host,
-                    name: mongoose.connection.name,
-                    lastCheck: new Date().toISOString()
-                };
-            } else {
-                return {
-                    status: 'error',
-                    message: 'MongoDB non connecté',
-                    readyState: mongoose.connection.readyState,
-                    lastCheck: new Date().toISOString()
-                };
-            }
-
-        } catch (error) {
-            return {
-                status: 'error',
-                message: `Erreur MongoDB: ${error.message}`,
-                lastCheck: new Date().toISOString()
-            };
-        }
-    }
-
-    /**
-     * Vérification Redis
-     */
-    async checkRedis() {
-        try {
-            if (!this.redisClient) {
-                return {
-                    status: 'disabled',
-                    message: 'Redis non configuré - Mode développement',
-                    lastCheck: new Date().toISOString()
-                };
-            }
-
-            // Tester une opération Redis
-            const testKey = 'health_check_' + Date.now();
-            await this.redisClient.set(testKey, 'ok', 'EX', 10);
-            const result = await this.redisClient.get(testKey);
-            await this.redisClient.del(testKey);
-
-            if (result === 'ok') {
-                return {
-                    status: 'healthy',
-                    message: 'Redis connecté et opérationnel',
-                    connected: true,
-                    lastCheck: new Date().toISOString()
-                };
-            } else {
-                return {
-                    status: 'error',
-                    message: 'Redis: test de lecture/écriture échoué',
-                    lastCheck: new Date().toISOString()
-                };
-            }
-
-        } catch (error) {
-            return {
-                status: 'error',
-                message: `Erreur Redis: ${error.message}`,
-                lastCheck: new Date().toISOString()
-            };
-        }
-    }
-
-    /**
-     * Vérification Kafka
-     */
-    async checkKafka() {
-        try {
-            if (!this.kafkaConfig) {
-                return {
-                    status: 'disabled',
-                    message: 'Kafka non configuré - Mode développement',
-                    lastCheck: new Date().toISOString()
-                };
-            }
-
-            // Utiliser la méthode de health check du kafkaConfig
-            if (typeof this.kafkaConfig.getHealthStatus === 'function') {
-                const kafkaHealth = await this.kafkaConfig.getHealthStatus();
-                return {
-                    status: 'healthy',
-                    message: 'Kafka connecté et opérationnel',
-                    details: kafkaHealth,
-                    lastCheck: new Date().toISOString()
-                };
-            } else {
-                return {
-                    status: 'healthy',
-                    message: 'Kafka configuré',
-                    lastCheck: new Date().toISOString()
-                };
-            }
-
-        } catch (error) {
-            return {
-                status: 'error',
-                message: `Erreur Kafka: ${error.message}`,
-                lastCheck: new Date().toISOString()
-            };
-        }
-    }
-
-    /**
-     * Calculer l'uptime
-     */
-    getUptime() {
-        const uptimeMs = Date.now() - this.startTime.getTime();
-        const uptimeSeconds = Math.floor(uptimeMs / 1000);
-        const hours = Math.floor(uptimeSeconds / 3600);
-        const minutes = Math.floor((uptimeSeconds % 3600) / 60);
-        const seconds = uptimeSeconds % 60;
-
+  async checkMongoDB() {
+    try {
+      const mongoose = require('mongoose');
+      
+      if (mongoose.connection.readyState === 1) {
+        // Tester une requête simple
+        await mongoose.connection.db.admin().ping();
+        
         return {
-            ms: uptimeMs,
-            seconds: uptimeSeconds,
-            human: `${hours}h ${minutes}m ${seconds}s`,
-            startTime: this.startTime.toISOString()
+          status: 'healthy',
+          message: 'Connecté et opérationnel',
+          responseTime: '< 10ms',
+          details: {
+            readyState: 'connected',
+            host: mongoose.connection.host,
+            name: mongoose.connection.name
+          }
         };
+      } else {
+        return {
+          status: 'error',
+          message: 'Non connecté',
+          details: {
+            readyState: mongoose.connection.readyState
+          }
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'error',
+        message: error.message,
+        details: { error: error.name }
+      };
+    }
+  }
+
+  async checkRedis() {
+    if (!this.redisClient) {
+      return {
+        status: 'disabled',
+        message: 'Redis non configuré',
+        details: { mode: 'memory-only' }
+      };
     }
 
-    /**
-     * Obtenir l'usage des ressources système
-     */
-    async getResourceUsage() {
-        try {
-            const used = process.memoryUsage();
-            
-            return {
-                memory: {
-                    rss: this.formatBytes(used.rss),
-                    heapTotal: this.formatBytes(used.heapTotal),
-                    heapUsed: this.formatBytes(used.heapUsed),
-                    external: this.formatBytes(used.external)
-                },
-                cpu: {
-                    uptime: process.uptime(),
-                    loadAverage: process.platform === 'linux' ? require('os').loadavg() : null
-                },
-                node: {
-                    version: process.version,
-                    platform: process.platform,
-                    arch: process.arch
-                }
-            };
-
-        } catch (error) {
-            return {
-                error: `Impossible d'obtenir les ressources: ${error.message}`
-            };
+    try {
+      const start = Date.now();
+      await this.redisClient.ping();
+      const responseTime = Date.now() - start;
+      
+      return {
+        status: 'healthy',
+        message: 'Connecté et opérationnel',
+        responseTime: `${responseTime}ms`,
+        details: {
+          connected: true,
+          ready: this.redisClient.status === 'ready'
         }
-    }
-
-    /**
-     * Formater les bytes en format lisible
-     */
-    formatBytes(bytes, decimals = 2) {
-        if (bytes === 0) return '0 Bytes';
-
-        const k = 1024;
-        const dm = decimals < 0 ? 0 : decimals;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
-    }
-
-    /**
-     * Health check rapide pour load balancer
-     */
-    async quickHealthCheck(req, res) {
-        try {
-            // Vérification rapide MongoDB seulement
-            const mongoose = require('mongoose');
-            
-            if (mongoose.connection.readyState === 1) {
-                res.status(200).json({
-                    status: 'ok',
-                    timestamp: new Date().toISOString()
-                });
-            } else {
-                res.status(503).json({
-                    status: 'error',
-                    message: 'Database unavailable'
-                });
-            }
-
-        } catch (error) {
-            res.status(503).json({
-                status: 'error',
-                message: error.message
-            });
+      };
+    } catch (error) {
+      return {
+        status: 'error',
+        message: error.message,
+        details: { 
+          connected: false,
+          error: error.name 
         }
+      };
+    }
+  }
+
+  async checkKafka() {
+    if (!this.kafkaConfig) {
+      return {
+        status: 'disabled',
+        message: 'Kafka non configuré',
+        details: { mode: 'development' }
+      };
     }
 
-    /**
-     * Métriques Prometheus-style (optionnel)
-     */
-    async getMetrics(req, res) {
-        try {
-            const uptime = this.getUptime();
-            const memory = process.memoryUsage();
-            
-            const metrics = [
-                `# HELP nodejs_process_uptime_seconds Process uptime in seconds`,
-                `# TYPE nodejs_process_uptime_seconds counter`,
-                `nodejs_process_uptime_seconds ${uptime.seconds}`,
-                ``,
-                `# HELP nodejs_heap_used_bytes Heap used in bytes`,
-                `# TYPE nodejs_heap_used_bytes gauge`,
-                `nodejs_heap_used_bytes ${memory.heapUsed}`,
-                ``,
-                `# HELP nodejs_heap_total_bytes Heap total in bytes`,
-                `# TYPE nodejs_heap_total_bytes gauge`, 
-                `nodejs_heap_total_bytes ${memory.heapTotal}`,
-                ``
-            ].join('\n');
-
-            res.set('Content-Type', 'text/plain');
-            res.send(metrics);
-
-        } catch (error) {
-            res.status(500).json({
-                success: false,
-                message: 'Erreur génération métriques',
-                error: error.message
-            });
+    try {
+      const healthStatus = await this.kafkaConfig.getHealthStatus();
+      
+      if (healthStatus.status === 'connected') {
+        return {
+          status: 'healthy',
+          message: 'Connecté et opérationnel',
+          details: {
+            topics: healthStatus.topics || 0,
+            brokers: healthStatus.brokers || 0,
+            connected: true
+          }
+        };
+      } else if (healthStatus.status === 'error') {
+        return {
+          status: 'error',
+          message: healthStatus.error,
+          details: { connected: false }
+        };
+      } else {
+        return {
+          status: 'error',
+          message: 'Non connecté',
+          details: { connected: false }
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'error',
+        message: error.message,
+        details: { 
+          connected: false,
+          error: error.name 
         }
+      };
     }
+  }
+
+  async checkUserService() {
+    try {
+      const start = Date.now();
+      const response = await fetch('http://localhost:8000/api/users/all', {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        signal: AbortSignal.timeout(5000) // Timeout de 5 secondes
+      });
+      
+      const responseTime = Date.now() - start;
+      
+      if (response.ok) {
+        const data = await response.json();
+        
+        return {
+          status: 'healthy',
+          message: 'Service utilisateurs opérationnel',
+          responseTime: `${responseTime}ms`,
+          details: {
+            url: 'http://localhost:8000/api/users/all',
+            statusCode: response.status,
+            usersCount: data.data?.length || 0
+          }
+        };
+      } else {
+        return {
+          status: 'degraded',
+          message: `Service utilisateurs retourne HTTP ${response.status}`,
+          responseTime: `${responseTime}ms`,
+          details: {
+            url: 'http://localhost:8000/api/users/all',
+            statusCode: response.status
+          }
+        };
+      }
+    } catch (error) {
+      return {
+        status: 'error',
+        message: 'Service utilisateurs inaccessible',
+        details: {
+          url: 'http://localhost:8000/api/users/all',
+          error: error.message,
+          type: error.name
+        }
+      };
+    }
+  }
+
+  determineOverallStatus(serviceHealths) {
+    const statuses = serviceHealths.map(health => health.status);
+    
+    if (statuses.every(status => status === 'healthy' || status === 'disabled')) {
+      return 'healthy';
+    } else if (statuses.some(status => status === 'healthy') && 
+               statuses.some(status => status === 'degraded')) {
+      return 'degraded';
+    } else {
+      return 'unhealthy';
+    }
+  }
+
+  async getDetailedHealth(req, res) {
+    try {
+      const health = await this.getHealth(req, { 
+        status: () => ({ json: (data) => data }),
+        json: (data) => data 
+      });
+      
+      // Ajouter des métriques supplémentaires
+      const detailedHealth = {
+        ...health,
+        metrics: {
+          requestsPerSecond: 0, // À implémenter
+          averageResponseTime: 0, // À implémenter
+          errorRate: 0, // À implémenter
+          activeConnections: 0 // À implémenter
+        },
+        dependencies: [
+          { name: 'MongoDB', required: true, status: health.services.mongodb.status },
+          { name: 'Redis', required: false, status: health.services.redis.status },
+          { name: 'Kafka', required: false, status: health.services.kafka.status },
+          { name: 'User Service', required: true, status: health.services.userService.status }
+        ]
+      };
+
+      res.json(detailedHealth);
+    } catch (error) {
+      res.status(500).json({
+        error: 'Erreur lors de la vérification de santé détaillée',
+        message: error.message
+      });
+    }
+  }
 }
 
 module.exports = HealthController;

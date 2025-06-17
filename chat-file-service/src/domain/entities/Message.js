@@ -1,3 +1,5 @@
+const crypto = require("crypto");
+
 class Message {
   constructor({
     _id,
@@ -129,7 +131,6 @@ class Message {
 
   // Générer un checksum pour l'intégrité
   generateChecksum() {
-    const crypto = require("crypto");
     const data = `${this.senderId}:${this.receiverId}:${this.content}:${this.createdAt}`;
     return crypto
       .createHash("sha256")
@@ -193,7 +194,7 @@ class Message {
 
   // Marquer comme livré
   markAsDelivered() {
-    this.status = "delivered";
+    this.status = "DELIVERED";
     this.metadata.deliveryMetadata.deliveredAt = new Date().toISOString();
     this.updatedAt = new Date();
     return this;
@@ -201,17 +202,16 @@ class Message {
 
   // Ajouter une réaction
   addReaction(userId, emoji) {
-    const existingReaction = this.reactions.find((r) => r.userId === userId);
-    if (existingReaction) {
-      existingReaction.emoji = emoji;
-      existingReaction.timestamp = new Date().toISOString();
-    } else {
-      this.reactions.push({
-        userId,
-        emoji,
-        timestamp: new Date().toISOString(),
-      });
-    }
+    // Supprimer réaction existante du même utilisateur
+    this.reactions = this.reactions.filter((r) => r.userId !== userId);
+
+    // Ajouter nouvelle réaction
+    this.reactions.push({
+      userId,
+      emoji,
+      timestamp: new Date().toISOString(),
+    });
+
     this.updatedAt = new Date();
     return this;
   }
@@ -248,15 +248,13 @@ class Message {
       content: this.content,
       type: this.type,
       status: this.status,
+      timestamp: this.createdAt,
       metadata: {
-        ...this.metadata,
         kafkaMetadata: {
           ...this.metadata.kafkaMetadata,
           serializedAt: new Date().toISOString(),
         },
       },
-      createdAt: this.createdAt,
-      updatedAt: this.updatedAt,
     };
   }
 
@@ -272,6 +270,7 @@ class Message {
       status: this.status,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
+      reactions: this.reactions,
       metadata: {
         ...this.metadata,
         redisMetadata: {

@@ -1,217 +1,227 @@
 const express = require("express");
 
-// Middleware
-const authMiddleware = require("../middleware/authMiddleware");
-const rateLimitMiddleware = require("../middleware/rateLimitMiddleware");
-const validationMiddleware = require("../middleware/validationMiddleware");
-const cacheMiddleware = require("../middleware/cacheMiddleware");
+// ✅ CHANGEMENT: Utiliser l'import centralisé au lieu des imports individuels
+const {
+  authMiddleware,
+  rateLimitMiddleware,
+  validationMiddleware,
+  cacheMiddleware,
+} = require("../middleware");
 
 function createMessageRoutes(messageController) {
   const router = express.Router();
 
-  /**
-   * @api {get} /api/messages/:conversationId Messages d'une conversation
-   * @apiName GetMessages
-   * @apiGroup Messages
-   */
-  router.get(
-    "/:conversationId",
-    authMiddleware.authenticate,
-    rateLimitMiddleware.apiLimit,
-    validationMiddleware.validateMongoId("conversationId"),
-    cacheMiddleware.checkMessagesCache,
-    async (req, res) => {
-      try {
-        const { conversationId } = req.params;
-        const { page = 1, limit = 50, before, after } = req.query;
-        
-        req.query = {
-          ...req.query,
-          conversationId,
-          userId: req.user.id,
-          page: parseInt(page),
-          limit: Math.min(100, parseInt(limit))
-        };
+  // **VALIDATION CRITIQUE : S'ASSURER QUE LE CONTRÔLEUR EXISTE**
+  if (!messageController) {
+    console.error("❌ MessageController manquant dans createMessageRoutes");
+    router.all("*", (req, res) => {
+      res.status(503).json({
+        success: false,
+        message: "Service de messages temporairement indisponible",
+        error: "MessageController non initialisé",
+      });
+    });
+    return router;
+  }
 
-        await messageController.getMessages(req, res);
-      } catch (error) {
-        console.error("❌ Erreur route messages:", error);
-        res.status(500).json({
-          success: false,
-          message: "Erreur lors de la récupération des messages",
-          code: "GET_MESSAGES_ROUTE_ERROR"
-        });
-      }
-    }
+  // **VALIDATION DES MÉTHODES DU CONTRÔLEUR**
+  const requiredMethods = [
+    "sendMessage",
+    "getMessages",
+    "getMessage",
+    "updateMessageStatus",
+    "deleteMessage",
+    "addReaction",
+  ];
+  const missingMethods = requiredMethods.filter(
+    (method) => typeof messageController[method] !== "function"
   );
 
-  /**
-   * @api {post} /api/messages Envoyer un message
-   * @apiName SendMessage
-   * @apiGroup Messages
-   */
-  router.post(
-    "/",
-    authMiddleware.authenticate,
-    rateLimitMiddleware.createLimit,
-    validationMiddleware.sanitizeInput,
-    async (req, res) => {
-      try {
-        const { conversationId, content, type = "TEXT", replyTo, mentions = [] } = req.body;
-        const userId = req.user.id;
+  if (missingMethods.length > 0) {
+    console.error(
+      `❌ Méthodes manquantes dans MessageController: ${missingMethods.join(
+        ", "
+      )}`
+    );
+    router.all("*", (req, res) => {
+      res.status(503).json({
+        success: false,
+        message: "Service de messages incomplet",
+        error: `Méthodes manquantes: ${missingMethods.join(", ")}`,
+      });
+    });
+    return router;
+  }
 
-        if (!conversationId || !content) {
-          return res.status(400).json({
+  // Routes des messages avec gestion d'erreurs
+  try {
+    /**
+     * @api {post} /api/messages Send Message
+     * @apiName SendMessage
+     * @apiGroup Messages
+     */
+    router.post(
+      "/",
+      authMiddleware.authenticate,
+      rateLimitMiddleware.createLimit,
+      validationMiddleware.sanitizeInput,
+      validationMiddleware.validateMessageSend,
+      async (req, res) => {
+        try {
+          await messageController.sendMessage(req, res);
+        } catch (error) {
+          console.error("❌ Erreur route POST /messages:", error);
+          res.status(500).json({
             success: false,
-            message: "ConversationId et contenu requis",
-            code: "MISSING_REQUIRED_FIELDS"
+            message: "Erreur lors de l'envoi du message",
+            error: error.message,
           });
         }
-
-        const result = await messageController.sendMessage({
-          conversationId,
-          senderId: userId,
-          content,
-          type,
-          replyTo,
-          mentions
-        });
-
-        res.status(201).json(result);
-      } catch (error) {
-        console.error("❌ Erreur route send message:", error);
-        res.status(500).json({
-          success: false,
-          message: "Erreur lors de l'envoi du message",
-          code: "SEND_MESSAGE_ROUTE_ERROR"
-        });
       }
-    }
-  );
+    );
 
-  /**
-   * @api {patch} /api/messages/:messageId/status Mettre à jour le statut
-   * @apiName UpdateMessageStatus
-   * @apiGroup Messages
-   */
-  router.patch(
-    "/:messageId/status",
-    authMiddleware.authenticate,
-    rateLimitMiddleware.reactionLimit,
-    validationMiddleware.validateMongoId("messageId"),
-    async (req, res) => {
-      try {
-        const { messageId } = req.params;
-        const { status } = req.body; // DELIVERED, READ, etc.
-        const userId = req.user.id;
-
-        const result = await messageController.updateMessageStatus({
-          messageId,
-          userId,
-          status
-        });
-
-        res.json(result);
-      } catch (error) {
-        console.error("❌ Erreur route update status:", error);
-        res.status(500).json({
-          success: false,
-          message: "Erreur lors de la mise à jour du statut",
-          code: "UPDATE_STATUS_ROUTE_ERROR"
-        });
-      }
-    }
-  );
-
-  /**
-   * @api {get} /api/messages/:messageId Message individuel
-   * @apiName GetMessage
-   * @apiGroup Messages
-   */
-  router.get(
-    "/single/:messageId",
-    authMiddleware.authenticate,
-    rateLimitMiddleware.apiLimit,
-    validationMiddleware.validateMongoId("messageId"),
-    cacheMiddleware.checkMessageCache,
-    async (req, res) => {
-      await messageController.getMessage(req, res);
-    }
-  );
-
-  /**
-   * @api {delete} /api/messages/:messageId Supprimer un message
-   * @apiName DeleteMessage
-   * @apiGroup Messages
-   */
-  router.delete(
-    "/:messageId",
-    authMiddleware.authenticate,
-    rateLimitMiddleware.apiLimit,
-    validationMiddleware.validateMongoId("messageId"),
-    async (req, res) => {
-      try {
-        const { messageId } = req.params;
-        const userId = req.user.id;
-
-        const result = await messageController.deleteMessage({
-          messageId,
-          userId
-        });
-
-        res.json(result);
-      } catch (error) {
-        console.error("❌ Erreur route delete message:", error);
-        res.status(500).json({
-          success: false,
-          message: "Erreur lors de la suppression",
-          code: "DELETE_MESSAGE_ROUTE_ERROR"
-        });
-      }
-    }
-  );
-
-  /**
-   * @api {post} /api/messages/:messageId/reactions Ajouter une réaction
-   * @apiName AddReaction
-   * @apiGroup Messages
-   */
-  router.post(
-    "/:messageId/reactions",
-    authMiddleware.authenticate,
-    rateLimitMiddleware.reactionLimit,
-    validationMiddleware.validateMongoId("messageId"),
-    async (req, res) => {
-      try {
-        const { messageId } = req.params;
-        const { emoji } = req.body;
-        const userId = req.user.id;
-
-        if (!emoji) {
-          return res.status(400).json({
+    /**
+     * @api {get} /api/messages Get Messages
+     * @apiName GetMessages
+     * @apiGroup Messages
+     */
+    router.get(
+      "/",
+      authMiddleware.authenticate,
+      rateLimitMiddleware.apiLimit,
+      cacheMiddleware.checkMessagesCache,
+      async (req, res) => {
+        try {
+          await messageController.getMessages(req, res);
+        } catch (error) {
+          console.error("❌ Erreur route GET /messages:", error);
+          res.status(500).json({
             success: false,
-            message: "Emoji requis",
-            code: "MISSING_EMOJI"
+            message: "Erreur lors de la récupération des messages",
+            error: error.message,
           });
         }
-
-        const result = await messageController.addReaction({
-          messageId,
-          userId,
-          emoji
-        });
-
-        res.json(result);
-      } catch (error) {
-        console.error("❌ Erreur route add reaction:", error);
-        res.status(500).json({
-          success: false,
-          message: "Erreur lors de l'ajout de la réaction",
-          code: "ADD_REACTION_ROUTE_ERROR"
-        });
       }
-    }
-  );
+    );
+
+    /**
+     * @api {get} /api/messages/:messageId Get Single Message
+     * @apiName GetMessage
+     * @apiGroup Messages
+     */
+    router.get(
+      "/:messageId",
+      authMiddleware.authenticate,
+      rateLimitMiddleware.apiLimit,
+      validationMiddleware.validateMongoId("messageId"),
+      cacheMiddleware.checkMessageCache,
+      async (req, res) => {
+        try {
+          await messageController.getMessage(req, res);
+        } catch (error) {
+          console.error("❌ Erreur route GET /messages/:messageId:", error);
+          res.status(500).json({
+            success: false,
+            message: "Erreur lors de la récupération du message",
+            error: error.message,
+          });
+        }
+      }
+    );
+
+    /**
+     * @api {put} /api/messages/:messageId/status Update Message Status
+     * @apiName UpdateMessageStatus
+     * @apiGroup Messages
+     */
+    router.put(
+      "/:messageId/status",
+      authMiddleware.authenticate,
+      rateLimitMiddleware.apiLimit,
+      validationMiddleware.validateMongoId("messageId"),
+      validationMiddleware.validateMessageStatus,
+      async (req, res) => {
+        try {
+          await messageController.updateMessageStatus(req, res);
+        } catch (error) {
+          console.error(
+            "❌ Erreur route PUT /messages/:messageId/status:",
+            error
+          );
+          res.status(500).json({
+            success: false,
+            message: "Erreur lors de la mise à jour du statut",
+            error: error.message,
+          });
+        }
+      }
+    );
+
+    /**
+     * @api {delete} /api/messages/:messageId Delete Message
+     * @apiName DeleteMessage
+     * @apiGroup Messages
+     */
+    router.delete(
+      "/:messageId",
+      authMiddleware.authenticate,
+      rateLimitMiddleware.apiLimit,
+      validationMiddleware.validateMongoId("messageId"),
+      async (req, res) => {
+        try {
+          await messageController.deleteMessage(req, res);
+        } catch (error) {
+          console.error("❌ Erreur route DELETE /messages/:messageId:", error);
+          res.status(500).json({
+            success: false,
+            message: "Erreur lors de la suppression du message",
+            error: error.message,
+          });
+        }
+      }
+    );
+
+    /**
+     * @api {post} /api/messages/:messageId/reactions Add Reaction
+     * @apiName AddReaction
+     * @apiGroup Messages
+     */
+    router.post(
+      "/:messageId/reactions",
+      authMiddleware.authenticate,
+      rateLimitMiddleware.reactionLimit,
+      validationMiddleware.validateMongoId("messageId"),
+      validationMiddleware.sanitizeInput,
+      async (req, res) => {
+        try {
+          await messageController.addReaction(req, res);
+        } catch (error) {
+          console.error(
+            "❌ Erreur route POST /messages/:messageId/reactions:",
+            error
+          );
+          res.status(500).json({
+            success: false,
+            message: "Erreur lors de l'ajout de la réaction",
+            error: error.message,
+          });
+        }
+      }
+    );
+
+    console.log("✅ Routes de messages configurées");
+  } catch (error) {
+    console.error("❌ Erreur configuration routes messages:", error);
+
+    // Route de fallback en cas d'erreur
+    router.all("*", (req, res) => {
+      res.status(500).json({
+        success: false,
+        message: "Erreur de configuration du service de messages",
+        error: error.message,
+      });
+    });
+  }
 
   return router;
 }

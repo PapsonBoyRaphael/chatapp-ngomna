@@ -4,7 +4,7 @@ const createUserRoutes = (userController) => {
   const router = express.Router();
 
   // Route pour obtenir tous les utilisateurs
-  router.get("/", (req, res) => {
+  router.get("/all", (req, res) => {
     userController.getAllUsers(req, res);
   });
 

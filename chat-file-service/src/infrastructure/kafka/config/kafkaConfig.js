@@ -1,47 +1,36 @@
-/**
- * Kafka Configuration - Chat File Service
- * Configuration robuste avec fallback développement
- */
-
 const { Kafka } = require("kafkajs");
 
 class KafkaConfig {
   constructor() {
-    this.isDev = process.env.NODE_ENV === "development";
-    this.enableKafka = process.env.ENABLE_KAFKA !== "false";
-
-    // Configuration adaptée à l'environnement
-    const kafkaConfig = {
-      clientId: process.env.KAFKA_CLIENT_ID || "chat-file-service",
-      brokers: (process.env.KAFKA_BROKERS || "localhost:9092").split(","),
-
-      // Timeouts optimisés pour développement
-      connectionTimeout: this.isDev ? 5000 : 10000,
-      authenticationTimeout: this.isDev ? 2000 : 5000,
-      requestTimeout: this.isDev ? 15000 : 30000,
-
-      retry: {
-        initialRetryTime: this.isDev ? 100 : 300,
-        retries: this.isDev ? 2 : 5,
-        maxRetryTime: this.isDev ? 1000 : 30000,
-      },
-
-      // Logs adaptés
-      logLevel: this.isDev ? 1 : 4, // WARN en dev, INFO en prod
-    };
-
-    this.kafka = new Kafka(kafkaConfig);
+    this.kafka = null;
     this.producer = null;
     this.consumer = null;
     this.admin = null;
     this.isConnected = false;
     this.connectionAttempts = 0;
     this.maxConnectionAttempts = 3;
+    this.isDev = process.env.NODE_ENV !== "production";
+    this.enableKafka = process.env.ENABLE_KAFKA !== "false";
+
+    // Configuration Kafka
+    this.kafkaConfig = {
+      clientId: "chat-file-service",
+      brokers: [process.env.KAFKA_BROKERS || "localhost:9092"],
+      retry: {
+        initialRetryTime: this.isDev ? 100 : 300,
+        retries: this.isDev ? 3 : 8,
+      },
+      // Ajout de configuration pour éviter les erreurs de connexion
+      connectionTimeout: this.isDev ? 3000 : 10000,
+      requestTimeout: this.isDev ? 5000 : 30000,
+    };
+
+    this.kafka = new Kafka(this.kafkaConfig);
   }
 
   async connect() {
     if (!this.enableKafka) {
-      console.log("🔄 Kafka désactivé par configuration");
+      console.log("�� Kafka désactivé par configuration");
       return false;
     }
 
@@ -65,25 +54,22 @@ class KafkaConfig {
         maxInFlightRequests: this.isDev ? 1 : 5,
         idempotent: false, // Simplifier pour dev
         transactionTimeout: this.isDev ? 10000 : 30000,
-        allowAutoTopicCreation: this.isDev,
-
-        batch: {
-          size: this.isDev ? 1000 : 16384,
-          lingerMs: this.isDev ? 0 : 5,
+        // **AJOUT: Retry configuration pour éviter les erreurs**
+        retry: {
+          initialRetryTime: 100,
+          retries: 3,
         },
       });
 
       // Configuration consumer optimisée
       this.consumer = this.kafka.consumer({
-        groupId: process.env.KAFKA_GROUP_ID || "chat-file-service-group",
-        sessionTimeout: this.isDev ? 15000 : 30000,
-        rebalanceTimeout: this.isDev ? 20000 : 60000,
-        heartbeatInterval: this.isDev ? 3000 : 3000,
-        allowAutoTopicCreation: this.isDev,
-
-        maxBytesPerPartition: this.isDev ? 1024000 : 1048576,
-        minBytes: this.isDev ? 1 : 1024,
-        maxWaitTimeInMs: this.isDev ? 500 : 1000,
+        groupId: `chat-file-service-${process.env.SERVER_ID || "default"}`,
+        sessionTimeout: this.isDev ? 10000 : 30000,
+        heartbeatInterval: this.isDev ? 3000 : 10000,
+        retry: {
+          initialRetryTime: 100,
+          retries: 3,
+        },
       });
 
       this.admin = this.kafka.admin();
@@ -115,15 +101,12 @@ class KafkaConfig {
       return true;
     } catch (error) {
       console.warn(
-        `⚠️ Kafka indisponible (tentative ${this.connectionAttempts}):`,
+        `⚠️ Échec connexion Kafka (${this.connectionAttempts}/${this.maxConnectionAttempts}):`,
         error.message
       );
 
-      if (this.isDev) {
-        console.log("💡 Solutions pour démarrer Kafka:");
-        console.log("   1. Script auto: ./start-kafka-dev.sh");
-        console.log("   2. Manuel: voir instructions dans check-kafka.sh");
-        console.log("   3. Désactiver: ENABLE_KAFKA=false dans .env");
+      if (this.connectionAttempts >= this.maxConnectionAttempts) {
+        console.log("🔄 Mode développement sans Kafka activé");
       }
 
       return false;
@@ -131,75 +114,97 @@ class KafkaConfig {
   }
 
   async connectAll() {
-    // Connexion séquentielle pour éviter les conflits
-    await this.admin.connect();
-    await this.producer.connect();
-    await this.consumer.connect();
+    await Promise.all([
+      this.producer.connect(),
+      this.consumer.connect(),
+      this.admin.connect(),
+    ]);
   }
 
   async createTopics() {
     if (!this.admin || !this.isConnected) return;
 
     try {
-      const baseConfig = {
-        replicationFactor: 1,
-        configEntries: this.isDev
-          ? [
-              { name: "cleanup.policy", value: "delete" },
-              { name: "retention.ms", value: "3600000" }, // 1h en dev
-              { name: "segment.ms", value: "300000" }, // 5min en dev
-              { name: "min.insync.replicas", value: "1" },
-            ]
-          : [
-              { name: "cleanup.policy", value: "compact" },
-              { name: "retention.ms", value: "86400000" }, // 24h en prod
-              { name: "segment.ms", value: "604800000" }, // 7j en prod
-              { name: "min.insync.replicas", value: "1" },
-            ],
-      };
-
       const topics = [
         {
           topic: "chat.messages",
-          numPartitions: this.isDev ? 1 : 3,
-          ...baseConfig,
+          numPartitions: 3,
+          replicationFactor: 1,
+          configEntries: [
+            {
+              name: "cleanup.policy",
+              value: "delete"
+            },
+            {
+              name: "retention.ms",
+              value: "604800000" // 7 jours
+            },
+            {
+              name: "segment.ms",
+              value: "86400000" // 1 jour
+            }
+          ]
         },
         {
           topic: "chat.files",
-          numPartitions: this.isDev ? 1 : 2,
-          ...baseConfig,
+          numPartitions: 2,
+          replicationFactor: 1,
+          configEntries: [
+            {
+              name: "cleanup.policy",
+              value: "delete"
+            },
+            {
+              name: "retention.ms",
+              value: "2592000000" // 30 jours
+            }
+          ]
         },
         {
           topic: "chat.notifications",
-          numPartitions: this.isDev ? 1 : 2,
-          configEntries: [
-            { name: "cleanup.policy", value: "delete" },
-            { name: "retention.ms", value: this.isDev ? "1800000" : "3600000" },
-            { name: "min.insync.replicas", value: "1" },
-          ],
-        },
-        {
-          topic: "chat.events",
           numPartitions: 1,
-          ...baseConfig,
+          replicationFactor: 1,
+          configEntries: [
+            {
+              name: "cleanup.policy",
+              value: "delete"
+            },
+            {
+              name: "retention.ms",
+              value: "86400000" // 1 jour
+            }
+          ]
         },
       ];
 
-      await this.admin.createTopics({
-        topics,
-        waitForLeaders: true,
-        timeout: 15000,
-      });
+      // **CORRECTION: Gestion d'erreur plus robuste pour la création de topics**
+      const existingTopics = await this.admin.listTopics();
+      const topicsToCreate = topics.filter(t => !existingTopics.includes(t.topic));
 
-      console.log(
-        `✅ Topics Kafka créés/vérifiés (${this.isDev ? "DEV" : "PROD"})`
-      );
-    } catch (error) {
-      if (error.type === "TOPIC_ALREADY_EXISTS") {
-        console.log("ℹ️ Topics Kafka déjà existants");
+      if (topicsToCreate.length > 0) {
+        try {
+          await this.admin.createTopics({
+            topics: topicsToCreate,
+            waitForLeaders: true,
+            timeout: 5000,
+          });
+          console.log(`✅ Topics Kafka créés: ${topicsToCreate.map(t => t.topic).join(', ')}`);
+        } catch (createError) {
+          // Ignorer l'erreur si les topics existent déjà
+          if (createError.message.includes('already exists') || 
+              createError.message.includes('TopicExistsException')) {
+            console.log("✅ Topics Kafka déjà existants (OK)");
+          } else {
+            console.warn("⚠️ Erreur création topics (non critique):", createError.message);
+          }
+        }
       } else {
-        console.warn("⚠️ Erreur création topics:", error.message);
+        console.log("✅ Tous les topics Kafka existent déjà");
       }
+
+      console.log("✅ Topics Kafka créés/vérifiés (DEV)");
+    } catch (error) {
+      console.warn("⚠️ Impossible de créer les topics:", error.message);
     }
   }
 
@@ -220,14 +225,18 @@ class KafkaConfig {
   }
 
   async disconnect() {
+    if (!this.isConnected) return;
+
     try {
-      if (this.producer) await this.producer.disconnect();
-      if (this.consumer) await this.consumer.disconnect();
-      if (this.admin) await this.admin.disconnect();
+      await Promise.all([
+        this.producer?.disconnect(),
+        this.consumer?.disconnect(),
+        this.admin?.disconnect(),
+      ]);
       this.isConnected = false;
-      console.log("✅ Kafka déconnecté");
+      console.log("✅ Kafka déconnecté proprement");
     } catch (error) {
-      console.error("❌ Erreur déconnexion Kafka:", error);
+      console.warn("⚠️ Erreur déconnexion Kafka:", error.message);
     }
   }
 
@@ -252,7 +261,7 @@ class KafkaConfig {
       try {
         const metadata = await this.admin.fetchTopicMetadata();
         const topicNames = metadata.topics.map((t) => t.name);
-        console.log("📋 Topics Kafka disponibles:", topicNames);
+        console.log("�� Topics Kafka disponibles:", topicNames);
         return topicNames;
       } catch (error) {
         console.warn("⚠️ Impossible de lister les topics:", error.message);

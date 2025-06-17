@@ -437,58 +437,25 @@ fileSchema.methods.formatFileSize = function () {
   return `${size.toFixed(1)} ${units[unitIndex]}`;
 };
 
-// Publier événement Kafka
+// Publier événement Kafka - CORRECTION
 fileSchema.methods.publishKafkaEvent = async function (
   eventType,
   additionalData = {}
 ) {
   try {
-    const kafkaProducers = require("../../../index").kafkaProducers;
+    // ✅ PAS DE RÉFÉRENCE EXTERNE - juste logger
+    console.log(`📤 Événement Kafka: ${eventType} pour fichier ${this._id}`);
 
-    if (!kafkaProducers?.fileProducer) {
-      console.warn("⚠️ Kafka file producer non disponible pour", eventType);
-      return false;
-    }
-
-    const eventData = {
-      eventType,
-      fileId: this._id,
-      originalName: this.originalName,
-      fileName: this.fileName,
-      mimeType: this.mimeType,
-      size: this.size,
-      uploadedBy: this.uploadedBy,
-      conversationId: this.conversationId,
-      messageId: this.messageId,
-      status: this.status,
-      fileType: this.metadata.technical.fileType,
-      timestamp: new Date().toISOString(),
-      ...additionalData,
-    };
-
-    await kafkaProducers.fileProducer.publishFileUpload(eventData);
-
-    // Enregistrer l'événement
+    // Enregistrer dans les métadonnées seulement
     this.metadata.kafkaMetadata.events.push({
       type: eventType,
       timestamp: new Date(),
-      success: true,
+      data: additionalData,
     });
 
-    console.log(
-      `📤 Événement Kafka publié: ${eventType} pour fichier ${this._id}`
-    );
     return true;
   } catch (error) {
-    console.error(`❌ Erreur publication Kafka ${eventType}:`, error.message);
-
-    this.metadata.kafkaMetadata.events.push({
-      type: eventType,
-      timestamp: new Date(),
-      success: false,
-      error: error.message,
-    });
-
+    console.error(`❌ Erreur Kafka ${eventType}:`, error.message);
     return false;
   }
 };

@@ -1,242 +1,160 @@
-const express = require("express");
-const multer = require("multer");
-const path = require("path");
+const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const { authMiddleware, validationMiddleware } = require('../middleware');
 
-// Middleware
-const authMiddleware = require("../middleware/authMiddleware");
-const rateLimitMiddleware = require("../middleware/rateLimitMiddleware");
-const validationMiddleware = require("../middleware/validationMiddleware");
-const cacheMiddleware = require("../middleware/cacheMiddleware");
-
-// Configuration Multer pour uploads
+// Configuration multer pour l'upload
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, path.join(__dirname, "../../../../uploads/"));
+  destination: function (req, file, cb) {
+    cb(null, path.join(__dirname, '../../../../uploads/'));
   },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname));
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
   }
 });
 
-const upload = multer({
-  storage,
+const upload = multer({ 
+  storage: storage,
   limits: {
-    fileSize: 100 * 1024 * 1024, // 100MB
-    files: 1
+    fileSize: 10 * 1024 * 1024 // 10MB
   },
   fileFilter: (req, file, cb) => {
-    // Filtres de sécurité basiques
-    const dangerousExtensions = ['.exe', '.bat', '.cmd', '.scr'];
-    const fileExtension = path.extname(file.originalname).toLowerCase();
+    // Types de fichiers autorisés
+    const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx|txt|mp4|avi/;
+    const extName = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimeType = allowedTypes.test(file.mimetype);
     
-    if (dangerousExtensions.includes(fileExtension)) {
-      return cb(new Error('Type de fichier non autorisé'), false);
+    if (mimeType && extName) {
+      return cb(null, true);
+    } else {
+      cb(new Error('Type de fichier non autorisé'));
     }
-    
-    cb(null, true);
   }
 });
 
 function createFileRoutes(fileController) {
   const router = express.Router();
 
-  /**
-   * @api {post} /api/files/upload Upload un fichier
-   * @apiName UploadFile
-   * @apiGroup Files
-   */
-  router.post(
-    "/upload",
-    authMiddleware.authenticate,
-    rateLimitMiddleware.uploadLimit,
-    upload.single("file"),
-    validationMiddleware.validateFileUpload,
-    async (req, res) => {
+  // **VALIDATION CRITIQUE : S'ASSURER QUE LE CONTRÔLEUR EXISTE**
+  if (!fileController) {
+    console.error('❌ FileController manquant dans createFileRoutes');
+    // Retourner un router avec des routes d'erreur
+    router.all('*', (req, res) => {
+      res.status(503).json({
+        success: false,
+        message: 'Service de fichiers temporairement indisponible',
+        error: 'FileController non initialisé'
+      });
+    });
+    return router;
+  }
+
+  // **VALIDATION DES MÉTHODES DU CONTRÔLEUR**
+  const requiredMethods = ['uploadFile', 'getFile', 'deleteFile', 'getFiles'];
+  const missingMethods = requiredMethods.filter(method => typeof fileController[method] !== 'function');
+  
+  if (missingMethods.length > 0) {
+    console.error(`❌ Méthodes manquantes dans FileController: ${missingMethods.join(', ')}`);
+    router.all('*', (req, res) => {
+      res.status(503).json({
+        success: false,
+        message: 'Service de fichiers incomplet',
+        error: `Méthodes manquantes: ${missingMethods.join(', ')}`
+      });
+    });
+    return router;
+  }
+
+  // Middleware d'authentification pour toutes les routes
+  router.use(authMiddleware.validateToken);
+
+  // Routes des fichiers avec gestion d'erreurs
+  try {
+    // GET /api/files - Lister les fichiers
+    router.get('/', async (req, res) => {
       try {
-        const { conversationId, messageContent = "" } = req.body;
-        const userId = req.user.id;
-        const file = req.file;
-
-        if (!conversationId) {
-          return res.status(400).json({
-            success: false,
-            message: "ID de conversation requis",
-            code: "MISSING_CONVERSATION_ID"
-          });
-        }
-
-        const result = await fileController.uploadFile({
-          file,
-          conversationId,
-          uploadedBy: userId,
-          messageContent
-        });
-
-        res.status(201).json(result);
+        await fileController.getFiles(req, res);
       } catch (error) {
-        console.error("❌ Erreur route upload:", error);
+        console.error('❌ Erreur route GET /files:', error);
         res.status(500).json({
           success: false,
-          message: "Erreur lors de l'upload",
-          code: "UPLOAD_ROUTE_ERROR"
+          message: 'Erreur lors de la récupération des fichiers',
+          error: error.message
         });
       }
-    }
-  );
+    });
 
-  /**
-   * @api {get} /api/files/:fileId Télécharger un fichier
-   * @apiName DownloadFile
-   * @apiGroup Files
-   */
-  router.get(
-    "/:fileId",
-    authMiddleware.optionalAuth, // Auth optionnelle pour liens publics
-    rateLimitMiddleware.downloadLimit,
-    validationMiddleware.validateMongoId("fileId"),
-    cacheMiddleware.checkFileCache,
-    async (req, res) => {
-      await fileController.downloadFile(req, res);
-    }
-  );
-
-  /**
-   * @api {get} /api/files/:fileId/info Informations du fichier
-   * @apiName GetFileInfo
-   * @apiGroup Files
-   */
-  router.get(
-    "/:fileId/info",
-    authMiddleware.authenticate,
-    rateLimitMiddleware.apiLimit,
-    validationMiddleware.validateMongoId("fileId"),
-    cacheMiddleware.checkFileInfoCache,
-    async (req, res) => {
-      await fileController.getFileInfo(req, res);
-    }
-  );
-
-  /**
-   * @api {get} /api/files/:fileId/thumbnail Miniature du fichier
-   * @apiName GetThumbnail
-   * @apiGroup Files
-   */
-  router.get(
-    "/:fileId/thumbnail",
-    authMiddleware.optionalAuth,
-    rateLimitMiddleware.thumbnailLimit,
-    validationMiddleware.validateMongoId("fileId"),
-    cacheMiddleware.checkThumbnailCache,
-    async (req, res) => {
-      await fileController.getThumbnail(req, res);
-    }
-  );
-
-  /**
-   * @api {get} /api/files/conversation/:conversationId Fichiers d'une conversation
-   * @apiName GetConversationFiles
-   * @apiGroup Files
-   */
-  router.get(
-    "/conversation/:conversationId",
-    authMiddleware.authenticate,
-    rateLimitMiddleware.apiLimit,
-    validationMiddleware.validateMongoId("conversationId"),
-    validationMiddleware.validatePagination,
-    cacheMiddleware.checkConversationFilesCache,
-    async (req, res) => {
+    // POST /api/files/upload - Upload d'un fichier
+    router.post('/upload', upload.single('file'), async (req, res) => {
       try {
-        const { conversationId } = req.params;
-        const { page = 1, limit = 20, type, date_from, date_to } = req.query;
-        const userId = req.user.id;
+        await fileController.uploadFile(req, res);
+      } catch (error) {
+        console.error('❌ Erreur route POST /files/upload:', error);
+        res.status(500).json({
+          success: false,
+          message: 'Erreur lors de l\'upload du fichier',
+          error: error.message
+        });
+      }
+    });
 
-        req.query = {
-          ...req.query,
-          conversationId,
-          userId,
-          page: parseInt(page),
-          limit: Math.min(50, parseInt(limit))
-        };
+    // GET /api/files/:fileId - Télécharger un fichier
+    router.get('/:fileId', validationMiddleware.validateMongoId('fileId'), async (req, res) => {
+      try {
+        await fileController.getFile(req, res);
+      } catch (error) {
+        console.error('❌ Erreur route GET /files/:fileId:', error);
+        res.status(500).json({
+          success: false,
+          message: 'Erreur lors de la récupération du fichier',
+          error: error.message
+        });
+      }
+    });
 
+    // DELETE /api/files/:fileId - Supprimer un fichier
+    router.delete('/:fileId', validationMiddleware.validateMongoId('fileId'), async (req, res) => {
+      try {
+        await fileController.deleteFile(req, res);
+      } catch (error) {
+        console.error('❌ Erreur route DELETE /files/:fileId:', error);
+        res.status(500).json({
+          success: false,
+          message: 'Erreur lors de la suppression du fichier',
+          error: error.message
+        });
+      }
+    });
+
+    // GET /api/files/conversation/:conversationId - Fichiers d'une conversation
+    router.get('/conversation/:conversationId', validationMiddleware.validateMongoId('conversationId'), async (req, res) => {
+      try {
         await fileController.getConversationFiles(req, res);
       } catch (error) {
-        console.error("❌ Erreur route conversation files:", error);
+        console.error('❌ Erreur route GET /files/conversation/:conversationId:', error);
         res.status(500).json({
           success: false,
-          message: "Erreur lors de la récupération des fichiers",
-          code: "GET_CONVERSATION_FILES_ROUTE_ERROR"
+          message: 'Erreur lors de la récupération des fichiers de conversation',
+          error: error.message
         });
       }
-    }
-  );
+    });
 
-  /**
-   * @api {delete} /api/files/:fileId Supprimer un fichier
-   * @apiName DeleteFile
-   * @apiGroup Files
-   */
-  router.delete(
-    "/:fileId",
-    authMiddleware.authenticate,
-    rateLimitMiddleware.apiLimit,
-    validationMiddleware.validateMongoId("fileId"),
-    async (req, res) => {
-      try {
-        const { fileId } = req.params;
-        const userId = req.user.id;
-
-        const result = await fileController.deleteFile({
-          fileId,
-          userId
-        });
-
-        res.json(result);
-      } catch (error) {
-        console.error("❌ Erreur route delete file:", error);
-        res.status(500).json({
-          success: false,
-          message: "Erreur lors de la suppression",
-          code: "DELETE_FILE_ROUTE_ERROR"
-        });
-      }
-    }
-  );
-
-  /**
-   * @api {get} /api/files/search Rechercher des fichiers
-   * @apiName SearchFiles
-   * @apiGroup Files
-   */
-  router.get(
-    "/search",
-    authMiddleware.authenticate,
-    rateLimitMiddleware.searchLimit,
-    validationMiddleware.validateSearchQuery,
-    validationMiddleware.validatePagination,
-    async (req, res) => {
-      try {
-        const { q, type, size_min, size_max, date_from, date_to } = req.query;
-        const userId = req.user.id;
-
-        const result = await fileController.searchFiles({
-          query: q,
-          userId,
-          filters: { type, size_min, size_max, date_from, date_to },
-          pagination: req.query
-        });
-
-        res.json(result);
-      } catch (error) {
-        console.error("❌ Erreur route search files:", error);
-        res.status(500).json({
-          success: false,
-          message: "Erreur lors de la recherche",
-          code: "SEARCH_FILES_ROUTE_ERROR"
-        });
-      }
-    }
-  );
+    console.log('✅ Routes de fichiers configurées');
+    
+  } catch (error) {
+    console.error('❌ Erreur configuration routes fichiers:', error);
+    
+    // Route de fallback en cas d'erreur
+    router.all('*', (req, res) => {
+      res.status(500).json({
+        success: false,
+        message: 'Erreur de configuration du service de fichiers',
+        error: error.message
+      });
+    });
+  }
 
   return router;
 }

@@ -15,35 +15,38 @@ class ConversationController {
     const startTime = Date.now();
 
     try {
-      const userId = req.user?.id || req.headers["user-id"];
-      const { useCache = true } = req.query;
+      const userId = req.user?.id || req.user?.userId;
 
       if (!userId) {
         return res.status(401).json({
           success: false,
           message: "Utilisateur non authentifié",
-          code: "MISSING_USER_ID",
         });
       }
 
-      const result = await this.getConversationsUseCase.execute(
-        userId,
-        useCache === "true"
-      );
+      console.log(`🔍 Conversations utilisateur: ${userId} (début)`);
 
+      // **CONVERSION EXPLICITE POUR ÉVITER LES ERREURS KAFKA**
+      const userIdString = String(userId);
+
+      const result = await this.getConversationsUseCase.execute(
+        userIdString,
+        true
+      );
       const processingTime = Date.now() - startTime;
 
-      // 🚀 PUBLIER CONSULTATION DANS KAFKA
+      console.log(
+        `🔍 Conversations utilisateur: ${userId} (${result.conversations.length} conv, ${processingTime}ms)`
+      );
+
+      // **PUBLIER ÉVÉNEMENT KAFKA AVEC DONNÉES CONVERTIES**
       if (this.kafkaProducer) {
         try {
           await this.kafkaProducer.publishMessage({
-            eventType: "CONVERSATIONS_VIEWED",
-            userId,
-            conversationCount: result.totalCount,
-            unreadCount: result.totalUnreadMessages,
-            fromCache: result.fromCache,
+            eventType: "CONVERSATIONS_RETRIEVED",
+            userId: userIdString,
+            conversationsCount: result.conversations.length,
             processingTime,
-            timestamp: new Date().toISOString(),
           });
         } catch (kafkaError) {
           console.warn(
@@ -75,7 +78,6 @@ class ConversationController {
           process.env.NODE_ENV === "development"
             ? error.message
             : "Erreur interne",
-        code: "GET_CONVERSATIONS_FAILED",
         metadata: {
           processingTime: `${processingTime}ms`,
           timestamp: new Date().toISOString(),
@@ -89,36 +91,37 @@ class ConversationController {
 
     try {
       const { conversationId } = req.params;
-      const userId = req.user?.id || req.headers["user-id"];
-      const { useCache = true } = req.query;
+      const userId = req.user?.id || req.user?.userId;
 
-      if (!conversationId || !userId) {
+      if (!userId || !conversationId) {
         return res.status(400).json({
           success: false,
-          message: "conversationId et userId requis",
-          code: "MISSING_PARAMETERS",
+          message: "Paramètres manquants",
         });
       }
 
+      // **CONVERSIONS EXPLICITES**
+      const userIdString = String(userId);
+      const conversationIdString = String(conversationId);
+
       const result = await this.getConversationUseCase.execute(
-        conversationId,
-        userId,
-        useCache === "true"
+        conversationIdString,
+        userIdString,
+        true
       );
 
       const processingTime = Date.now() - startTime;
 
-      // 🚀 PUBLIER CONSULTATION CONVERSATION DANS KAFKA
+      // **PUBLIER ÉVÉNEMENT KAFKA AVEC DONNÉES CONVERTIES**
       if (this.kafkaProducer) {
         try {
           await this.kafkaProducer.publishMessage({
             eventType: "CONVERSATION_VIEWED",
-            conversationId,
-            userId,
-            unreadCount: result.unreadCount,
-            messageCount: result.messageCount,
-            fromCache: result.fromCache,
-            processingTime,
+            userId: userIdString, // **STRING**
+            conversationId: conversationIdString, // **STRING**
+            unreadCount: String(result.unreadCount || 0), // **CONVERSION**
+            messageCount: String(result.messageCount || 0), // **CONVERSION**
+            processingTime: String(processingTime), // **CONVERSION**
             timestamp: new Date().toISOString(),
           });
         } catch (kafkaError) {
@@ -144,109 +147,82 @@ class ConversationController {
       const processingTime = Date.now() - startTime;
       console.error("❌ Erreur récupération conversation:", error);
 
-      if (error.message.includes("non trouvée")) {
-        res.status(404).json({
+      if (error.message === "Conversation non trouvée") {
+        return res.status(404).json({
           success: false,
           message: "Conversation non trouvée",
-          code: "CONVERSATION_NOT_FOUND",
         });
-      } else if (error.message.includes("non autorisé")) {
-        res.status(403).json({
+      }
+
+      if (error.message === "Accès non autorisé à cette conversation") {
+        return res.status(403).json({
           success: false,
-          message: "Accès non autorisé à cette conversation",
-          code: "ACCESS_DENIED",
-        });
-      } else {
-        res.status(500).json({
-          success: false,
-          message: "Erreur lors de la récupération de la conversation",
-          error:
-            process.env.NODE_ENV === "development"
-              ? error.message
-              : "Erreur interne",
-          code: "GET_CONVERSATION_FAILED",
-          metadata: {
-            processingTime: `${processingTime}ms`,
-            timestamp: new Date().toISOString(),
-          },
+          message: "Accès non autorisé",
         });
       }
-    }
-  }
-
-  async invalidateConversationCache(req, res) {
-    try {
-      const { conversationId } = req.params;
-      const userId = req.user?.id || req.headers["user-id"];
-
-      if (!this.redisClient) {
-        return res.status(501).json({
-          success: false,
-          message: "Redis non configuré",
-          code: "REDIS_NOT_AVAILABLE",
-        });
-      }
-
-      if (!conversationId) {
-        return res.status(400).json({
-          success: false,
-          message: "conversationId requis",
-          code: "MISSING_CONVERSATION_ID",
-        });
-      }
-
-      // Invalider les caches liés à cette conversation
-      const cachePatterns = [
-        `conversation:${conversationId}:*`,
-        `messages:${conversationId}:*`,
-      ];
-
-      if (userId) {
-        cachePatterns.push(`conversations:${userId}`);
-      }
-
-      let totalKeysDeleted = 0;
-
-      for (const pattern of cachePatterns) {
-        try {
-          if (pattern.includes("*")) {
-            const keys = await this.redisClient.keys(pattern);
-            if (keys.length > 0) {
-              await this.redisClient.del(keys);
-              totalKeysDeleted += keys.length;
-            }
-          } else {
-            const deleted = await this.redisClient.del(pattern);
-            totalKeysDeleted += deleted;
-          }
-        } catch (error) {
-          console.warn(
-            `⚠️ Erreur invalidation pattern ${pattern}:`,
-            error.message
-          );
-        }
-      }
-
-      res.json({
-        success: true,
-        message: "Cache invalidé avec succès",
-        data: {
-          conversationId,
-          keysDeleted: totalKeysDeleted,
-          timestamp: new Date().toISOString(),
-        },
-      });
-    } catch (error) {
-      console.error("❌ Erreur invalidation cache conversation:", error);
 
       res.status(500).json({
         success: false,
-        message: "Erreur lors de l'invalidation du cache",
+        message: "Erreur lors de la récupération de la conversation",
         error:
           process.env.NODE_ENV === "development"
             ? error.message
             : "Erreur interne",
-        code: "CACHE_INVALIDATION_FAILED",
+        metadata: {
+          processingTime: `${processingTime}ms`,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+  }
+
+  async createConversation(req, res) {
+    const startTime = Date.now();
+
+    try {
+      const userId = req.user?.id || req.user?.userId;
+      const { participants, type = "private", name } = req.body;
+
+      if (!userId || !participants || !Array.isArray(participants)) {
+        return res.status(400).json({
+          success: false,
+          message: "Données de conversation invalides",
+        });
+      }
+
+      // **CONVERSIONS EXPLICITES**
+      const userIdString = String(userId);
+      const participantsStrings = participants.map((p) => String(p));
+
+      // Ajouter l'utilisateur actuel aux participants s'il n'y est pas
+      if (!participantsStrings.includes(userIdString)) {
+        participantsStrings.push(userIdString);
+      }
+
+      // TODO: Implémenter CreateConversation use case
+      res.status(501).json({
+        success: false,
+        message: "Fonctionnalité en cours de développement",
+        metadata: {
+          processingTime: `${Date.now() - startTime}ms`,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      const processingTime = Date.now() - startTime;
+      console.error("❌ Erreur création conversation:", error);
+
+      res.status(500).json({
+        success: false,
+        message: "Erreur lors de la création de la conversation",
+        error:
+          process.env.NODE_ENV === "development"
+            ? error.message
+            : "Erreur interne",
+        metadata: {
+          processingTime: `${processingTime}ms`,
+          timestamp: new Date().toISOString(),
+        },
       });
     }
   }

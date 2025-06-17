@@ -59,8 +59,8 @@ const startServer = async () => {
     const authController = new AuthController(loginUserUseCase);
 
     // Routes
-    app.use("/users", createUserRoutes(userController));
-    app.use("/auth", createAuthRoutes(authController));
+    app.use("/", createUserRoutes(userController));
+    app.use("/", createAuthRoutes(authController));
 
     app.listen(PORT, () => {
       console.log(
