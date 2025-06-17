@@ -1,101 +1,92 @@
 class SendMessage {
-  constructor(messageRepository, conversationRepository, kafkaProducer = null) {
+  constructor(
+    messageRepository,
+    conversationRepository,
+    kafkaProducer = null,
+    redisClient = null
+  ) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
-    this.kafkaProducer = kafkaProducer; // Ajout du producer Kafka
+    this.kafkaProducer = kafkaProducer;
+    this.redisClient = redisClient;
   }
 
-  async execute({
-    senderId,
-    receiverId,
-    content,
-    conversationId,
-    type = "TEXT",
-    metadata = {},
-  }) {
+  async execute(messageData) {
     try {
-      // Validation renforcée
-      if (!senderId || !receiverId || !content?.trim()) {
-        throw new Error("senderId, receiverId et content sont requis");
+      const { content, senderId, conversationId, type = "TEXT" } = messageData;
+
+      if (!content || !senderId || !conversationId) {
+        throw new Error("Données de message incomplètes");
       }
 
-      // Créer ou récupérer la conversation
-      if (!conversationId) {
-        const conversation =
-          await this.conversationRepository.findOrCreateConversation([
-            senderId,
-            receiverId,
-          ]);
-        conversationId = conversation._id;
+      // Vérifier que la conversation existe
+      const conversation = await this.conversationRepository.findById(
+        conversationId
+      );
+      if (!conversation) {
+        throw new Error("Conversation non trouvée");
       }
 
-      // Sauvegarder le message avec métadonnées enrichies
-      const enrichedMetadata = {
-        ...metadata,
-        timestamp: new Date().toISOString(),
-        messageId: `msg_${Date.now()}_${senderId}`,
-        serverId: process.env.SERVER_ID || "default",
+      // Créer le message
+      const message = {
+        content: String(content),
+        senderId: String(senderId),
+        conversationId: String(conversationId),
+        type,
+        status: "SENT",
+        timestamp: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
       };
 
-      const message = await this.messageRepository.saveMessage({
-        conversationId,
-        senderId,
-        receiverId,
-        content: content.trim(),
-        type,
-        metadata: enrichedMetadata,
-        status: "SENT",
-      });
+      // Sauvegarder le message
+      const savedMessage = await this.messageRepository.save(message);
 
       // Mettre à jour la conversation
-      await this.conversationRepository.updateLastMessage(
-        conversationId,
-        message._id
-      );
+      await this.conversationRepository.updateLastMessage(conversationId, {
+        content: message.content,
+        timestamp: message.timestamp,
+        senderId: message.senderId,
+      });
 
-      const messageData = {
-        ...message.toObject(),
-        conversationId,
-      };
-
-      // 🚀 PUBLIER DANS KAFKA
+      // Publier sur Kafka
       if (this.kafkaProducer) {
         try {
           await this.kafkaProducer.publishMessage({
             eventType: "MESSAGE_SENT",
-            messageId: message._id,
-            conversationId,
-            senderId,
-            receiverId,
-            content: content.trim(),
-            type,
-            metadata: enrichedMetadata,
+            messageId: String(savedMessage.id),
+            conversationId: String(conversationId),
+            senderId: String(senderId),
+            content: String(content),
             timestamp: new Date().toISOString(),
-            // Données pour les notifications
-            notificationData: {
-              title: `Nouveau message`,
-              body: content.substring(0, 100),
-              data: {
-                conversationId,
-                senderId,
-                messageId: message._id,
-              },
-            },
           });
-
-          console.log(`📤 Message publié dans Kafka: ${message._id}`);
         } catch (kafkaError) {
-          // Ne pas faire échouer l'envoi si Kafka échoue
-          console.warn(
-            "⚠️ Erreur publication Kafka (non bloquant):",
-            kafkaError.message
-          );
+          console.warn("⚠️ Erreur Kafka SendMessage:", kafkaError.message);
         }
       }
 
-      return messageData;
+      // Invalider le cache Redis
+      if (this.redisClient) {
+        try {
+          await this.redisClient.del(`messages:${conversationId}`);
+          await this.redisClient.del(`conversation:${conversationId}`);
+        } catch (redisError) {
+          console.warn("⚠️ Erreur cache Redis:", redisError.message);
+        }
+      }
+
+      return {
+        id: savedMessage.id,
+        content: savedMessage.content,
+        senderId: savedMessage.senderId,
+        conversationId: savedMessage.conversationId,
+        type: savedMessage.type,
+        status: savedMessage.status,
+        timestamp: savedMessage.timestamp,
+        createdAt: savedMessage.createdAt,
+      };
     } catch (error) {
-      console.error("❌ Erreur SendMessage:", error);
+      console.error("❌ Erreur SendMessage use case:", error);
       throw error;
     }
   }

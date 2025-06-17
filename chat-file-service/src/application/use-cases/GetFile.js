@@ -1,72 +1,56 @@
-const fs = require("fs-extra");
-const path = require("path");
-
 class GetFile {
-  constructor(fileRepository, kafkaProducer = null, redisClient = null) {
+  constructor(fileRepository, redisClient = null) {
     this.fileRepository = fileRepository;
-    this.kafkaProducer = kafkaProducer;
     this.redisClient = redisClient;
   }
 
-  async execute(fileId, userId, trackDownload = true) {
+  async execute(fileId, userId) {
     try {
-      if (!fileId || !userId) {
-        throw new Error("fileId et userId sont requis");
-      }
-
-      const file = await this.fileRepository.getFileById(fileId);
-
-      if (!file) {
-        throw new Error("Fichier non trouvé");
-      }
-
-      // Vérifier l'accès (si le fichier a une conversation associée)
-      if (file.conversationId) {
-        // Vérifier que l'utilisateur fait partie de la conversation
-        // Cette logique peut être améliorée selon vos besoins
-      }
-
-      // Vérifier que le fichier existe physiquement
-      if (!(await fs.pathExists(file.path))) {
-        throw new Error("Fichier physique non trouvé");
-      }
-
-      // 🚀 PUBLIER TÉLÉCHARGEMENT DANS KAFKA
-      if (this.kafkaProducer && trackDownload) {
+      // Vérifier le cache Redis
+      let cachedFile = null;
+      if (this.redisClient) {
         try {
-          await this.kafkaProducer.publishFileUpload({
-            eventType: "FILE_DOWNLOADED",
-            fileId,
-            fileName: file.originalName,
-            downloadedBy: userId,
-            conversationId: file.conversationId,
-            fileSize: file.size,
-            timestamp: new Date().toISOString(),
-          });
-        } catch (kafkaError) {
-          console.warn(
-            "⚠️ Erreur publication téléchargement Kafka:",
-            kafkaError.message
-          );
+          const cacheKey = `file:${fileId}`;
+          const cached = await this.redisClient.get(cacheKey);
+          if (cached) {
+            cachedFile = JSON.parse(cached);
+          }
+        } catch (redisError) {
+          console.warn('⚠️ Erreur cache Redis:', redisError.message);
         }
       }
 
-      // Incrémenter le compteur de téléchargements
-      await this.fileRepository.incrementDownloadCount(fileId);
+      if (cachedFile) {
+        return cachedFile;
+      }
 
-      return {
-        file,
-        filePath: file.path,
-        downloadUrl: file.url,
-        metadata: {
-          originalName: file.originalName,
-          size: file.size,
-          mimeType: file.mimeType,
-          downloadedAt: new Date().toISOString(),
-        },
-      };
+      // Récupérer depuis la base
+      const file = await this.fileRepository.findById(fileId);
+      
+      if (!file) {
+        throw new Error('Fichier non trouvé');
+      }
+
+      // Vérifier les permissions (basique)
+      if (file.uploadedBy !== userId) {
+        // Pour l'instant, permettre l'accès à tous
+        // TODO: Implémenter une vérification plus fine
+      }
+
+      // Mettre en cache
+      if (this.redisClient) {
+        try {
+          const cacheKey = `file:${fileId}`;
+          await this.redisClient.setex(cacheKey, 300, JSON.stringify(file)); // 5 minutes
+        } catch (redisError) {
+          console.warn('⚠️ Erreur mise en cache:', redisError.message);
+        }
+      }
+
+      return file;
+
     } catch (error) {
-      console.error("❌ Erreur GetFile:", error);
+      console.error('❌ Erreur GetFile use case:', error);
       throw error;
     }
   }

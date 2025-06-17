@@ -1,123 +1,93 @@
-const rateLimit = require('express-rate-limit');
+const rateLimit = require("express-rate-limit");
 
-// Rate limiters adaptés au contexte chat-file-service
-const rateLimitMiddleware = {
-  // Limite générale API - Basée sur IP puis userId après auth
-  apiLimit: rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 1000, // 1000 requêtes par IP/user
+// Configuration de base
+const createLimiter = (windowMs, max, message) => {
+  return rateLimit({
+    windowMs,
+    max,
     message: {
       success: false,
-      message: 'Trop de requêtes, veuillez patienter',
-      code: 'RATE_LIMIT_EXCEEDED'
+      message,
+      code: "RATE_LIMIT_EXCEEDED",
     },
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => {
-      // Utiliser l'ID utilisateur après validation par authMiddleware
-      return req.user?.id || req.ip;
-    },
     skip: (req) => {
-      // Skip pour les health checks et metrics
-      return req.path.startsWith('/api/health') || req.path === '/metrics';
-    }
-  }),
-
-  // Limite critique pour uploads de fichiers
-  uploadLimit: rateLimit({
-    windowMs: 5 * 60 * 1000, // 5 minutes
-    max: 20, // 20 uploads max par période
-    message: {
-      success: false,
-      message: 'Trop d\'uploads, attendez avant de réessayer',
-      code: 'UPLOAD_RATE_LIMIT_EXCEEDED'
+      // Exclure les requêtes de health check
+      return req.path === "/health" || req.path === "/api/health";
     },
-    keyGenerator: (req) => req.user?.id || req.ip
-  }),
-
-  // Limite pour téléchargements
-  downloadLimit: rateLimit({
-    windowMs: 1 * 60 * 1000, // 1 minute
-    max: 100, // 100 téléchargements
-    message: {
-      success: false,
-      message: 'Trop de téléchargements simultanés',
-      code: 'DOWNLOAD_RATE_LIMIT_EXCEEDED'
-    },
-    keyGenerator: (req) => req.user?.id || req.ip
-  }),
-
-  // Limite pour miniatures - Très sollicitées
-  thumbnailLimit: rateLimit({
-    windowMs: 1 * 60 * 1000,
-    max: 200, // Généreux car souvent utilisées
-    message: {
-      success: false,
-      message: 'Trop de demandes de miniatures',
-      code: 'THUMBNAIL_RATE_LIMIT_EXCEEDED'
-    },
-    keyGenerator: (req) => req.ip // IP seulement car auth optionnelle
-  }),
-
-  // Health checks - Limité mais généreux pour monitoring
-  healthLimit: rateLimit({
-    windowMs: 1 * 60 * 1000,
-    max: 60,
-    message: {
-      success: false,
-      message: 'Trop de health checks',
-      code: 'HEALTH_RATE_LIMIT_EXCEEDED'
-    },
-    keyGenerator: (req) => req.ip
-  }),
-
-  // Limite pour recherches
-  searchLimit: rateLimit({
-    windowMs: 1 * 60 * 1000,
-    max: 30, // 30 recherches par minute
-    message: {
-      success: false,
-      message: 'Trop de recherches, ralentissez',
-      code: 'SEARCH_RATE_LIMIT_EXCEEDED'
-    },
-    keyGenerator: (req) => req.user?.id || req.ip
-  }),
-
-  // Limite pour créations (conversations, etc.)
-  createLimit: rateLimit({
-    windowMs: 5 * 60 * 1000, // 5 minutes
-    max: 10, // 10 créations max
-    message: {
-      success: false,
-      message: 'Trop de créations, attendez un peu',
-      code: 'CREATE_RATE_LIMIT_EXCEEDED'
-    },
-    keyGenerator: (req) => req.user?.id || req.ip
-  }),
-
-  // Limite spéciale pour réactions (messages)
-  reactionLimit: rateLimit({
-    windowMs: 1 * 60 * 1000,
-    max: 60, // 60 réactions par minute
-    message: {
-      success: false,
-      message: 'Trop de réactions, calmez-vous !',
-      code: 'REACTION_RATE_LIMIT_EXCEEDED'
-    },
-    keyGenerator: (req) => req.user?.id || req.ip
-  }),
-
-  // Limite admin pour opérations sensibles
-  adminLimit: rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // 100 actions admin
-    message: {
-      success: false,
-      message: 'Trop d\'actions administratives',
-      code: 'ADMIN_RATE_LIMIT_EXCEEDED'
-    },
-    keyGenerator: (req) => req.user?.id || req.ip
-  })
+  });
 };
 
-module.exports = rateLimitMiddleware;
+class RateLimitMiddleware {
+  constructor() {
+    this.requests = new Map();
+
+    // Nettoyer toutes les 5 minutes
+    setInterval(() => {
+      this.cleanup();
+    }, 5 * 60 * 1000);
+  }
+
+  createLimiter(maxRequests, windowMs, message) {
+    return (req, res, next) => {
+      const key = req.ip || req.connection.remoteAddress || "unknown";
+      const now = Date.now();
+
+      if (!this.requests.has(key)) {
+        this.requests.set(key, []);
+      }
+
+      const userRequests = this.requests.get(key);
+      const validRequests = userRequests.filter(
+        (time) => now - time < windowMs
+      );
+
+      if (validRequests.length >= maxRequests) {
+        return res.status(429).json({
+          success: false,
+          message: message || "Trop de requêtes",
+          code: "RATE_LIMIT_EXCEEDED",
+        });
+      }
+
+      validRequests.push(now);
+      this.requests.set(key, validRequests);
+      next();
+    };
+  }
+
+  cleanup() {
+    const now = Date.now();
+    for (const [key, requests] of this.requests.entries()) {
+      if (
+        requests.length === 0 ||
+        requests.every((time) => now - time > 60000)
+      ) {
+        this.requests.delete(key);
+      }
+    }
+  }
+
+  get apiLimit() {
+    return this.createLimiter(100, 60000, "Limite API dépassée");
+  }
+
+  get createLimit() {
+    return this.createLimiter(10, 60000, "Limite création dépassée");
+  }
+
+  get reactionLimit() {
+    return this.createLimiter(30, 60000, "Limite réactions dépassée");
+  }
+
+  get healthLimit() {
+    return this.createLimiter(20, 60000, "Limite health check dépassée");
+  }
+
+  get adminLimit() {
+    return this.createLimiter(5, 60000, "Limite admin dépassée");
+  }
+}
+
+module.exports = new RateLimitMiddleware();

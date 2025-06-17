@@ -1,52 +1,152 @@
 class OnlineUserManager {
-  constructor(redisClient) {
-    this.redis = redisClient;
-    this.keyPrefix = 'chat:online_users';
-    this.userDataPrefix = 'chat:user_data';
+  constructor(redis) {
+    this.redis = redis;
+    this.keyPrefix = "online_users";
+    this.userDataPrefix = "user_data";
+    this.userSocketPrefix = "user_sockets";
   }
 
-  async addUser(userId, socketId, serverId = 'default') {
+  // ✅ CORRIGER setUserOnline AVEC VALIDATION DES TYPES
+  async setUserOnline(userId, userData = {}) {
     try {
-      const userData = {
-        userId,
-        socketId,
-        serverId,
-        connectedAt: new Date().toISOString(),
-        lastActivity: new Date().toISOString()
+      // ✅ VALIDATION ET CONVERSION DES TYPES
+      const userIdString = String(userId); // Convertir en string
+
+      if (
+        !userIdString ||
+        userIdString === "undefined" ||
+        userIdString === "null"
+      ) {
+        throw new Error("userId invalide");
+      }
+
+      // ✅ PRÉPARER LES DONNÉES AVEC SÉRIALISATION APPROPRIÉE
+      const userInfo = {
+        userId: userIdString,
+        socketId: userData.socketId ? String(userData.socketId) : null,
+        serverId: userData.serverId ? String(userData.serverId) : "default",
+        connectedAt:
+          userData.connectedAt instanceof Date
+            ? userData.connectedAt.toISOString()
+            : String(userData.connectedAt) || new Date().toISOString(),
+        lastActivity:
+          userData.lastActivity instanceof Date
+            ? userData.lastActivity.toISOString()
+            : String(userData.lastActivity) || new Date().toISOString(),
+        userName:
+          userData.userName || userData.nom
+            ? String(userData.userName || userData.nom)
+            : "Unknown",
       };
 
-      // Ajouter à la liste des utilisateurs en ligne
-      await this.redis.sAdd(this.keyPrefix, userId);
-      
-      // Stocker les données détaillées de l'utilisateur
+      // ✅ AJOUTER À LA LISTE DES UTILISATEURS EN LIGNE (AVEC STRING)
+      await this.redis.sAdd(this.keyPrefix, userIdString);
+
+      // ✅ STOCKER LES DONNÉES UTILISATEUR (AVEC CONVERSION EN STRINGS)
+      const redisData = {};
+      for (const [key, value] of Object.entries(userInfo)) {
+        if (value !== null && value !== undefined) {
+          redisData[key] = String(value);
+        }
+      }
+
       await this.redis.hSet(
-        `${this.userDataPrefix}:${userId}`,
-        userData
+        `${this.userDataPrefix}:${userIdString}`,
+        redisData
       );
 
-      // Expiration automatique après 1 heure d'inactivité
-      await this.redis.expire(`${this.userDataPrefix}:${userId}`, 3600);
+      // ✅ STOCKER LA RELATION SOCKET -> USERID SI DISPONIBLE
+      if (userInfo.socketId && userInfo.socketId !== "null") {
+        await this.redis.set(
+          `${this.userSocketPrefix}:${userInfo.socketId}`,
+          userIdString,
+          "EX",
+          3600 // Expire dans 1 heure
+        );
+      }
 
-      console.log(`👤 Utilisateur ${userId} ajouté (${socketId})`);
+      // Expiration automatique après 1 heure d'inactivité
+      await this.redis.expire(`${this.userDataPrefix}:${userIdString}`, 3600);
+
+      console.log(
+        `👤 Utilisateur ${userIdString} (${userInfo.userName}) mis en ligne`
+      );
       return true;
     } catch (error) {
-      console.error('Erreur ajout utilisateur:', error);
+      console.error("❌ Erreur setUserOnline:", error);
       return false;
     }
   }
 
-  async removeUser(userId) {
+  // ✅ CORRIGER setUserOffline AVEC VALIDATION
+  async setUserOffline(userId) {
     try {
-      // Supprimer de la liste des utilisateurs en ligne
-      await this.redis.sRem(this.keyPrefix, userId);
-      
-      // Supprimer les données utilisateur
-      await this.redis.del(`${this.userDataPrefix}:${userId}`);
+      const userIdString = String(userId);
 
-      console.log(`👤 Utilisateur ${userId} supprimé`);
+      if (
+        !userIdString ||
+        userIdString === "undefined" ||
+        userIdString === "null"
+      ) {
+        console.warn("⚠️ UserId invalide pour setUserOffline:", userId);
+        return false;
+      }
+
+      // Récupérer les données utilisateur pour le nettoyage
+      const userData = await this.redis.hGetAll(
+        `${this.userDataPrefix}:${userIdString}`
+      );
+
+      // Supprimer de la liste des utilisateurs en ligne
+      await this.redis.sRem(this.keyPrefix, userIdString);
+
+      // Supprimer les données utilisateur
+      await this.redis.del(`${this.userDataPrefix}:${userIdString}`);
+
+      // Supprimer la relation socket si elle existe
+      if (userData && userData.socketId) {
+        await this.redis.del(`${this.userSocketPrefix}:${userData.socketId}`);
+      }
+
+      console.log(`👋 Utilisateur ${userIdString} mis hors ligne`);
       return true;
     } catch (error) {
-      console.error('Erreur suppression utilisateur:', error);
+      console.error("❌ Erreur setUserOffline:", error);
+      return false;
+    }
+  }
+
+  // ✅ CORRIGER addUser AVEC VALIDATION
+  async addUser(userId, socketId, serverId = "default") {
+    return this.setUserOnline(userId, {
+      socketId: socketId ? String(socketId) : null,
+      serverId: String(serverId),
+    });
+  }
+
+  async removeUser(userId) {
+    return this.setUserOffline(userId);
+  }
+
+  async getUserData(userId) {
+    try {
+      const userIdString = String(userId);
+      const data = await this.redis.hGetAll(
+        `${this.userDataPrefix}:${userIdString}`
+      );
+      return Object.keys(data).length > 0 ? data : null;
+    } catch (error) {
+      console.error("❌ Erreur getUserData:", error);
+      return null;
+    }
+  }
+
+  async isUserOnline(userId) {
+    try {
+      const userIdString = String(userId);
+      return await this.redis.sIsMember(this.keyPrefix, userIdString);
+    } catch (error) {
+      console.error("❌ Erreur isUserOnline:", error);
       return false;
     }
   }
@@ -57,18 +157,15 @@ class OnlineUserManager {
       const users = [];
 
       for (const userId of userIds) {
-        const userData = await this.redis.hGetAll(`${this.userDataPrefix}:${userId}`);
-        if (Object.keys(userData).length > 0) {
+        const userData = await this.getUserData(userId);
+        if (userData) {
           users.push(userData);
-        } else {
-          // Nettoyer les utilisateurs sans données
-          await this.redis.sRem(this.keyPrefix, userId);
         }
       }
 
       return users;
     } catch (error) {
-      console.error('Erreur récupération utilisateurs:', error);
+      console.error("❌ Erreur getOnlineUsers:", error);
       return [];
     }
   }
@@ -77,44 +174,25 @@ class OnlineUserManager {
     try {
       return await this.redis.sCard(this.keyPrefix);
     } catch (error) {
-      console.error('Erreur comptage utilisateurs:', error);
+      console.error("❌ Erreur getOnlineUsersCount:", error);
       return 0;
     }
   }
 
-  async getUserData(userId) {
+  async updateLastActivity(userId) {
     try {
-      const userData = await this.redis.hGetAll(`${this.userDataPrefix}:${userId}`);
-      return Object.keys(userData).length > 0 ? userData : null;
-    } catch (error) {
-      console.error('Erreur récupération données utilisateur:', error);
-      return null;
-    }
-  }
-
-  async updateUserActivity(userId) {
-    try {
+      const userIdString = String(userId);
       await this.redis.hSet(
-        `${this.userDataPrefix}:${userId}`,
-        'lastActivity',
+        `${this.userDataPrefix}:${userIdString}`,
+        "lastActivity",
         new Date().toISOString()
       );
-      
-      // Prolonger l'expiration
-      await this.redis.expire(`${this.userDataPrefix}:${userId}`, 3600);
-      
+
+      // Renouveler l'expiration
+      await this.redis.expire(`${this.userDataPrefix}:${userIdString}`, 3600);
       return true;
     } catch (error) {
-      console.error('Erreur mise à jour activité:', error);
-      return false;
-    }
-  }
-
-  async isUserOnline(userId) {
-    try {
-      return await this.redis.sIsMember(this.keyPrefix, userId);
-    } catch (error) {
-      console.error('Erreur vérification utilisateur en ligne:', error);
+      console.error("❌ Erreur updateLastActivity:", error);
       return false;
     }
   }
@@ -125,32 +203,54 @@ class OnlineUserManager {
       let cleanedCount = 0;
 
       for (const userId of userIds) {
-        const userData = await this.redis.hGetAll(`${this.userDataPrefix}:${userId}`);
-        
-        if (Object.keys(userData).length === 0) {
-          // Pas de données -> supprimer
+        const userData = await this.getUserData(userId);
+
+        if (!userData) {
+          // Données corrompues, nettoyer
           await this.redis.sRem(this.keyPrefix, userId);
           cleanedCount++;
-        } else if (userData.lastActivity) {
-          // Vérifier l'inactivité (plus de 2 heures)
+          continue;
+        }
+
+        // Vérifier si l'utilisateur est inactif depuis plus d'1 heure
+        if (userData.lastActivity) {
           const lastActivity = new Date(userData.lastActivity);
-          const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-          
-          if (lastActivity < twoHoursAgo) {
-            await this.removeUser(userId);
+          const now = new Date();
+          const diffMinutes = (now - lastActivity) / (1000 * 60);
+
+          if (diffMinutes > 60) {
+            await this.setUserOffline(userId);
             cleanedCount++;
           }
         }
       }
 
-      if (cleanedCount > 0) {
-        console.log(`🧹 ${cleanedCount} utilisateurs inactifs nettoyés`);
-      }
-
+      console.log(`🧹 ${cleanedCount} utilisateurs inactifs nettoyés`);
       return cleanedCount;
     } catch (error) {
-      console.error('Erreur nettoyage utilisateurs:', error);
+      console.error("❌ Erreur cleanupInactiveUsers:", error);
       return 0;
+    }
+  }
+
+  async getStats() {
+    try {
+      const totalOnline = await this.getOnlineUsersCount();
+      const users = await this.getOnlineUsers();
+
+      return {
+        totalOnline,
+        users: users.map((user) => ({
+          userId: user.userId,
+          userName: user.userName,
+          connectedAt: user.connectedAt,
+          lastActivity: user.lastActivity,
+        })),
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      console.error("❌ Erreur getStats:", error);
+      return { totalOnline: 0, users: [], error: error.message };
     }
   }
 }

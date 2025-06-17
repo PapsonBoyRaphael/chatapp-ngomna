@@ -3,7 +3,24 @@
  * Configuration robuste avec fallback
  */
 
+// Utiliser les nouvelles variables d'environnement
+
 const redis = require("redis");
+
+const redisConfig = {
+  host: process.env.REDIS_HOST || "localhost",
+  port: parseInt(process.env.REDIS_PORT) || 6379,
+  password: process.env.REDIS_PASSWORD || undefined,
+  db: parseInt(process.env.REDIS_DB) || 0,
+  family: parseInt(process.env.REDIS_FAMILY) || 4,
+  keepAlive: process.env.REDIS_KEEP_ALIVE === "true",
+  connectTimeout: parseInt(process.env.REDIS_CONNECTION_TIMEOUT) || 5000,
+  lazyConnect: true,
+  maxRetriesPerRequest: parseInt(process.env.REDIS_MAX_RETRY_ATTEMPTS) || 3,
+  retryDelayOnFailover: 100,
+  enableReadyCheck: false,
+  maxLoadingTimeout: 0,
+};
 
 class RedisConfig {
   constructor() {
@@ -11,132 +28,76 @@ class RedisConfig {
     this.pubClient = null;
     this.subClient = null;
     this.isConnected = false;
-    this.connectionAttempts = 0;
-    this.maxConnectionAttempts = 3;
   }
 
   async connect() {
-    if (this.connectionAttempts >= this.maxConnectionAttempts) {
-      console.log(
-        "⚠️ Limite de tentatives Redis atteinte, mode mémoire locale"
-      );
-      return false;
-    }
-
-    this.connectionAttempts++;
-
     try {
-      console.log(
-        `🔄 Connexion Redis - Tentative ${this.connectionAttempts}/${this.maxConnectionAttempts}...`
-      );
+      this.client = redis.createClient(redisConfig);
+      this.pubClient = redis.createClient(redisConfig);
+      this.subClient = redis.createClient(redisConfig);
 
-      const clientConfig = {
-        socket: {
-          host: process.env.REDIS_HOST || "localhost",
-          port: process.env.REDIS_PORT || 6379,
-          connectTimeout: 5000,
-          lazyConnect: true,
-        },
-        password: process.env.REDIS_PASSWORD || undefined,
-        retry_strategy: (options) => {
-          if (options.error && options.error.code === "ECONNREFUSED") {
-            return new Error("Le serveur Redis refuse la connexion");
-          }
-          if (options.total_retry_time > 1000 * 10) {
-            return new Error("Timeout de retry atteint");
-          }
-          if (options.attempt > 3) {
-            return undefined;
-          }
-          return Math.min(options.attempt * 100, 3000);
-        },
-      };
-
-      this.client = redis.createClient(clientConfig);
-      this.pubClient = redis.createClient(clientConfig);
-      this.subClient = redis.createClient(clientConfig);
-
-      // Gestion des erreurs
       this.client.on("error", (err) => {
-        if (err.code === "ECONNREFUSED") {
-          console.warn("⚠️ Redis non disponible, mode mémoire locale activé");
-        } else {
-          console.error("Redis Client Error:", err);
-        }
+        console.error("❌ Erreur Redis:", err);
+        this.isConnected = false;
       });
 
-      this.pubClient.on("error", (err) =>
-        console.warn("Redis Pub Error:", err.message)
-      );
-      this.subClient.on("error", (err) =>
-        console.warn("Redis Sub Error:", err.message)
-      );
+      this.client.on("ready", () => {
+        this.isConnected = true;
+      });
 
-      // Connexion avec timeout
-      await Promise.race([
-        Promise.all([
-          this.client.connect(),
-          this.pubClient.connect(),
-          this.subClient.connect(),
-        ]),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Redis connection timeout")), 5000)
-        ),
-      ]);
+      await this.client.connect();
+      await this.pubClient.connect();
+      await this.subClient.connect();
 
-      this.isConnected = true;
-      this.connectionAttempts = 0;
-      console.log("✅ Redis connecté avec succès");
-      return true;
+      return this.client;
     } catch (error) {
-      console.warn(
-        `⚠️ Redis indisponible (tentative ${this.connectionAttempts}):`,
-        error.message
-      );
-
-      if (process.env.NODE_ENV === "development") {
-        console.log("💡 Solutions pour Redis:");
-        console.log("   1. Démarrer: sudo systemctl start redis-server");
-        console.log("   2. Installer: sudo apt install redis-server");
-        console.log("   3. Docker: docker run -d -p 6379:6379 redis");
-      }
-
-      return false;
-    }
-  }
-
-  getClient() {
-    return this.isConnected ? this.client : null;
-  }
-
-  getPubClient() {
-    return this.isConnected ? this.pubClient : null;
-  }
-
-  getSubClient() {
-    return this.isConnected ? this.subClient : null;
-  }
-
-  async getHealthStatus() {
-    if (!this.isConnected) return { status: "disconnected" };
-
-    try {
-      await this.client.ping();
-      return { status: "connected" };
-    } catch (error) {
-      return { status: "error", error: error.message };
+      console.error("❌ Impossible de se connecter à Redis:", error);
+      throw error;
     }
   }
 
   async disconnect() {
     try {
-      if (this.client && this.client.isOpen) await this.client.quit();
-      if (this.pubClient && this.pubClient.isOpen) await this.pubClient.quit();
-      if (this.subClient && this.subClient.isOpen) await this.subClient.quit();
+      if (this.client) await this.client.quit();
+      if (this.pubClient) await this.pubClient.quit();
+      if (this.subClient) await this.subClient.quit();
       this.isConnected = false;
-      console.log("✅ Redis déconnecté");
     } catch (error) {
       console.error("❌ Erreur déconnexion Redis:", error);
+    }
+  }
+
+  getClient() {
+    return this.client;
+  }
+
+  // ✅ AJOUT DES MÉTHODES MANQUANTES
+  createPubClient() {
+    return this.pubClient;
+  }
+
+  createSubClient() {
+    return this.subClient;
+  }
+
+  getPubClient() {
+    return this.pubClient;
+  }
+
+  getSubClient() {
+    return this.subClient;
+  }
+
+  async getHealthStatus() {
+    if (!this.isConnected || !this.client) {
+      return "Déconnecté";
+    }
+
+    try {
+      await this.client.ping();
+      return "Connecté et opérationnel";
+    } catch (error) {
+      return `Erreur: ${error.message}`;
     }
   }
 }

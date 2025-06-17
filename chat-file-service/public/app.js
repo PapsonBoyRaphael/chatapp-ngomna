@@ -1,449 +1,575 @@
-// CENADI Chat-File Service - Application JavaScript
 class ChatFileApp {
   constructor() {
-    this.socket = null;
-    this.currentConversation = null;
-    this.currentUser = null;
-    this.token = null;
-    this.isConnected = false;
-    this.settings = {
-      theme: localStorage.getItem("theme") || "light",
-      notifications: localStorage.getItem("notifications") !== "false",
-      sound: localStorage.getItem("sound") !== "false",
-    };
+    // ✅ CONFIGURATION MISE À JOUR
+    this.apiBaseUrl = "http://localhost:8003/api";
+    this.wsUrl = "http://localhost:8003";
+    this.userServiceUrl = "http://localhost:8000/api/users";
 
+    // États de l'application
+    this.socket = null;
+    this.currentUser = null;
+    this.currentView = "chat";
+    this.conversations = [];
+    this.contacts = [];
+    this.files = [];
+    this.connectionAttempts = 0;
+    this.maxReconnectAttempts = 5;
+    this.currentConversationId = "general";
+
+    // Initialiser l'application
     this.init();
   }
 
   async init() {
-    console.log("🚀 Initialisation de CENADI Chat-File Service");
+    try {
+      console.log("🚀 Initialisation ChatFileApp...");
 
-    // IMPORTANT: Récupérer le token et l'utilisateur depuis les cookies
-    this.loadUserDataFromCookies();
+      // Initialiser l'interface
+      this.initializeUI();
 
-    // Initialiser les composants
-    this.initializeElements();
-    this.initializeEventListeners();
-    this.initializeSocket();
-    this.loadSettings();
-    this.checkHealth();
+      // ✅ CHARGER LES DONNÉES UTILISATEUR DEPUIS LES COOKIES
+      this.loadUserFromCookies();
 
-    // Charger les données initiales
-    await this.loadInitialData();
+      if (this.currentUser && this.currentUser.token) {
+        // Connecter WebSocket
+        await this.connectWebSocket();
 
-    console.log("✅ Application initialisée");
-  }
-
-  /**
-   * Récupérer les données utilisateur depuis les cookies
-   */
-  loadUserDataFromCookies() {
-    // Récupérer le token depuis les cookies
-    this.token = this.getCookie('token');
-    
-    // Récupérer l'utilisateur depuis les cookies
-    const userCookie = this.getCookie('user');
-    if (userCookie) {
-      try {
-        this.currentUser = JSON.parse(decodeURIComponent(userCookie));
-      } catch (e) {
-        console.warn('⚠️ Erreur parsing user depuis cookie:', e);
+        // Charger les données initiales
+        await this.loadInitialData();
+      } else {
+        this.showLoginRedirect();
       }
+
+      console.log("✅ ChatFileApp initialisé");
+    } catch (error) {
+      console.error("❌ Erreur initialisation:", error);
+      this.showToast("Erreur d'initialisation de l'application", "error");
     }
-    
-    console.log('👤 Utilisateur chargé:', this.currentUser?.nom || 'Anonyme');
-    console.log('🔑 Token présent:', !!this.token);
-    
-    // Si pas de token, rediriger vers login
-    if (!this.token) {
-      console.warn('⚠️ Aucun token trouvé dans les cookies - redirection vers login');
-      this.redirectToLogin();
-      return;
-    }
-    
-    // Afficher les infos utilisateur
-    this.displayUserInfo();
   }
 
-  /**
-   * Récupérer un cookie par son nom
-   */
+  // ✅ NOUVELLE MÉTHODE : LIRE DEPUIS LES COOKIES
+  loadUserFromCookies() {
+    try {
+      console.log("🍪 Lecture des cookies...");
+
+      // Lire le token depuis les cookies
+      const token = this.getCookie("token");
+      const userCookie = this.getCookie("user");
+
+      console.log("🔍 Cookies trouvés:", {
+        hasToken: !!token,
+        hasUser: !!userCookie,
+        tokenStart: token ? token.substring(0, 20) + "..." : "null",
+      });
+
+      if (token && userCookie) {
+        try {
+          // Décoder les données utilisateur
+          const userData = JSON.parse(decodeURIComponent(userCookie));
+
+          this.currentUser = {
+            id: userData.id || userData.userId || `user_${Date.now()}`,
+            userId: userData.id || userData.userId,
+            nom: userData.nom || userData.name || userData.userName,
+            userName: userData.nom || userData.name || userData.userName,
+            email: userData.email,
+            poste: userData.poste || userData.role,
+            matricule: userData.matricule,
+            token: token, // ✅ TOKEN RÉEL DEPUIS LE COOKIE
+          };
+
+          // ✅ AUSSI SAUVEGARDER DANS localStorage POUR COMPATIBILITÉ
+          localStorage.setItem("chatuser", JSON.stringify(this.currentUser));
+
+          this.updateUserUI();
+          console.log("✅ Utilisateur chargé depuis les cookies:", {
+            id: this.currentUser.id,
+            nom: this.currentUser.nom,
+            hasToken: !!this.currentUser.token,
+          });
+        } catch (parseError) {
+          console.error("❌ Erreur parsing données utilisateur:", parseError);
+          this.clearAuthData();
+        }
+      } else {
+        console.log("⚠️ Pas de données d'authentification dans les cookies");
+        // ✅ FALLBACK : essayer localStorage pour le développement
+        this.loadUserFromStorage();
+      }
+    } catch (error) {
+      console.error("❌ Erreur lecture cookies:", error);
+      this.clearAuthData();
+    }
+  }
+
+  // ✅ MÉTHODE HELPER POUR LIRE LES COOKIES
   getCookie(name) {
-    const value = `; ${document.cookie}`;
-    const parts = value.split(`; ${name}=`);
-    if (parts.length === 2) return parts.pop().split(';').shift();
-    return null;
-  }
-
-  /**
-   * Rediriger vers la page de login
-   */
-  redirectToLogin() {
-    // Nettoyer les cookies et localStorage
-    document.cookie = 'token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; secure; SameSite=None;';
-    document.cookie = 'user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/; secure; SameSite=None;';
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    
-    // Rediriger vers le login
-    setTimeout(() => {
-      window.location.href = 'http://localhost:8001/';
-    }, 1000);
-  }
-
-  /**
-   * Afficher les informations utilisateur
-   */
-  displayUserInfo() {
-    if (this.currentUser && !document.querySelector('.user-info')) {
-      const userInfo = document.createElement('div');
-      userInfo.className = 'user-info';
-      userInfo.innerHTML = `
-        <div class="user-avatar">
-          <i class="fas fa-user"></i>
-        </div>
-        <div class="user-details">
-          <div class="user-name">${this.currentUser.nom}</div>
-          <div class="user-role">${this.currentUser.role || 'Utilisateur'}</div>
-        </div>
-        <button onclick="app.logout()" class="logout-btn" title="Déconnexion">
-          <i class="fas fa-sign-out-alt"></i>
-        </button>
-      `;
-      
-      // Créer un header temporaire pour afficher les infos utilisateur
-      const tempHeader = document.createElement('div');
-      tempHeader.className = 'temp-user-header';
-      tempHeader.appendChild(userInfo);
-      document.body.insertBefore(tempHeader, document.body.firstChild);
-    }
-  }
-
-  /**
-   * Déconnexion
-   */
-  logout() {
-    // Déconnecter le socket
-    if (this.socket) {
-      this.socket.disconnect();
-    }
-    
-    this.showToast('Déconnexion...', 'info');
-    this.redirectToLogin();
-  }
-
-  /**
-   * Faire des requêtes authentifiées avec le token des cookies
-   */
-  async authenticatedFetch(url, options = {}) {
-    const headers = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.token}`,
-      ...options.headers
-    };
-
-    const response = await fetch(url, {
-      ...options,
-      headers,
-      credentials: 'include' // Important pour envoyer les cookies
-    });
-
-    // Si 401, rediriger vers login
-    if (response.status === 401) {
-      this.showToast('Session expirée', 'error');
-      this.redirectToLogin();
+    try {
+      const value = `; ${document.cookie}`;
+      const parts = value.split(`; ${name}=`);
+      if (parts.length === 2) {
+        const cookieValue = parts.pop().split(";").shift();
+        return cookieValue || null;
+      }
+      return null;
+    } catch (error) {
+      console.error(`❌ Erreur lecture cookie ${name}:`, error);
       return null;
     }
-
-    return response;
   }
 
-  initializeElements() {
-    // Navigation
-    this.navLinks = document.querySelectorAll(".nav-link");
-    this.contentSections = document.querySelectorAll(".content-section");
+  // ✅ NETTOYER LES DONNÉES D'AUTHENTIFICATION
+  clearAuthData() {
+    // Supprimer les cookies
+    document.cookie = "token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+    document.cookie = "user=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
 
-    // Chat elements
-    this.conversationsList = document.getElementById("conversationsList");
-    this.messagesContainer = document.getElementById("messagesContainer");
-    this.messageInput = document.getElementById("messageInput");
-    this.sendBtn = document.getElementById("sendBtn");
-    this.chatHeader = document.getElementById("chatHeader");
+    // Supprimer localStorage
+    localStorage.removeItem("chatuser");
 
-    // Files elements
-    this.filesGrid = document.getElementById("filesGrid");
-    this.uploadBtn = document.getElementById("uploadBtn");
-    this.fileInput = document.getElementById("fileInput");
-    this.uploadArea = document.getElementById("uploadArea");
-
-    // Health elements
-    this.healthCards = {
-      mongo: document.getElementById("mongoCard"),
-      redis: document.getElementById("redisCard"),
-      kafka: document.getElementById("kafkaCard"),
-      websocket: document.getElementById("websocketCard"),
-    };
-
-    // Modals
-    this.uploadModal = document.getElementById("uploadModal");
-    this.settingsModal = document.getElementById("settingsModal");
-
-    // Status
-    this.connectionStatus = document.getElementById("connectionStatus");
-    this.toastContainer = document.getElementById("toastContainer");
+    this.currentUser = null;
   }
 
-  initializeEventListeners() {
-    // Navigation
-    this.navLinks.forEach((link) => {
-      link.addEventListener("click", (e) => {
-        e.preventDefault();
-        const section = link.dataset.section;
-        this.switchSection(section);
-      });
-    });
+  // ✅ FALLBACK POUR LE DÉVELOPPEMENT
+  loadUserFromStorage() {
+    try {
+      const userData = localStorage.getItem("chatuser");
+      if (userData) {
+        const parsed = JSON.parse(userData);
 
-    // Chat
-    this.sendBtn?.addEventListener("click", () => this.sendMessage());
-    this.messageInput?.addEventListener("keypress", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        this.sendMessage();
+        // Vérifier si on a un token valide
+        if (parsed.token && parsed.token !== "undefined") {
+          this.currentUser = parsed;
+          this.updateUserUI();
+          console.log(
+            "✅ Utilisateur chargé depuis localStorage (fallback):",
+            this.currentUser.nom
+          );
+        } else {
+          console.log("⚠️ Token invalide dans localStorage");
+          localStorage.removeItem("chatuser");
+        }
       }
-    });
-
-    // Files
-    this.uploadBtn?.addEventListener("click", () => this.openUploadModal());
-    this.fileInput?.addEventListener("change", (e) => this.handleFileSelect(e));
-
-    // Upload modal drag & drop
-    if (this.uploadArea) {
-      this.uploadArea.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        this.uploadArea.classList.add("dragover");
-      });
-
-      this.uploadArea.addEventListener("dragleave", () => {
-        this.uploadArea.classList.remove("dragover");
-      });
-
-      this.uploadArea.addEventListener("drop", (e) => {
-        e.preventDefault();
-        this.uploadArea.classList.remove("dragover");
-        this.handleFileDrop(e);
-      });
-
-      this.uploadArea.addEventListener("click", () => this.fileInput?.click());
+    } catch (error) {
+      console.error("❌ Erreur chargement localStorage:", error);
+      localStorage.removeItem("chatuser");
     }
+  }
 
-    // Settings
-    document
-      .getElementById("settingsBtn")
-      ?.addEventListener("click", () => this.openSettingsModal());
-    document
-      .getElementById("refreshHealthBtn")
-      ?.addEventListener("click", () => this.checkHealth());
+  // ✅ REDIRECTION VERS LA PAGE DE LOGIN
+  showLoginRedirect() {
+    const shouldRedirect = confirm(
+      "Vous devez être connecté pour utiliser le chat.\n\nVoulez-vous être redirigé vers la page de connexion ?"
+    );
 
-    // Modal close buttons
-    document.querySelectorAll(".close-btn").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        const modal = e.target.closest(".modal");
-        this.closeModal(modal);
-      });
-    });
+    if (shouldRedirect) {
+      window.location.href = "http://localhost:8000/auth/login";
+    } else {
+      // Mode développement : créer un utilisateur temporaire
+      this.createDevUser();
+    }
+  }
 
-    // Search
-    document
-      .getElementById("searchConversations")
-      ?.addEventListener("input", (e) => {
-        this.searchConversations(e.target.value);
-      });
+  // ✅ MODE DÉVELOPPEMENT : CRÉER UN UTILISATEUR TEMPORAIRE
+  createDevUser() {
+    console.log("🔧 Mode développement : création d'un utilisateur temporaire");
 
-    document.getElementById("searchFiles")?.addEventListener("input", (e) => {
-      this.searchFiles(e.target.value);
-    });
+    const userName = prompt("Mode développement - Nom d'utilisateur:");
+    if (userName && userName.trim()) {
+      const userId = `dev_user_${Date.now()}`;
 
-    // Window events
-    window.addEventListener("beforeunload", () => {
+      this.currentUser = {
+        id: userId,
+        userId: userId,
+        nom: userName.trim().toUpperCase(),
+        userName: userName.trim().toUpperCase(),
+        token: this.generateDevToken(userName.trim()),
+        email: `${userName.toLowerCase()}@dev.cenadi.com`,
+        poste: "Développeur",
+        matricule: `DEV${Date.now().toString().slice(-4)}`,
+      };
+
+      localStorage.setItem("chatuser", JSON.stringify(this.currentUser));
+      this.updateUserUI();
+      this.connectWebSocket();
+      this.loadInitialData();
+
+      console.log("✅ Utilisateur développement créé:", this.currentUser);
+      this.showToast(`Mode développement : ${this.currentUser.nom}`, "info");
+    }
+  }
+
+  // ✅ GÉNÉRER UN TOKEN POUR LE DÉVELOPPEMENT
+  generateDevToken(username) {
+    try {
+      const header = {
+        alg: "HS256",
+        typ: "JWT",
+      };
+
+      const currentTime = Math.floor(Date.now() / 1000);
+      const userId = `dev_user_${Date.now()}`;
+
+      const payload = {
+        id: userId,
+        userId: userId,
+        nom: username.toUpperCase(),
+        userName: username.toUpperCase(),
+        email: `${username.toLowerCase()}@dev.cenadi.com`,
+        iat: currentTime,
+        exp: currentTime + 24 * 60 * 60,
+        iss: "chat-file-service-dev",
+        aud: "chat-users",
+      };
+
+      const encodedHeader = this.base64UrlEncode(JSON.stringify(header));
+      const encodedPayload = this.base64UrlEncode(JSON.stringify(payload));
+      const signature = this.base64UrlEncode(
+        `dev-signature-${userId}-${currentTime}`
+      );
+
+      return `${encodedHeader}.${encodedPayload}.${signature}`;
+    } catch (error) {
+      console.error("❌ Erreur génération token dev:", error);
+      return `dev-token-${username}-${Date.now()}`;
+    }
+  }
+
+  base64UrlEncode(str) {
+    try {
+      return btoa(unescape(encodeURIComponent(str)))
+        .replace(/=/g, "")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_");
+    } catch (error) {
+      console.error("❌ Erreur encoding base64:", error);
+      return btoa(str);
+    }
+  }
+
+  // ✅ AMÉLIORER LA CONNEXION WEBSOCKET AVEC LE VRAI TOKEN
+  async connectWebSocket() {
+    try {
       if (this.socket) {
         this.socket.disconnect();
       }
-    });
-  }
 
-  initializeSocket() {
-    try {
-      // Vérifier si on a un token
-      if (!this.token) {
-        console.warn('⚠️ Aucun token pour WebSocket - arrêt de la connexion');
-        return;
+      if (!this.currentUser || !this.currentUser.token) {
+        throw new Error("Aucun token d'authentification disponible");
       }
 
-      console.log('🔌 Initialisation WebSocket avec token:', this.token.substring(0, 20) + '...');
+      console.log("🔌 Connexion WebSocket avec token authentique...");
 
-      // Connexion WebSocket avec le token
-      this.socket = io("http://localhost:8003", {
+      this.socket = io(this.wsUrl, {
         transports: ["websocket", "polling"],
-        autoConnect: false,
+        timeout: 10000,
+        reconnection: true,
+        reconnectionAttempts: this.maxReconnectAttempts,
+        reconnectionDelay: 2000,
+        autoConnect: true,
+        forceNew: false,
+        // ✅ ENVOYER LE TOKEN DANS L'AUTH
         auth: {
-          token: this.token
+          token: this.currentUser.token,
         },
-        extraHeaders: {
-          'Authorization': `Bearer ${this.token}`
+        query: {
+          userId: this.currentUser.id,
+          userName: this.currentUser.nom,
         },
-        withCredentials: true // Important pour les cookies
       });
 
+      // ✅ ÉVÉNEMENTS WEBSOCKET AMÉLIORÉS
       this.socket.on("connect", () => {
-        console.log("✅ WebSocket connecté avec succès");
-        this.isConnected = true;
+        console.log("✅ WebSocket connecté");
         this.updateConnectionStatus(true);
-        this.updateHealthCard("websocket", true, "Connecté");
-        this.showToast('Connexion WebSocket établie', 'success');
+        this.connectionAttempts = 0;
+
+        // ✅ AUTHENTIFICATION AVEC LE VRAI TOKEN
+        const authData = {
+          userId: this.currentUser.id || this.currentUser.userId,
+          userName: this.currentUser.nom || this.currentUser.userName,
+          token: this.currentUser.token,
+        };
+
+        console.log("🔐 Authentification WebSocket:", {
+          userId: authData.userId,
+          userName: authData.userName,
+          hasToken: !!authData.token,
+          tokenStart: authData.token
+            ? authData.token.substring(0, 20) + "..."
+            : "null",
+        });
+
+        this.socket.emit("authenticate", authData);
+      });
+
+      this.socket.on("authenticated", (data) => {
+        console.log("✅ Authentification WebSocket réussie:", data);
+        this.showToast(
+          `Connecté en tant que ${data.userName || data.nom}`,
+          "success"
+        );
+
+        // Rejoindre la conversation générale
+        this.socket.emit("joinConversation", {
+          conversationId: this.currentConversationId,
+        });
+      });
+
+      this.socket.on("auth_error", (error) => {
+        console.error("❌ Erreur authentification WebSocket:", error);
+        this.showToast(
+          `Erreur d'authentification: ${error.message || "Token invalide"}`,
+          "error"
+        );
+
+        // ✅ EN CAS D'ERREUR DE TOKEN, REDIRIGER VERS LOGIN
+        if (error.message && error.message.includes("token")) {
+          setTimeout(() => {
+            this.clearAuthData();
+            this.showLoginRedirect();
+          }, 2000);
+        }
+      });
+
+      this.socket.on("error", (error) => {
+        console.error("❌ Erreur WebSocket:", error);
+        this.showToast(
+          `Erreur de connexion: ${error.message || "Erreur inconnue"}`,
+          "error"
+        );
       });
 
       this.socket.on("disconnect", (reason) => {
-        console.log("❌ WebSocket déconnecté:", reason);
-        this.isConnected = false;
+        console.log("🔌 WebSocket déconnecté:", reason);
         this.updateConnectionStatus(false);
-        this.updateHealthCard("websocket", false, "Déconnecté");
-        
-        if (reason === 'io server disconnect') {
-          // Le serveur a forcé la déconnexion, probablement token invalide
-          this.showToast('Session expirée - reconnexion...', 'warning');
-          this.redirectToLogin();
+
+        if (reason === "io server disconnect") {
+          setTimeout(() => this.connectWebSocket(), 3000);
         }
       });
 
-      this.socket.on("connect_error", (error) => {
-        console.warn("⚠️ Erreur WebSocket:", error.message);
-        this.updateConnectionStatus(false);
-        this.updateHealthCard("websocket", false, "Erreur: " + error.message);
-        
-        if (error.message.includes('authentication') || 
-            error.message.includes('token') || 
-            error.message.includes('unauthorized')) {
-          this.showToast('Authentification échouée', 'error');
-          this.redirectToLogin();
-        } else {
-          this.showToast('Erreur de connexion WebSocket', 'error');
-        }
+      this.socket.on("reconnect_failed", () => {
+        console.error("❌ Impossible de se reconnecter au WebSocket");
+        this.showToast(
+          "Connexion perdue - Veuillez rafraîchir la page",
+          "error"
+        );
       });
 
-      this.socket.on("message", (data) => {
-        this.handleNewMessage(data);
+      // ✅ ÉVÉNEMENTS DE CHAT
+      this.socket.on("newMessage", (message) => this.handleNewMessage(message));
+      this.socket.on("messageStatus", (status) =>
+        this.updateMessageStatus(status)
+      );
+      this.socket.on("userTyping", (data) => this.showTypingIndicator(data));
+      this.socket.on("userStoppedTyping", (data) =>
+        this.hideTypingIndicator(data)
+      );
+
+      this.socket.on("user_connected", (data) => {
+        console.log("👤 Utilisateur connecté:", data);
+        this.showToast(`${data.userName} s'est connecté`, "info");
       });
 
-      this.socket.on("file_uploaded", (data) => {
-        this.handleFileUploaded(data);
+      this.socket.on("user_disconnected", (data) => {
+        console.log("👤 Utilisateur déconnecté:", data);
+        this.showToast(`${data.userName} s'est déconnecté`, "info");
       });
 
-      this.socket.on("conversation_updated", (data) => {
-        this.handleConversationUpdated(data);
+      this.socket.on("conversation_joined", (data) => {
+        console.log("💬 Conversation rejointe:", data);
       });
-
-      // Événement de confirmation de connexion
-      this.socket.on("connected", (data) => {
-        console.log("🎉 Connexion confirmée:", data);
-        this.showToast(`Bienvenue ${data.userName}!`, 'success');
-      });
-
-      // Connecter
-      this.socket.connect();
     } catch (error) {
-      console.warn("⚠️ WebSocket non disponible:", error.message);
-      this.updateConnectionStatus(false);
+      console.error("❌ Erreur connexion WebSocket:", error);
+      this.showToast("Erreur de connexion WebSocket", "error");
     }
   }
 
-  async loadInitialData() {
-    try {
-      // Charger les conversations
-      await this.loadConversations();
-
-      // Charger les fichiers
-      await this.loadFiles();
-
-      // Charger les informations système
-      await this.loadSystemInfo();
-    } catch (error) {
-      console.error("❌ Erreur chargement données initiales:", error);
-      this.showToast("Erreur lors du chargement des données", "error");
+  // ✅ AMÉLIORER LES REQUÊTES API AVEC LE VRAI TOKEN
+  async makeAuthenticatedRequest(url, options = {}) {
+    if (!this.currentUser || !this.currentUser.token) {
+      throw new Error("Utilisateur non authentifié");
     }
+
+    const defaultHeaders = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${this.currentUser.token}`,
+      "user-id": this.currentUser.id || this.currentUser.userId,
+      "user-name": this.currentUser.nom || this.currentUser.userName,
+    };
+
+    const mergedOptions = {
+      ...options,
+      headers: {
+        ...defaultHeaders,
+        ...options.headers,
+      },
+    };
+
+    console.log(`🌐 Requête API: ${options.method || "GET"} ${url}`);
+    return fetch(url, mergedOptions);
   }
 
+  // ✅ ADAPTER TOUTES LES MÉTHODES DE CHARGEMENT
   async loadConversations() {
     try {
-      const response = await this.authenticatedFetch("/api/conversations");
-      
-      if (!response) return; // Redirection déjà gérée
+      console.log("📋 Chargement des conversations...");
+
+      const response = await this.makeAuthenticatedRequest(
+        `${this.apiBaseUrl}/conversations`
+      );
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        if (response.status === 401) {
+          this.handleAuthError("Session expirée");
+          return;
+        }
+        if (response.status === 404) {
+          this.conversations = [];
+          this.renderConversations();
+          console.log("📋 Aucune conversation trouvée");
+          return;
+        }
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
       const data = await response.json();
 
       if (data.success && data.data) {
-        this.renderConversations(data.data);
+        this.conversations = Array.isArray(data.data.conversations)
+          ? data.data.conversations
+          : Array.isArray(data.data)
+          ? data.data
+          : [];
+
+        this.renderConversations();
+        console.log(`✅ ${this.conversations.length} conversations chargées`);
       } else {
-        console.log("📭 Aucune conversation trouvée");
-        this.renderEmptyConversations();
+        this.conversations = [];
+        this.renderConversations();
       }
     } catch (error) {
-      console.warn(
-        "⚠️ Impossible de charger les conversations:",
-        error.message
+      console.error("❌ Erreur chargement conversations:", error);
+      this.conversations = [];
+      this.renderConversations();
+      this.showToast(
+        `Impossible de charger les conversations: ${error.message}`,
+        "error"
       );
-      this.renderConversationsError();
     }
   }
 
   async loadFiles() {
     try {
-      const response = await this.authenticatedFetch("/api/files/conversation/all");
-      
-      if (!response) return;
+      console.log("📁 Chargement des fichiers...");
+
+      const response = await this.makeAuthenticatedRequest(
+        `${this.apiBaseUrl}/files`
+      );
 
       if (!response.ok) {
+        if (response.status === 401) {
+          this.handleAuthError("Session expirée");
+          return;
+        }
+        if (response.status === 404) {
+          this.files = [];
+          this.renderFiles();
+          console.log("📁 Aucun fichier trouvé");
+          return;
+        }
         throw new Error(`HTTP ${response.status}`);
       }
 
       const data = await response.json();
 
       if (data.success && data.data) {
-        this.renderFiles(data.data);
+        this.files = Array.isArray(data.data.files)
+          ? data.data.files
+          : Array.isArray(data.data)
+          ? data.data
+          : [];
       } else {
-        this.renderEmptyFiles();
+        this.files = [];
       }
+
+      this.renderFiles();
+      console.log(`✅ ${this.files.length} fichiers chargés`);
     } catch (error) {
-      console.warn("⚠️ Impossible de charger les fichiers:", error.message);
-      this.renderFilesError();
+      console.error("❌ Erreur chargement fichiers:", error);
+      this.files = [];
+      this.renderFiles();
+      this.showToast("Service de fichiers indisponible", "warning");
     }
   }
 
+  // ✅ GESTION DES ERREURS D'AUTHENTIFICATION
+  handleAuthError(message) {
+    console.error("🔒 Erreur d'authentification:", message);
+    this.showToast(message, "error");
+
+    setTimeout(() => {
+      this.clearAuthData();
+      this.showLoginRedirect();
+    }, 2000);
+  }
+
+  // ✅ AMÉLIORER L'ENVOI DE MESSAGES
   async sendMessage() {
-    const content = this.messageInput?.value?.trim();
-    if (!content || !this.currentConversation) return;
+    const input = document.getElementById("messageInput");
+    const content = input?.value?.trim();
+
+    if (!content || !this.currentUser) {
+      return;
+    }
 
     try {
-      const messageData = {
-        conversationId: this.currentConversation,
-        content: content,
-        type: "TEXT",
-      };
+      // Envoyer via WebSocket si disponible
+      if (this.socket && this.socket.connected) {
+        this.socket.emit("sendMessage", {
+          content: content,
+          senderId: this.currentUser.id || this.currentUser.userId,
+          senderName: this.currentUser.nom || this.currentUser.userName,
+          conversationId: this.currentConversationId,
+          type: "TEXT",
+        });
 
-      // Envoyer via API authentifiée
-      const response = await this.authenticatedFetch("/api/messages", {
-        method: "POST",
-        body: JSON.stringify(messageData),
-      });
+        input.value = "";
+        console.log("📤 Message envoyé via WebSocket");
 
-      if (response && response.ok) {
-        this.messageInput.value = "";
-        // Le message sera ajouté via WebSocket
+        // Ajouter le message à l'interface immédiatement
+        this.addMessageToUI({
+          id: `temp_${Date.now()}`,
+          content: content,
+          senderId: this.currentUser.id,
+          senderName: this.currentUser.nom,
+          timestamp: new Date(),
+          conversationId: this.currentConversationId,
+        });
       } else {
-        throw new Error("Erreur envoi message");
+        // Fallback API REST
+        const response = await this.makeAuthenticatedRequest(
+          `${this.apiBaseUrl}/messages`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              content: content,
+              conversationId: this.currentConversationId,
+              type: "TEXT",
+            }),
+          }
+        );
+
+        if (response.ok) {
+          input.value = "";
+          console.log("📤 Message envoyé via API REST");
+          this.showToast("Message envoyé", "success");
+        } else if (response.status === 401) {
+          this.handleAuthError("Session expirée");
+        } else {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
       }
     } catch (error) {
       console.error("❌ Erreur envoi message:", error);
@@ -451,333 +577,578 @@ class ChatFileApp {
     }
   }
 
-  // Toast notifications avec container automatique
+  // ✅ GESTION DES ÉVÉNEMENTS WEBSOCKET
+  handleNewMessage(message) {
+    console.log("💬 Nouveau message reçu:", message);
+    this.showToast(
+      `Nouveau message de ${message.senderName || "Utilisateur"}`,
+      "info"
+    );
+
+    // Mettre à jour l'interface si on est dans la bonne conversation
+    if (message.conversationId === this.currentConversationId) {
+      this.addMessageToUI(message);
+    }
+  }
+
+  updateMessageStatus(status) {
+    console.log("📝 Statut message mis à jour:", status);
+    // Mettre à jour l'interface selon le statut
+  }
+
+  showTypingIndicator(data) {
+    console.log("⌨️ Indicateur de frappe:", data);
+    // Afficher l'indicateur de frappe
+  }
+
+  // Navigation
+  initializeUI() {
+    const navLinks = document.querySelectorAll(".nav-link");
+    navLinks.forEach((link) => {
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        const view = e.currentTarget.dataset.view;
+        this.switchView(view);
+      });
+    });
+
+    // Boutons d'action
+    this.bindEventListeners();
+
+    // Interface par défaut
+    this.updateConnectionStatus(false);
+  }
+
+  bindEventListeners() {
+    // Bouton de paramètres
+    const settingsBtn = document.getElementById("settingsBtn");
+    if (settingsBtn) {
+      settingsBtn.addEventListener("click", () => this.showSettings());
+    }
+
+    // Bouton nouveau chat
+    const newChatBtn = document.getElementById("newChatBtn");
+    if (newChatBtn) {
+      newChatBtn.addEventListener("click", () => this.showNewChatModal());
+    }
+
+    // Bouton upload fichier
+    const uploadBtn = document.getElementById("uploadBtn");
+    if (uploadBtn) {
+      uploadBtn.addEventListener("click", () => this.showUploadModal());
+    }
+
+    // Envoi de message
+    const sendBtn = document.getElementById("sendBtn");
+    const messageInput = document.getElementById("messageInput");
+
+    if (sendBtn && messageInput) {
+      sendBtn.addEventListener("click", () => this.sendMessage());
+      messageInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          this.sendMessage();
+        }
+      });
+    }
+
+    // Recherche contacts
+    const contactSearch = document.getElementById("contactSearch");
+    if (contactSearch) {
+      contactSearch.addEventListener("input", (e) => {
+        this.filterContacts(e.target.value);
+      });
+    }
+
+    // Recherche fichiers
+    const fileSearch = document.getElementById("fileSearch");
+    if (fileSearch) {
+      fileSearch.addEventListener("input", (e) => {
+        this.filterFiles(e.target.value);
+      });
+    }
+
+    // Rafraîchir données
+    const refreshButtons = document.querySelectorAll('[data-action="refresh"]');
+    refreshButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const section = btn.dataset.section;
+        this.refreshSection(section);
+      });
+    });
+  }
+
+  switchView(view) {
+    // Masquer toutes les sections
+    const sections = document.querySelectorAll(".content-section");
+    sections.forEach((section) => section.classList.remove("active"));
+
+    // Afficher la section demandée
+    const targetSection = document.getElementById(`${view}Section`);
+    if (targetSection) {
+      targetSection.classList.add("active");
+    }
+
+    // Mettre à jour la navigation
+    const navLinks = document.querySelectorAll(".nav-link");
+    navLinks.forEach((link) => {
+      link.classList.remove("active");
+      if (link.dataset.view === view) {
+        link.classList.add("active");
+      }
+    });
+
+    this.currentView = view;
+
+    // Charger les données spécifiques à la vue
+    this.loadViewData(view);
+  }
+
+  async loadViewData(view) {
+    try {
+      switch (view) {
+        case "chat":
+          await this.loadConversations();
+          break;
+        case "contacts":
+          await this.loadContacts();
+          break;
+        case "files":
+          await this.loadFiles();
+          break;
+        case "api":
+          this.loadApiDocumentation();
+          break;
+        case "health":
+          await this.loadHealthData();
+          break;
+      }
+    } catch (error) {
+      console.error(`❌ Erreur chargement vue ${view}:`, error);
+      this.showToast(`Erreur de chargement des données ${view}`, "error");
+    }
+  }
+
+  async loadInitialData() {
+    try {
+      console.log("📊 Chargement des données initiales...");
+
+      // Charger les conversations
+      await this.loadConversations();
+
+      // Charger les contacts
+      await this.loadContacts();
+
+      console.log("✅ Données initiales chargées");
+    } catch (error) {
+      console.error("❌ Erreur chargement données initiales:", error);
+      this.showToast("Erreur de chargement des données", "error");
+    }
+  }
+
+  renderConversations() {
+    const container = document.getElementById("conversationsList");
+    if (!container) return;
+
+    if (this.conversations.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state">
+          <i class="fas fa-comments"></i>
+          <h3>Aucune conversation</h3>
+          <p>Commencez une nouvelle conversation</p>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = this.conversations
+      .map(
+        (conv) => `
+      <div class="conversation-item" data-id="${conv.id}">
+        <div class="conversation-avatar">
+          <i class="fas fa-user"></i>
+        </div>
+        <div class="conversation-info">
+          <div class="conversation-name">${conv.name || "Conversation"}</div>
+          <div class="last-message">${conv.lastMessage || "Aucun message"}</div>
+        </div>
+        <div class="conversation-meta">
+          <div class="timestamp">${this.formatTime(conv.updatedAt)}</div>
+          ${
+            conv.unreadCount
+              ? `<div class="unread-badge">${conv.unreadCount}</div>`
+              : ""
+          }
+        </div>
+      </div>
+    `
+      )
+      .join("");
+  }
+
+  renderContacts() {
+    const container = document.getElementById("contactsGrid");
+    if (!container) return;
+
+    if (this.contacts.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state">
+          <i class="fas fa-address-book"></i>
+          <h3>Aucun contact</h3>
+          <p>Les contacts s'afficheront ici</p>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = this.contacts
+      .map(
+        (contact) => `
+      <div class="contact-card" data-id="${contact.id}">
+        <div class="contact-avatar">
+          <span>${contact.nom.charAt(0)}</span>
+          <div class="status-indicator ${contact.statut}"></div>
+        </div>
+        <div class="contact-info">
+          <div class="contact-name">${contact.nom}</div>
+          <div class="contact-matricule">${contact.matricule}</div>
+          <div class="contact-role">${contact.poste}</div>
+          <div class="contact-status ${contact.statut}">
+            <i class="fas fa-circle"></i>
+            <span>${
+              contact.statut === "online" ? "En ligne" : "Hors ligne"
+            }</span>
+          </div>
+        </div>
+        <div class="contact-actions">
+          <button class="action-btn" onclick="app.startChat('${
+            contact.id
+          }')" title="Démarrer une conversation">
+            <i class="fas fa-comment"></i>
+          </button>
+          <button class="action-btn" onclick="app.showContactDetails('${
+            contact.id
+          }')" title="Voir les détails">
+            <i class="fas fa-info"></i>
+          </button>
+        </div>
+      </div>
+    `
+      )
+      .join("");
+  }
+
+  renderFiles() {
+    const container = document.getElementById("filesGrid");
+    if (!container) return;
+
+    if (this.files.length === 0) {
+      container.innerHTML = `
+        <div class="empty-state">
+          <i class="fas fa-folder-open"></i>
+          <h3>Aucun fichier</h3>
+          <p>Vos fichiers partagés apparaîtront ici</p>
+          <button class="btn btn-primary" onclick="app.showUploadModal()">
+            <i class="fas fa-upload"></i>
+            Uploader un fichier
+          </button>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = this.files
+      .map(
+        (file) => `
+      <div class="file-card" data-id="${file.id}">
+        <div class="file-icon">
+          <i class="fas ${this.getFileIcon(file.type)}"></i>
+        </div>
+        <div class="file-info">
+          <div class="file-name">${file.name}</div>
+          <div class="file-size">${this.formatFileSize(file.size)}</div>
+          <div class="file-date">${this.formatTime(file.uploadedAt)}</div>
+        </div>
+        <div class="file-actions">
+          <button class="action-btn" onclick="app.downloadFile('${
+            file.id
+          }')" title="Télécharger">
+            <i class="fas fa-download"></i>
+          </button>
+          <button class="action-btn" onclick="app.shareFile('${
+            file.id
+          }')" title="Partager">
+            <i class="fas fa-share"></i>
+          </button>
+        </div>
+      </div>
+    `
+      )
+      .join("");
+  }
+
+  updateContactsStats() {
+    const total = this.contacts.length;
+    const online = this.contacts.filter((c) => c.statut === "online").length;
+    const offline = total - online;
+
+    document.getElementById("totalContacts").textContent = total;
+    document.getElementById("onlineContacts").textContent = online;
+    document.getElementById("offlineContacts").textContent = offline;
+  }
+
+  updateConnectionStatus(connected) {
+    const indicator = document.getElementById("connectionStatus");
+    if (indicator) {
+      indicator.innerHTML = connected
+        ? '<i class="fas fa-circle"></i> Connecté'
+        : '<i class="fas fa-circle"></i> Déconnecté';
+      indicator.className = `connection-status ${
+        connected ? "connected" : "disconnected"
+      }`;
+    }
+  }
+
+  updateUserUI() {
+    if (this.currentUser) {
+      const userNameEl = document.getElementById("userName");
+      const userRoleEl = document.getElementById("userRole");
+      const userAvatarEl = document.getElementById("userAvatar");
+
+      if (userNameEl) userNameEl.textContent = this.currentUser.nom;
+      if (userRoleEl)
+        userRoleEl.textContent = this.currentUser.poste || "Utilisateur";
+      if (userAvatarEl)
+        userAvatarEl.textContent = this.currentUser.nom.charAt(0);
+    }
+  }
+
+  // Utilitaires
+  formatTime(timestamp) {
+    if (!timestamp) return "";
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = now - date;
+
+    if (diff < 60000) return "À l'instant";
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
+    return date.toLocaleDateString();
+  }
+
+  formatFileSize(bytes) {
+    if (!bytes) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+  }
+
+  getFileIcon(type) {
+    const icons = {
+      image: "fa-image",
+      video: "fa-video",
+      audio: "fa-music",
+      pdf: "fa-file-pdf",
+      doc: "fa-file-word",
+      xls: "fa-file-excel",
+      zip: "fa-file-archive",
+    };
+    return icons[type] || "fa-file";
+  }
+
+  getServiceIcon(service) {
+    const icons = {
+      mongodb: "fa-database",
+      redis: "fa-memory",
+      kafka: "fa-stream",
+      websocket: "fa-plug",
+    };
+    return icons[service.toLowerCase()] || "fa-cog";
+  }
+
   showToast(message, type = "info") {
+    const container =
+      document.getElementById("toastContainer") || this.createToastContainer();
+
     const toast = document.createElement("div");
     toast.className = `toast ${type}`;
     toast.innerHTML = `
-      <i class="fas fa-${this.getToastIcon(type)}"></i>
+      <i class="fas ${this.getToastIcon(type)}"></i>
       <span>${message}</span>
       <button onclick="this.parentElement.remove()">
         <i class="fas fa-times"></i>
       </button>
     `;
 
-    // Créer le container s'il n'existe pas
-    if (!this.toastContainer) {
-      this.toastContainer = document.createElement('div');
-      this.toastContainer.id = 'toastContainer';
-      this.toastContainer.className = 'toast-container';
-      document.body.appendChild(this.toastContainer);
-    }
+    container.appendChild(toast);
 
-    this.toastContainer.appendChild(toast);
-
-    // Auto-remove après 5 secondes
     setTimeout(() => {
-      if (toast.parentNode) {
+      if (toast.parentElement) {
         toast.remove();
       }
     }, 5000);
   }
 
-  updateConnectionStatus(isConnected) {
-    if (!this.connectionStatus) return;
-
-    const indicator = this.connectionStatus.querySelector("i");
-    const text = this.connectionStatus.querySelector("span");
-
-    if (isConnected) {
-      if (indicator) indicator.style.color = "var(--success-color, #10b981)";
-      if (text) text.textContent = "Connecté";
-    } else {
-      if (indicator) indicator.style.color = "var(--danger-color, #ef4444)";
-      if (text) text.textContent = "Déconnecté";
-    }
-  }
-
-  updateHealthCard(service, isHealthy, status) {
-    const card = this.healthCards[service];
-    if (!card) return;
-
-    const indicator = card.querySelector(".status-indicator");
-    const text = card.querySelector(".status-text");
-
-    if (indicator) {
-      indicator.className = `status-indicator ${isHealthy ? "active" : "error"}`;
-      indicator.style.backgroundColor = isHealthy
-        ? "var(--success-color, #10b981)"
-        : "var(--danger-color, #ef4444)";
-    }
-
-    if (text) {
-      text.textContent = status;
-    }
+  createToastContainer() {
+    const container = document.createElement("div");
+    container.id = "toastContainer";
+    container.className = "toast-container";
+    document.body.appendChild(container);
+    return container;
   }
 
   getToastIcon(type) {
     const icons = {
-      success: "check-circle",
-      error: "exclamation-circle",
-      warning: "exclamation-triangle",
-      info: "info-circle",
+      success: "fa-check-circle",
+      error: "fa-exclamation-circle",
+      warning: "fa-exclamation-triangle",
+      info: "fa-info-circle",
     };
-    return icons[type] || "info-circle";
+    return icons[type] || "fa-info-circle";
   }
 
-  // Garder toutes les autres méthodes existantes...
-  async loadSystemInfo() {
-    try {
-      const response = await fetch("/health");
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      this.renderSystemInfo(data);
-    } catch (error) {
-      console.warn("⚠️ Impossible de charger les infos système:", error.message);
+  // Méthodes pour les actions utilisateur
+  startChat(contactId) {
+    console.log("💬 Démarrer chat avec:", contactId);
+    this.switchView("chat");
+    // TODO: Implémenter la création de conversation
+    this.showToast("Fonctionnalité en cours de développement", "info");
+  }
+
+  showContactDetails(contactId) {
+    const contact = this.contacts.find((c) => c.id == contactId);
+    if (contact) {
+      console.log("👤 Détails contact:", contact);
+      // TODO: Afficher modal avec détails
+      this.showToast(`Détails de ${contact.nom}`, "info");
     }
   }
 
-  renderConversations(conversations) {
-    if (!this.conversationsList) return;
-    this.conversationsList.innerHTML = conversations
-      .map(conv => `
-        <div class="conversation-item" data-id="${conv.id}" onclick="app.selectConversation('${conv.id}')">
-          <div class="conversation-avatar"><i class="fas fa-user"></i></div>
-          <div class="conversation-details">
-            <div class="conversation-name">${conv.name || "Conversation"}</div>
-            <div class="conversation-last-message">${conv.lastMessage || "Aucun message"}</div>
-          </div>
-          <div class="conversation-meta">
-            <span class="conversation-time">${this.formatTime(conv.updatedAt)}</span>
-            ${conv.unreadCount ? `<span class="unread-badge">${conv.unreadCount}</span>` : ""}
-          </div>
-        </div>
-      `).join("");
+  downloadFile(fileId) {
+    console.log("📥 Télécharger fichier:", fileId);
+    // TODO: Implémenter le téléchargement
+    this.showToast("Fonctionnalité en cours de développement", "info");
   }
 
-  renderEmptyConversations() {
-    if (!this.conversationsList) return;
-    this.conversationsList.innerHTML = `
-      <div class="empty-state">
-        <i class="fas fa-comments"></i>
-        <p>Aucune conversation</p>
-        <button class="btn btn-primary" onclick="app.createNewConversation()">Nouvelle conversation</button>
+  shareFile(fileId) {
+    console.log("📤 Partager fichier:", fileId);
+    // TODO: Implémenter le partage
+    this.showToast("Fonctionnalité en cours de développement", "info");
+  }
+
+  showSettings() {
+    console.log("⚙️ Afficher paramètres");
+    this.showToast("Paramètres en cours de développement", "info");
+  }
+
+  showNewChatModal() {
+    console.log("💬 Nouveau chat");
+    this.showToast("Fonctionnalité en cours de développement", "info");
+  }
+
+  showUploadModal() {
+    console.log("📤 Upload fichier");
+    this.showToast("Fonctionnalité en cours de développement", "info");
+  }
+
+  loadApiDocumentation() {
+    const container = document.getElementById("apiEndpoints");
+    if (!container) return;
+
+    const endpoints = [
+      {
+        group: "Messages",
+        endpoints: [
+          {
+            method: "GET",
+            url: "/api/messages",
+            description: "Récupérer les messages",
+          },
+          {
+            method: "POST",
+            url: "/api/messages",
+            description: "Envoyer un message",
+          },
+          {
+            method: "PUT",
+            url: "/api/messages/:id/status",
+            description: "Marquer comme lu",
+          },
+        ],
+      },
+      {
+        group: "Conversations",
+        endpoints: [
+          {
+            method: "GET",
+            url: "/api/conversations",
+            description: "Lister les conversations",
+          },
+          {
+            method: "GET",
+            url: "/api/conversations/:id",
+            description: "Détails conversation",
+          },
+          {
+            method: "POST",
+            url: "/api/conversations",
+            description: "Créer conversation",
+          },
+        ],
+      },
+      {
+        group: "Fichiers",
+        endpoints: [
+          {
+            method: "GET",
+            url: "/api/files",
+            description: "Lister les fichiers",
+          },
+          {
+            method: "POST",
+            url: "/api/files/upload",
+            description: "Uploader un fichier",
+          },
+          {
+            method: "GET",
+            url: "/api/files/:id",
+            description: "Télécharger fichier",
+          },
+        ],
+      },
+    ];
+
+    container.innerHTML = endpoints
+      .map(
+        (group) => `
+      <div class="endpoint-group">
+        <h3>${group.group}</h3>
+        ${group.endpoints
+          .map(
+            (ep) => `
+          <div class="endpoint">
+            <span class="method ${ep.method.toLowerCase()}">${ep.method}</span>
+            <span class="url">${ep.url}</span>
+            <span class="description">${ep.description}</span>
+          </div>
+        `
+          )
+          .join("")}
       </div>
-    `;
+    `
+      )
+      .join("");
   }
-
-  formatTime(timestamp) {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diff = now - date;
-    if (diff < 24 * 60 * 60 * 1000) {
-      return date.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-    } else {
-      return date.toLocaleDateString("fr-FR");
-    }
-  }
-
-  // Méthodes stub pour éviter les erreurs
-  renderConversationsError() { console.log('Error loading conversations'); }
-  renderFiles() { console.log('Rendering files...'); }
-  renderEmptyFiles() { console.log('No files found'); }
-  renderFilesError() { console.log('Error loading files'); }
-  renderSystemInfo() { console.log('Rendering system info...'); }
-  checkHealth() { console.log('Health check...'); }
-  loadSettings() { document.body.setAttribute("data-theme", this.settings.theme); }
-  switchSection() { console.log('Switching section...'); }
-  searchConversations() { console.log('Searching conversations...'); }
-  searchFiles() { console.log('Searching files...'); }
-  openUploadModal() { console.log('Opening upload modal...'); }
-  openSettingsModal() { console.log('Opening settings modal...'); }
-  closeModal() { console.log('Closing modal...'); }
-  handleFileSelect() { console.log('File selected...'); }
-  handleFileDrop() { console.log('File dropped...'); }
-  createNewConversation() { this.showToast("Fonction en développement", "info"); }
-  selectConversation() { console.log('Selecting conversation...'); }
-  loadMessages() { console.log('Loading messages...'); }
-  renderMessages() { console.log('Rendering messages...'); }
-  renderEmptyMessages() { console.log('No messages found'); }
-  renderMessagesError() { console.log('Error loading messages'); }
-  updateChatHeader() { console.log('Updating chat header...'); }
-  handleNewMessage() { console.log('New message received...'); }
-  handleFileUploaded() { console.log('File uploaded...'); }
-  handleConversationUpdated() { console.log('Conversation updated...'); }
-  uploadFile() { console.log('Uploading file...'); }
-  downloadFile() { console.log('Downloading file...'); }
-  deleteFile() { console.log('Deleting file...'); }
-  shareFile() { this.showToast("Lien de partage copié", "success"); }
-  showUploadProgress() { console.log('Showing upload progress...'); }
-  hideUploadProgress() { console.log('Hiding upload progress...'); }
-  updateHealthFromAPI() { console.log('Updating health from API...'); }
-  updateSetting() { console.log('Setting updated...'); }
-  formatFileSize() { return '0 B'; }
-  getFileIcon() { return 'file'; }
 }
 
-// Initialiser l'application quand le DOM est prêt
+// Initialisation globale
+let app;
 document.addEventListener("DOMContentLoaded", () => {
-  window.app = new ChatFileApp();
+  app = new ChatFileApp();
 });
 
-// Styles CSS pour l'interface utilisateur
-const additionalStyles = `
-  .temp-user-header {
-    position: fixed;
-    top: 1rem;
-    right: 1rem;
-    z-index: 1000;
-    background: #3b82f6;
-    padding: 0.5rem 1rem;
-    border-radius: 0.5rem;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-  }
-  
-  .user-info {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-  }
-  
-  .user-avatar {
-    width: 32px;
-    height: 32px;
-    background: rgba(255, 255, 255, 0.2);
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: white;
-  }
-  
-  .user-details {
-    display: flex;
-    flex-direction: column;
-  }
-  
-  .user-name {
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: white;
-  }
-  
-  .user-role {
-    font-size: 0.75rem;
-    color: rgba(255, 255, 255, 0.8);
-  }
-  
-  .logout-btn {
-    background: none;
-    border: none;
-    color: rgba(255, 255, 255, 0.8);
-    cursor: pointer;
-    padding: 0.25rem;
-    border-radius: 0.25rem;
-    transition: all 0.2s;
-  }
-  
-  .logout-btn:hover {
-    color: white;
-    background: rgba(255, 255, 255, 0.1);
-  }
-  
-  .toast-container {
-    position: fixed;
-    top: 1rem;
-    right: 1rem;
-    z-index: 9999;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    pointer-events: none;
-  }
-  
-  .toast {
-    background: white;
-    border-radius: 0.5rem;
-    padding: 1rem;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    min-width: 300px;
-    animation: slideIn 0.3s ease-out;
-    pointer-events: auto;
-  }
-  
-  .toast.success { border-left: 4px solid #10b981; }
-  .toast.error { border-left: 4px solid #ef4444; }
-  .toast.warning { border-left: 4px solid #f59e0b; }
-  .toast.info { border-left: 4px solid #3b82f6; }
-  
-  .toast i { font-size: 1.25rem; }
-  .toast.success i { color: #10b981; }
-  .toast.error i { color: #ef4444; }
-  .toast.warning i { color: #f59e0b; }
-  .toast.info i { color: #3b82f6; }
-  
-  .toast span { flex: 1; font-size: 0.875rem; }
-  
-  .toast button {
-    background: none;
-    border: none;
-    color: #6b7280;
-    cursor: pointer;
-    padding: 0.25rem;
-    border-radius: 0.25rem;
-  }
-  
-  .toast button:hover { background: #f3f4f6; }
-  
-  @keyframes slideIn {
-    from { transform: translateX(100%); opacity: 0; }
-    to { transform: translateX(0); opacity: 1; }
-  }
-  
-  .conversation-item {
-    display: flex;
-    align-items: center;
-    padding: 1rem 1.5rem;
-    cursor: pointer;
-    transition: all 0.2s;
-    border-bottom: 1px solid #e5e7eb;
-  }
-  
-  .conversation-item:hover { background: #f9fafb; }
-  .conversation-item.active { background: #3b82f6; color: white; }
-  
-  .empty-state, .error-state {
-    text-align: center;
-    padding: 3rem 2rem;
-    color: #6b7280;
-  }
-  
-  .empty-state i, .error-state i {
-    font-size: 3rem;
-    margin-bottom: 1rem;
-    color: #6b7280;
-  }
-  
-  .btn {
-    padding: 0.5rem 1rem;
-    border-radius: 0.375rem;
-    border: none;
-    cursor: pointer;
-    font-weight: 500;
-    transition: all 0.2s;
-  }
-  
-  .btn-primary {
-    background: #3b82f6;
-    color: white;
-  }
-  
-  .btn-primary:hover {
-    background: #2563eb;
-  }
-`;
-
-// Injecter les styles additionnels
-const styleSheet = document.createElement("style");
-styleSheet.textContent = additionalStyles;
-document.head.appendChild(styleSheet);
+// Export pour utilisation externe
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = ChatFileApp;
+}

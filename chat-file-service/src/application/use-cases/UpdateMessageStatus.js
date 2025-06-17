@@ -52,15 +52,7 @@ class UpdateMessageStatus {
             status,
             modifiedCount: result.modifiedCount,
             messageIds: messageIds || "ALL",
-            timestamp: result.timestamp,
-            // Données pour les notifications temps réel
-            notificationData: {
-              type: "STATUS_UPDATE",
-              conversationId,
-              receiverId,
-              status,
-              count: result.modifiedCount,
-            },
+            // ✅ PAS DE timestamp - sera ajouté automatiquement par le producer
           });
 
           console.log(
