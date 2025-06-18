@@ -39,47 +39,29 @@ class ConversationController {
         `🔍 Conversations utilisateur: ${userId} (${result.conversations.length} conv, ${processingTime}ms)`
       );
 
-      // **PUBLIER ÉVÉNEMENT KAFKA AVEC DONNÉES CONVERTIES**
-      if (this.kafkaProducer) {
-        try {
-          await this.kafkaProducer.publishMessage({
-            eventType: "CONVERSATIONS_RETRIEVED",
-            userId: userIdString,
-            conversationsCount: result.conversations.length,
-            processingTime,
-          });
-        } catch (kafkaError) {
-          console.warn(
-            "⚠️ Erreur publication consultation conversations:",
-            kafkaError.message
-          );
-        }
-      }
+      // ✅ NE PAS PUBLIER D'ÉVÉNEMENT KAFKA ICI - DÉJÀ FAIT DANS LE USE CASE
+      // Le use case gère déjà la publication via le repository
 
-      res.json({
+      return res.json({
         success: true,
+        message: "Conversations récupérées avec succès",
         data: result,
         metadata: {
-          processingTime: `${processingTime}ms`,
-          fromCache: result.fromCache || false,
-          redisEnabled: !!this.redisClient,
-          kafkaPublished: !!this.kafkaProducer,
+          userId: userIdString,
+          processingTime,
           timestamp: new Date().toISOString(),
         },
       });
     } catch (error) {
       const processingTime = Date.now() - startTime;
-      console.error("❌ Erreur récupération conversations:", error);
+      console.error(`❌ Erreur récupération conversations: ${error.message}`);
 
-      res.status(500).json({
+      return res.status(500).json({
         success: false,
         message: "Erreur lors de la récupération des conversations",
-        error:
-          process.env.NODE_ENV === "development"
-            ? error.message
-            : "Erreur interne",
+        error: error.message,
         metadata: {
-          processingTime: `${processingTime}ms`,
+          processingTime,
           timestamp: new Date().toISOString(),
         },
       });
@@ -87,91 +69,33 @@ class ConversationController {
   }
 
   async getConversation(req, res) {
-    const startTime = Date.now();
-
     try {
-      const { conversationId } = req.params;
+      const conversationId = req.params.id;
       const userId = req.user?.id || req.user?.userId;
 
-      if (!userId || !conversationId) {
+      if (!conversationId) {
         return res.status(400).json({
           success: false,
-          message: "Paramètres manquants",
+          message: "ID de conversation requis",
         });
       }
-
-      // **CONVERSIONS EXPLICITES**
-      const userIdString = String(userId);
-      const conversationIdString = String(conversationId);
 
       const result = await this.getConversationUseCase.execute(
-        conversationIdString,
-        userIdString,
-        true
+        conversationId,
+        userId
       );
 
-      const processingTime = Date.now() - startTime;
-
-      // **PUBLIER ÉVÉNEMENT KAFKA AVEC DONNÉES CONVERTIES**
-      if (this.kafkaProducer) {
-        try {
-          await this.kafkaProducer.publishMessage({
-            eventType: "CONVERSATION_VIEWED",
-            userId: userIdString, // **STRING**
-            conversationId: conversationIdString, // **STRING**
-            unreadCount: String(result.unreadCount || 0), // **CONVERSION**
-            messageCount: String(result.messageCount || 0), // **CONVERSION**
-            processingTime: String(processingTime), // **CONVERSION**
-            timestamp: new Date().toISOString(),
-          });
-        } catch (kafkaError) {
-          console.warn(
-            "⚠️ Erreur publication consultation conversation:",
-            kafkaError.message
-          );
-        }
-      }
-
-      res.json({
+      return res.json({
         success: true,
+        message: "Conversation récupérée avec succès",
         data: result,
-        metadata: {
-          processingTime: `${processingTime}ms`,
-          fromCache: result.fromCache || false,
-          redisEnabled: !!this.redisClient,
-          kafkaPublished: !!this.kafkaProducer,
-          timestamp: new Date().toISOString(),
-        },
       });
     } catch (error) {
-      const processingTime = Date.now() - startTime;
       console.error("❌ Erreur récupération conversation:", error);
-
-      if (error.message === "Conversation non trouvée") {
-        return res.status(404).json({
-          success: false,
-          message: "Conversation non trouvée",
-        });
-      }
-
-      if (error.message === "Accès non autorisé à cette conversation") {
-        return res.status(403).json({
-          success: false,
-          message: "Accès non autorisé",
-        });
-      }
-
-      res.status(500).json({
+      return res.status(500).json({
         success: false,
         message: "Erreur lors de la récupération de la conversation",
-        error:
-          process.env.NODE_ENV === "development"
-            ? error.message
-            : "Erreur interne",
-        metadata: {
-          processingTime: `${processingTime}ms`,
-          timestamp: new Date().toISOString(),
-        },
+        error: error.message,
       });
     }
   }

@@ -6,7 +6,7 @@
     <title>CENADI Chat-File Service v1.0</title>
     <meta
       name="description"
-      content="Interface de test et de monitoring pour le service de chat et fichiers CENADI"
+      content="Interface de chat et partage de fichiers CENADI"
     />
     <meta name="author" content="CENADI Team" />
     <link rel="stylesheet" href="styles.css" />
@@ -28,32 +28,36 @@
             <i class="fas fa-comments"></i>
             <span>CENADI Chat</span>
           </div>
-          <nav class="nav-links">
-            <a href="#chat" class="nav-link active" data-view="chat">
+          <nav class="nav">
+            <a href="#" class="nav-link active" data-view="chat">
               <i class="fas fa-comments"></i>
               <span>Chat</span>
             </a>
-            <a href="#contacts" class="nav-link" data-view="contacts">
+            <a href="#" class="nav-link" data-view="contacts">
               <i class="fas fa-users"></i>
               <span>Contacts</span>
             </a>
-            <a href="#files" class="nav-link" data-view="files">
+            <a href="#" class="nav-link" data-view="files">
               <i class="fas fa-folder"></i>
               <span>Fichiers</span>
             </a>
-            <a href="#api" class="nav-link" data-view="api">
+            <a href="#" class="nav-link" data-view="api">
               <i class="fas fa-code"></i>
               <span>API</span>
             </a>
-            <a href="#health" class="nav-link" data-view="health">
+            <a href="#" class="nav-link" data-view="health">
               <i class="fas fa-heartbeat"></i>
-              <span>Santé</span>
+              <span>État</span>
             </a>
           </nav>
-          <div class="user-section">
+          <div class="user-status">
             <div class="connection-status" id="connectionStatus">
               <i class="fas fa-circle"></i>
               <span>Connecté</span>
+            </div>
+            <div class="user-info" id="userInfo">
+              <span id="userName">Chargement...</span>
+              <span id="userRole">Utilisateur</span>
             </div>
             <button class="settings-btn" id="settingsBtn">
               <i class="fas fa-cog"></i>
@@ -83,7 +87,10 @@
                 />
               </div>
               <div class="conversations-list" id="conversationsList">
-                <!-- Les conversations seront chargées dynamiquement -->
+                <div class="loading-state">
+                  <i class="fas fa-spinner fa-spin"></i>
+                  <p>Chargement des conversations...</p>
+                </div>
               </div>
             </div>
 
@@ -115,28 +122,33 @@
                 <div class="welcome-message">
                   <i class="fas fa-comments"></i>
                   <h3>Bienvenue dans CENADI Chat</h3>
-                  <p>Sélectionnez une conversation pour commencer à discuter</p>
+                  <p>Sélectionnez une conversation pour commencer à chatter</p>
                 </div>
               </div>
 
-              <div class="message-input-container" id="messageInputContainer">
+              <div
+                class="message-input-container"
+                id="messageInputContainer"
+                style="display: none"
+              >
                 <div class="input-actions">
-                  <button class="input-btn" id="attachBtn">
+                  <button class="action-btn" id="attachBtn">
                     <i class="fas fa-paperclip"></i>
                   </button>
-                  <button class="input-btn" id="emojiBtn">
+                  <button class="action-btn" id="emojiBtn">
                     <i class="fas fa-smile"></i>
                   </button>
                 </div>
-                <div class="message-input">
+                <div class="input-wrapper">
                   <textarea
-                    placeholder="Tapez votre message..."
                     id="messageInput"
+                    placeholder="Tapez votre message..."
+                    rows="1"
                   ></textarea>
+                  <button class="send-btn" id="sendBtn">
+                    <i class="fas fa-paper-plane"></i>
+                  </button>
                 </div>
-                <button class="send-btn" id="sendBtn">
-                  <i class="fas fa-paper-plane"></i>
-                </button>
               </div>
             </div>
           </div>
@@ -146,17 +158,9 @@
         <section id="contactsSection" class="content-section">
           <div class="contacts-container">
             <div class="contacts-header">
-              <h2>Liste des Contacts</h2>
+              <h2>Contacts</h2>
               <div class="contacts-actions">
-                <div class="search-bar">
-                  <i class="fas fa-search"></i>
-                  <input
-                    type="text"
-                    placeholder="Rechercher un contact..."
-                    id="searchContacts"
-                  />
-                </div>
-                <button class="btn btn-primary" id="refreshContactsBtn">
+                <button class="btn btn-secondary" id="refreshContactsBtn">
                   <i class="fas fa-sync-alt"></i>
                   Actualiser
                 </button>
@@ -164,30 +168,31 @@
             </div>
 
             <div class="contacts-filters">
+              <div class="search-contacts">
+                <i class="fas fa-search"></i>
+                <input
+                  type="text"
+                  placeholder="Rechercher un contact..."
+                  id="searchContacts"
+                />
+              </div>
               <div class="filter-group">
                 <label>Statut:</label>
                 <select id="statusFilter">
                   <option value="">Tous</option>
                   <option value="online">En ligne</option>
-                  <option value="offline">Hors ligne</option>
                   <option value="away">Absent</option>
+                  <option value="offline">Hors ligne</option>
                 </select>
               </div>
               <div class="filter-group">
-                <label>Rôle:</label>
-                <select id="roleFilter">
+                <label>Service:</label>
+                <select id="serviceFilter">
                   <option value="">Tous</option>
-                  <option value="admin">Administrateur</option>
-                  <option value="user">Utilisateur</option>
-                  <option value="moderator">Modérateur</option>
-                </select>
-              </div>
-              <div class="filter-group">
-                <label>Tri:</label>
-                <select id="sortFilter">
-                  <option value="name">Nom</option>
-                  <option value="lastActive">Dernière activité</option>
-                  <option value="role">Rôle</option>
+                  <option value="IT">Informatique</option>
+                  <option value="RH">Ressources Humaines</option>
+                  <option value="Finance">Finance</option>
+                  <option value="Direction">Direction</option>
                 </select>
               </div>
             </div>
@@ -217,7 +222,6 @@
             </div>
 
             <div class="contacts-grid" id="contactsGrid">
-              <!-- Les contacts seront chargés dynamiquement -->
               <div class="loading-state">
                 <i class="fas fa-spinner fa-spin"></i>
                 <p>Chargement des contacts...</p>
@@ -236,37 +240,14 @@
                   <i class="fas fa-upload"></i>
                   Téléverser
                 </button>
-                <div class="view-toggle">
-                  <button class="view-btn active" data-view="grid">
-                    <i class="fas fa-th"></i>
-                  </button>
-                  <button class="view-btn" data-view="list">
-                    <i class="fas fa-list"></i>
-                  </button>
-                </div>
+                <button class="btn btn-secondary" id="refreshFilesBtn">
+                  <i class="fas fa-sync-alt"></i>
+                  Actualiser
+                </button>
               </div>
             </div>
 
             <div class="files-filters">
-              <div class="filter-group">
-                <label>Type:</label>
-                <select id="fileTypeFilter">
-                  <option value="">Tous</option>
-                  <option value="image">Images</option>
-                  <option value="document">Documents</option>
-                  <option value="video">Vidéos</option>
-                  <option value="audio">Audio</option>
-                </select>
-              </div>
-              <div class="filter-group">
-                <label>Taille:</label>
-                <select id="fileSizeFilter">
-                  <option value="">Toutes</option>
-                  <option value="small">< 1MB</option>
-                  <option value="medium">1-10MB</option>
-                  <option value="large">> 10MB</option>
-                </select>
-              </div>
               <div class="search-files">
                 <i class="fas fa-search"></i>
                 <input
@@ -275,10 +256,23 @@
                   id="searchFiles"
                 />
               </div>
+              <div class="filter-group">
+                <label>Type:</label>
+                <select id="typeFilter">
+                  <option value="">Tous</option>
+                  <option value="image">Images</option>
+                  <option value="document">Documents</option>
+                  <option value="video">Vidéos</option>
+                  <option value="audio">Audio</option>
+                </select>
+              </div>
             </div>
 
             <div class="files-grid" id="filesGrid">
-              <!-- Les fichiers seront chargés dynamiquement -->
+              <div class="loading-state">
+                <i class="fas fa-spinner fa-spin"></i>
+                <p>Chargement des fichiers...</p>
+              </div>
             </div>
           </div>
         </section>
@@ -294,64 +288,8 @@
               </div>
             </div>
 
-            <div class="api-endpoints">
-              <div class="endpoint-group">
-                <h3>Messages</h3>
-                <div class="endpoint">
-                  <span class="method get">GET</span>
-                  <span class="url">/api/messages/:conversationId</span>
-                  <span class="description">Récupérer les messages</span>
-                </div>
-                <div class="endpoint">
-                  <span class="method post">POST</span>
-                  <span class="url">/api/messages</span>
-                  <span class="description">Envoyer un message</span>
-                </div>
-              </div>
-
-              <div class="endpoint-group">
-                <h3>Contacts</h3>
-                <div class="endpoint">
-                  <span class="method get">GET</span>
-                  <span class="url">http://localhost:8000/api/users/all</span>
-                  <span class="description"
-                    >Liste de tous les utilisateurs</span
-                  >
-                </div>
-                <div class="endpoint">
-                  <span class="method get">GET</span>
-                  <span class="url">http://localhost:8000/api/users/:id</span>
-                  <span class="description">Détails d'un utilisateur</span>
-                </div>
-              </div>
-
-              <div class="endpoint-group">
-                <h3>Fichiers</h3>
-                <div class="endpoint">
-                  <span class="method post">POST</span>
-                  <span class="url">/api/files/upload</span>
-                  <span class="description">Téléverser un fichier</span>
-                </div>
-                <div class="endpoint">
-                  <span class="method get">GET</span>
-                  <span class="url">/api/files/:fileId</span>
-                  <span class="description">Télécharger un fichier</span>
-                </div>
-              </div>
-
-              <div class="endpoint-group">
-                <h3>Conversations</h3>
-                <div class="endpoint">
-                  <span class="method get">GET</span>
-                  <span class="url">/api/conversations</span>
-                  <span class="description">Liste des conversations</span>
-                </div>
-                <div class="endpoint">
-                  <span class="method post">POST</span>
-                  <span class="url">/api/conversations</span>
-                  <span class="description">Créer une conversation</span>
-                </div>
-              </div>
+            <div class="api-endpoints" id="apiEndpoints">
+              <!-- Chargé dynamiquement par app.js -->
             </div>
           </div>
         </section>
@@ -367,90 +305,12 @@
               </button>
             </div>
 
-            <div class="health-cards">
-              <div class="health-card" id="mongoCard">
-                <div class="card-header">
-                  <i class="fas fa-database"></i>
-                  <h3>MongoDB</h3>
-                </div>
-                <div class="card-status">
-                  <span class="status-indicator"></span>
-                  <span class="status-text">Vérification...</span>
-                </div>
-              </div>
-
-              <div class="health-card" id="redisCard">
-                <div class="card-header">
-                  <i class="fas fa-memory"></i>
-                  <h3>Redis</h3>
-                </div>
-                <div class="card-status">
-                  <span class="status-indicator"></span>
-                  <span class="status-text">Vérification...</span>
-                </div>
-              </div>
-
-              <div class="health-card" id="kafkaCard">
-                <div class="card-header">
-                  <i class="fas fa-stream"></i>
-                  <h3>Kafka</h3>
-                </div>
-                <div class="card-status">
-                  <span class="status-indicator"></span>
-                  <span class="status-text">Vérification...</span>
-                </div>
-              </div>
-
-              <div class="health-card" id="websocketCard">
-                <div class="card-header">
-                  <i class="fas fa-plug"></i>
-                  <h3>WebSocket</h3>
-                </div>
-                <div class="card-status">
-                  <span class="status-indicator"></span>
-                  <span class="status-text">Vérification...</span>
-                </div>
-              </div>
-
-              <div class="health-card" id="userServiceCard">
-                <div class="card-header">
-                  <i class="fas fa-users"></i>
-                  <h3>User Service</h3>
-                </div>
-                <div class="card-status">
-                  <span class="status-indicator"></span>
-                  <span class="status-text">Vérification...</span>
-                </div>
-                <div class="card-details">
-                  <small>Port: 8000</small>
-                </div>
-              </div>
+            <div class="health-cards" id="healthCards">
+              <!-- Chargé dynamiquement par app.js -->
             </div>
 
             <div class="system-info" id="systemInfo">
-              <h3>Informations Système</h3>
-              <div class="info-grid">
-                <div class="info-item">
-                  <label>Version:</label>
-                  <span>1.0.0</span>
-                </div>
-                <div class="info-item">
-                  <label>Démarré:</label>
-                  <span id="uptime">--</span>
-                </div>
-                <div class="info-item">
-                  <label>Environnement:</label>
-                  <span>Développement</span>
-                </div>
-                <div class="info-item">
-                  <label>Port:</label>
-                  <span>8003</span>
-                </div>
-                <div class="info-item">
-                  <label>Service Utilisateurs:</label>
-                  <span>localhost:8000</span>
-                </div>
-              </div>
+              <!-- Chargé dynamiquement par app.js -->
             </div>
           </div>
         </section>
@@ -483,33 +343,6 @@
                 <div class="progress-fill" id="progressFill"></div>
               </div>
               <span class="progress-text" id="progressText">0%</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Contact Details Modal -->
-      <div class="modal" id="contactModal">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h3>Détails du Contact</h3>
-            <button class="close-btn" id="closeContactModal">
-              <i class="fas fa-times"></i>
-            </button>
-          </div>
-          <div class="modal-body">
-            <div class="contact-details" id="contactDetails">
-              <!-- Détails du contact seront affichés ici -->
-            </div>
-            <div class="contact-actions">
-              <button class="btn btn-primary" id="startChatBtn">
-                <i class="fas fa-comments"></i>
-                Démarrer une conversation
-              </button>
-              <button class="btn btn-secondary" id="viewProfileBtn">
-                <i class="fas fa-user"></i>
-                Voir le profil
-              </button>
             </div>
           </div>
         </div>
@@ -548,7 +381,7 @@
               </label>
             </div>
             <div class="setting-group">
-              <label>Actualisation automatique des contacts:</label>
+              <label>Actualisation automatique:</label>
               <label class="switch">
                 <input type="checkbox" id="autoRefreshToggle" checked />
                 <span class="slider"></span>
@@ -564,13 +397,32 @@
 
     <!-- Scripts -->
     <script>
-      // Configuration globale pour le frontend
+      // ✅ CONFIGURATION ALIGNÉE AVEC LE BACKEND
       window.CHAT_CONFIG = {
         API_BASE_URL: "http://localhost:8003/api",
         WS_URL: "http://localhost:8003",
         USER_SERVICE_URL: "http://localhost:8000/api/users",
+        FILE_SERVICE_URL: "http://localhost:8003/api/files",
+        CONVERSATION_SERVICE_URL: "http://localhost:8003/api/conversations",
+        MESSAGE_SERVICE_URL: "http://localhost:8003/api/messages",
+        HEALTH_CHECK_URL: "http://localhost:8003/health",
         VERSION: "1.0.0",
         DEBUG: true,
+        // ✅ CONFIGURATION KAFKA/REDIS
+        ENABLE_REAL_TIME: true,
+        ENABLE_NOTIFICATIONS: true,
+        ENABLE_FILE_UPLOAD: true,
+        MAX_FILE_SIZE: 10485760, // 10MB
+        ALLOWED_FILE_TYPES: [
+          "image/jpeg",
+          "image/png",
+          "image/gif",
+          "image/webp",
+          "application/pdf",
+          "text/plain",
+          "application/msword",
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ],
       };
     </script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
