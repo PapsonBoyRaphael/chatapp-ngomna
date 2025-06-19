@@ -249,7 +249,7 @@ class NotificationConsumer {
   // ✅ HANDLERS POUR CHAQUE TYPE D'ÉVÉNEMENT
   async handleUserConnected(data) {
     try {
-      console.log(`👤 Utilisateur connecté: ${data.userName || data.userId}`);
+      console.log(`👤 Utilisateur connecté: ${data.matricule || data.userId}`);
       // Logique spécifique pour connexion utilisateur
     } catch (error) {
       console.error("❌ Erreur handleUserConnected:", error);
@@ -258,7 +258,9 @@ class NotificationConsumer {
 
   async handleUserDisconnected(data) {
     try {
-      console.log(`👋 Utilisateur déconnecté: ${data.userName || data.userId}`);
+      console.log(
+        `👋 Utilisateur déconnecté: ${data.matricule || data.userId}`
+      );
       // Logique spécifique pour déconnexion utilisateur
     } catch (error) {
       console.error("❌ Erreur handleUserDisconnected:", error);

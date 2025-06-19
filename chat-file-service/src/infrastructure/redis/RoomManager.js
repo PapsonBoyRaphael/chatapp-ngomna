@@ -28,8 +28,8 @@ class RoomManager {
       // ✅ PRÉPARER LES DONNÉES AVEC SÉRIALISATION
       const userInfo = {
         userId: userIdString,
-        userName: userData.userName
-          ? String(userData.userName)
+        matricule: userData.matricule
+          ? String(userData.matricule)
           : userData.nom
           ? String(userData.nom)
           : "Unknown",
@@ -87,7 +87,7 @@ class RoomManager {
       await this.redis.expire(`${this.roomPrefix}:${roomNameString}`, 7200);
 
       console.log(
-        `🏠 Utilisateur ${userIdString} (${userInfo.userName}) ajouté à la room ${roomNameString}`
+        `🏠 Utilisateur ${userIdString} (${userInfo.matricule}) ajouté à la room ${roomNameString}`
       );
       return true;
     } catch (error) {

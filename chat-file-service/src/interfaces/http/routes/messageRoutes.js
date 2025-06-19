@@ -56,7 +56,7 @@ function createMessageRoutes(messageController) {
   // Routes des messages avec gestion d'erreurs
   try {
     /**
-     * @api {post} /api/messages Send Message
+     * @api {post} /messages Send Message
      * @apiName SendMessage
      * @apiGroup Messages
      */
@@ -81,7 +81,7 @@ function createMessageRoutes(messageController) {
     );
 
     /**
-     * @api {get} /api/messages Get Messages
+     * @api {get} /messages Get Messages
      * @apiName GetMessages
      * @apiGroup Messages
      */
@@ -105,7 +105,7 @@ function createMessageRoutes(messageController) {
     );
 
     /**
-     * @api {get} /api/messages/:messageId Get Single Message
+     * @api {get} /messages/:messageId Get Single Message
      * @apiName GetMessage
      * @apiGroup Messages
      */
@@ -130,7 +130,7 @@ function createMessageRoutes(messageController) {
     );
 
     /**
-     * @api {put} /api/messages/:messageId/status Update Message Status
+     * @api {put} /messages/:messageId/status Update Message Status
      * @apiName UpdateMessageStatus
      * @apiGroup Messages
      */
@@ -158,7 +158,7 @@ function createMessageRoutes(messageController) {
     );
 
     /**
-     * @api {delete} /api/messages/:messageId Delete Message
+     * @api {delete} /messages/:messageId Delete Message
      * @apiName DeleteMessage
      * @apiGroup Messages
      */
@@ -182,7 +182,7 @@ function createMessageRoutes(messageController) {
     );
 
     /**
-     * @api {post} /api/messages/:messageId/reactions Add Reaction
+     * @api {post} /messages/:messageId/reactions Add Reaction
      * @apiName AddReaction
      * @apiGroup Messages
      */

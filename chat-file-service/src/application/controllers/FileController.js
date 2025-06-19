@@ -351,8 +351,8 @@ class FileController {
         checksum: "abc123def456",
         processingStatus: "completed",
         thumbnails: [
-          { size: "150x150", url: `/api/files/${fileId}/thumbnail/150` },
-          { size: "300x300", url: `/api/files/${fileId}/thumbnail/300` },
+          { size: "150x150", url: `/files/${fileId}/thumbnail/150` },
+          { size: "300x300", url: `/files/${fileId}/thumbnail/300` },
         ],
       };
 

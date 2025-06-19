@@ -231,7 +231,7 @@ body {
   align-items: flex-end;
 }
 
-#userName {
+#matricule {
   font-size: 0.875rem;
   font-weight: 600;
   color: var(--text-primary);

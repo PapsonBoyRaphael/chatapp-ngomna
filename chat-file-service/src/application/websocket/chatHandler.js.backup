@@ -238,13 +238,13 @@ const startServer = async () => {
     // ===============================
     // 7. CONFIGURATION ROUTES HTTP
     // ===============================
-    app.use("/api/files", createFileRoutes(fileController));
-    app.use("/api/messages", createMessageRoutes(messageController));
+    app.use("/files", createFileRoutes(fileController));
+    app.use("/messages", createMessageRoutes(messageController));
     app.use(
-      "/api/conversations",
+      "/conversations",
       createConversationRoutes(conversationController)
     );
-    app.use("/api/health", createHealthRoutes(healthController));
+    app.use("/health", createHealthRoutes(healthController));
 
     // ===============================
     // 8. CONFIGURATION WEBSOCKET AVEC VOTRE CHATHANDLER
@@ -289,10 +289,10 @@ const startServer = async () => {
             websocket: "✅ Actif",
           },
           endpoints: {
-            files: "/api/files",
-            messages: "/api/messages",
-            conversations: "/api/conversations",
-            health: "/api/health",
+            files: "/files",
+            messages: "/messages",
+            conversations: "/conversations",
+            health: "/health",
             interface: "/",
           },
           features: {
@@ -323,10 +323,10 @@ const startServer = async () => {
         status: "running",
         timestamp: new Date().toISOString(),
         endpoints: {
-          files: "/api/files",
-          messages: "/api/messages",
-          conversations: "/api/conversations",
-          health: "/api/health",
+          files: "/files",
+          messages: "/messages",
+          conversations: "/conversations",
+          health: "/health",
         },
         features: {
           chat: "✅ Chat en temps réel",
@@ -401,12 +401,12 @@ const startServer = async () => {
       console.log("🎯 LIENS RAPIDES - CHAT-FILE-SERVICE");
       console.log("=".repeat(60));
       console.log(`🌐 Interface Web     : http://localhost:${PORT}/`);
-      console.log(`📁 API Fichiers     : http://localhost:${PORT}/api/files`);
+      console.log(`📁 API Fichiers     : http://localhost:${PORT}/files`);
       console.log(
-        `💬 API Messages     : http://localhost:${PORT}/api/messages`
+        `💬 API Messages     : http://localhost:${PORT}/messages`
       );
       console.log(
-        `🗣️ API Conversations: http://localhost:${PORT}/api/conversations`
+        `🗣️ API Conversations: http://localhost:${PORT}/conversations`
       );
       console.log(`🔌 WebSocket        : ws://localhost:${PORT}`);
       console.log(`❤️ Health Check     : http://localhost:${PORT}/health`);

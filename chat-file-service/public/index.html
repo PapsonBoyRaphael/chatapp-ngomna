@@ -56,7 +56,7 @@
               <span>Connecté</span>
             </div>
             <div class="user-info" id="userInfo">
-              <span id="userName">Chargement...</span>
+              <span id="matricule">Chargement...</span>
               <span id="userRole">Utilisateur</span>
             </div>
             <button class="settings-btn" id="settingsBtn">
@@ -399,12 +399,12 @@
     <script>
       // ✅ CONFIGURATION ALIGNÉE AVEC LE BACKEND
       window.CHAT_CONFIG = {
-        API_BASE_URL: "http://localhost:8003/api",
+        API_BASE_URL: "http://localhost:8003/",
         WS_URL: "http://localhost:8003",
         USER_SERVICE_URL: "http://localhost:8000/api/users",
-        FILE_SERVICE_URL: "http://localhost:8003/api/files",
-        CONVERSATION_SERVICE_URL: "http://localhost:8003/api/conversations",
-        MESSAGE_SERVICE_URL: "http://localhost:8003/api/messages",
+        FILE_SERVICE_URL: "http://localhost:8003/files",
+        CONVERSATION_SERVICE_URL: "http://localhost:8003/conversations",
+        MESSAGE_SERVICE_URL: "http://localhost:8003//messages",
         HEALTH_CHECK_URL: "http://localhost:8003/health",
         VERSION: "1.0.0",
         DEBUG: true,

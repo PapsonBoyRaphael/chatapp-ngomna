@@ -52,7 +52,7 @@ function createConversationRoutes(conversationController) {
 
   try {
     /**
-     * @api {get} /api/conversations Liste des conversations
+     * @api {get} /conversations Liste des conversations
      * @apiName GetConversations
      * @apiGroup Conversations
      */
@@ -76,7 +76,7 @@ function createConversationRoutes(conversationController) {
     );
 
     /**
-     * @api {get} /api/conversations/:conversationId Détails d'une conversation
+     * @api {get} /conversations/:conversationId Détails d'une conversation
      * @apiName GetConversation
      * @apiGroup Conversations
      */
@@ -101,7 +101,7 @@ function createConversationRoutes(conversationController) {
     );
 
     /**
-     * @api {post} /api/conversations Créer une conversation
+     * @api {post} /conversations Créer une conversation
      * @apiName CreateConversation
      * @apiGroup Conversations
      */

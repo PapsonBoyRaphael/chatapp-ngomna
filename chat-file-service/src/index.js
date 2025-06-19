@@ -344,13 +344,10 @@ const startServer = async () => {
     // ===============================
     // 10. CONFIGURATION DES ROUTES HTTP
     // ===============================
-    app.use("/api/files", createFileRoutes(fileController));
-    app.use("/api/messages", createMessageRoutes(messageController));
-    app.use(
-      "/api/conversations",
-      createConversationRoutes(conversationController)
-    );
-    app.use("/api/health", createHealthRoutes(healthController));
+    app.use("/files", createFileRoutes(fileController));
+    app.use("/messages", createMessageRoutes(messageController));
+    app.use("/conversations", createConversationRoutes(conversationController));
+    app.use("/health", createHealthRoutes(healthController));
 
     // ===============================
     // 11. ROUTES PERSONNALISÉES
@@ -438,11 +435,11 @@ const startServer = async () => {
             websocket: "✅ Actif",
           },
           endpoints: {
-            files: "/api/files",
-            messages: "/api/messages",
-            conversations: "/api/conversations",
-            health: "/api/health",
-            stats: "/api/stats",
+            files: "/files",
+            messages: "/messages",
+            conversations: "/conversations",
+            health: "/health",
+            stats: "/stats",
             interface: "/",
           },
           features: {
@@ -473,7 +470,7 @@ const startServer = async () => {
     });
 
     // Route de statistiques Kafka/Redis
-    app.get("/api/stats", async (req, res) => {
+    app.get("/stats", async (req, res) => {
       try {
         // ✅ PROTECTION CONTRE LES ERREURS
         let websocketStats = { connectedUsers: 0, stats: {} };
@@ -571,7 +568,59 @@ const startServer = async () => {
     });
 
     // Route de test Kafka
-    app.post("/api/test/kafka", async (req, res) => {
+    app.get("/test/kafka", async (req, res) => {
+      try {
+        if (!kafkaProducers || !kafkaProducers.messageProducer) {
+          return res.status(503).json({
+            success: false,
+            message: "Kafka non disponible",
+            details: "MessageProducer non initialisé",
+            status: kafkaStatus,
+            availableEndpoints: {
+              healthCheck: "GET /health",
+              stats: "GET /stats",
+              testKafkaPost: "POST /test/kafka (pour envoyer un message)",
+            },
+          });
+        }
+
+        // ✅ HEALTH CHECK KAFKA POUR GET
+        const healthStatus = await kafkaProducers.messageProducer.healthCheck(
+          true
+        );
+
+        res.json({
+          success: true,
+          message: "Status Kafka récupéré",
+          kafka: {
+            status: kafkaStatus,
+            health: healthStatus,
+            producer: {
+              isConnected: kafkaProducers.messageProducer.isConnected,
+              isEnabled: kafkaProducers.messageProducer.isEnabled,
+            },
+            topics: kafkaConfig.isKafkaConnected
+              ? await kafkaConfig.listTopics()
+              : [],
+          },
+          usage: {
+            testMessage: "POST /test/kafka avec body JSON",
+            healthCheck: "GET /test/kafka (cette route)",
+          },
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error) {
+        console.error("❌ Erreur GET test Kafka:", error);
+        res.status(500).json({
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    });
+
+    // ✅ ROUTE POST POUR ENVOYER UN MESSAGE DE TEST
+    app.post("/test/kafka", async (req, res) => {
       try {
         if (!kafkaProducers || !kafkaProducers.messageProducer) {
           return res.status(503).json({
@@ -583,12 +632,11 @@ const startServer = async () => {
 
         // ✅ VÉRIFIER QUE LA MÉTHODE EXISTE
         if (
-          typeof kafkaProducers.messageProducer.publishSimpleMessage !==
-          "function"
+          typeof kafkaProducers.messageProducer.publishMessage !== "function"
         ) {
           return res.status(503).json({
             success: false,
-            message: "Méthode publishSimpleMessage non disponible",
+            message: "Méthode publishMessage non disponible",
             availableMethods: Object.getOwnPropertyNames(
               kafkaProducers.messageProducer
             ).filter(
@@ -598,26 +646,42 @@ const startServer = async () => {
           });
         }
 
+        // ✅ UTILISER LES DONNÉES DU BODY OU VALEURS PAR DÉFAUT
+        const {
+          eventType = "TEST_MESSAGE",
+          content = "Message de test depuis l'API",
+          userId = "test-user",
+          ...additionalData
+        } = req.body || {};
+
         const testMessage = {
-          eventType: "TEST_MESSAGE",
-          content: "Message de test depuis l'API",
-          userId: "test-user",
+          eventType,
+          content,
+          userId,
+          timestamp: new Date().toISOString(),
+          source: "API_TEST",
+          ...additionalData,
         };
 
-        const result =
-          await kafkaProducers.messageProducer.publishSimpleMessage(
-            "TEST_MESSAGE",
-            testMessage
-          );
+        // ✅ UTILISER publishMessage AU LIEU DE publishSimpleMessage
+        const result = await kafkaProducers.messageProducer.publishMessage(
+          testMessage
+        );
 
         res.json({
           success: result,
-          message: "Message de test envoyé",
+          message: result
+            ? "Message de test envoyé avec succès"
+            : "Échec envoi message",
           data: testMessage,
+          kafka: {
+            status: kafkaStatus,
+            topicUsed: kafkaProducers.messageProducer.topicName,
+          },
           timestamp: new Date().toISOString(),
         });
       } catch (error) {
-        console.error("❌ Erreur test Kafka:", error);
+        console.error("❌ Erreur POST test Kafka:", error);
         res.status(500).json({
           success: false,
           error: error.message,
@@ -634,12 +698,12 @@ const startServer = async () => {
         status: "running",
         timestamp: new Date().toISOString(),
         endpoints: {
-          files: "/api/files",
-          messages: "/api/messages",
-          conversations: "/api/conversations",
-          health: "/api/health",
-          stats: "/api/stats",
-          kafkaTest: "/api/test/kafka",
+          files: "/files",
+          messages: "/messages",
+          conversations: "/conversations",
+          health: "/health",
+          stats: "/stats",
+          kafkaTest: "/test/kafka",
         },
         features: {
           chat: "✅ Chat en temps réel",
@@ -780,16 +844,14 @@ const startServer = async () => {
       console.log("🎯 LIENS RAPIDES - CHAT-FILE-SERVICE");
       console.log("=".repeat(70));
       console.log(`🌐 Interface Web     : http://localhost:${PORT}/`);
-      console.log(`📁 API Fichiers     : http://localhost:${PORT}/api/files`);
+      console.log(`📁 API Fichiers     : http://localhost:${PORT}/files`);
+      console.log(`💬 API Messages     : http://localhost:${PORT}/messages`);
       console.log(
-        `💬 API Messages     : http://localhost:${PORT}/api/messages`
+        `🗣️ API Conversations: http://localhost:${PORT}/conversations`
       );
+      console.log(`📊 Statistiques     : http://localhost:${PORT}/stats`);
       console.log(
-        `🗣️ API Conversations: http://localhost:${PORT}/api/conversations`
-      );
-      console.log(`📊 Statistiques     : http://localhost:${PORT}/api/stats`);
-      console.log(
-        `🧪 Test Kafka       : POST http://localhost:${PORT}/api/test/kafka`
+        `🧪 Test Kafka       : POST http://localhost:${PORT}/test/kafka`
       );
       console.log(`🔌 WebSocket        : ws://localhost:${PORT}`);
       console.log(`❤️ Health Check     : http://localhost:${PORT}/health`);

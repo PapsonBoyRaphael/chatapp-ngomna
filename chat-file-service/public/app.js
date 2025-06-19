@@ -1,663 +1,663 @@
-class ChatFileApp {
-  constructor() {
-    // ✅ CONFIGURATION ALIGNÉE AVEC LE BACKEND
-    this.apiBaseUrl =
-      window.CHAT_CONFIG?.API_BASE_URL || "http://localhost:8003/api";
-    this.wsUrl = window.CHAT_CONFIG?.WS_URL || "http://localhost:8003";
-    this.userServiceUrl =
-      window.CHAT_CONFIG?.USER_SERVICE_URL || "http://localhost:8000/api/users";
+/**
+ * CENADI Chat-File Service - Application Frontend
+ * Version: 1.0.0
+ * Description: Interface utilisateur pour le service de chat et partage de fichiers
+ */
 
-    // ✅ ÉTAT ALIGNÉ AVEC LES ENTITÉS BACKEND
-    this.currentUser = null;
-    this.conversations = [];
-    this.contacts = [];
-    this.files = [];
+class ChatApp {
+  constructor() {
+    // Configuration
+    this.config = window.CHAT_CONFIG;
     this.socket = null;
-    this.currentView = "chat";
+    this.currentUser = null;
     this.currentConversation = null;
+    this.isConnected = false;
+    this.typingTimer = null;
+    this.isTyping = false;
+
+    // Collections de données
+    this.conversations = new Map();
+    this.messages = new Map();
+    this.contacts = new Map();
+    this.files = new Map();
     this.onlineUsers = new Set();
 
-    // ✅ CONFIGURATION DES NOTIFICATIONS ALIGNÉE AVEC KAFKA
-    this.notificationConfig = {
-      enabled: true,
-      sound: true,
-      desktop: false,
-    };
+    // États de l'interface
+    this.currentView = "chat";
+    this.isLoading = false;
+    this.settings = this.loadSettings();
 
-    this.init();
+    // Initialisation
+    this.initializeApp();
   }
 
-  async init() {
-    console.log("🚀 Initialisation ChatFileApp...");
+  // ================================================================
+  // INITIALISATION
+  // ================================================================
 
-    // ✅ CHARGER L'UTILISATEUR DEPUIS LES COOKIES (ALIGNÉ AVEC AUTH-SERVICE)
-    this.loadUserFromCookies();
-
-    if (!this.currentUser) {
-      this.showLoginRedirect();
-      return;
-    }
-
-    // ✅ INITIALISER L'INTERFACE
-    this.initializeUI();
-
-    // ✅ CONNECTER WEBSOCKET AVEC TOKEN
-    await this.connectWebSocket();
-
-    // ✅ CHARGER LES DONNÉES INITIALES
-    await this.loadInitialData();
-
-    console.log("✅ ChatFileApp initialisé");
-  }
-
-  // ✅ MÉTHODE ALIGNÉE AVEC AuthMiddleware DU BACKEND
-  loadUserFromCookies() {
+  async initializeApp() {
     try {
-      const token = this.getCookie("token");
-      const userData = this.getCookie("user");
+      console.log("🚀 Initialisation de CENADI Chat App...");
 
-      if (token && userData) {
-        const parsedUserData = JSON.parse(decodeURIComponent(userData));
+      // 1. Charger les données utilisateur
+      await this.loadCurrentUser();
 
-        this.currentUser = {
-          id: parsedUserData.id || parsedUserData._id,
-          nom: parsedUserData.nom || parsedUserData.name,
-          prenom: parsedUserData.prenom || "",
-          email: parsedUserData.email,
-          poste: parsedUserData.poste || parsedUserData.role,
-          matricule: parsedUserData.matricule,
-          token: token,
-          permissions: parsedUserData.permissions || [],
-        };
+      // 2. Initialiser l'interface
+      this.initializeUI();
 
-        localStorage.setItem("chatuser", JSON.stringify(this.currentUser));
-        this.updateUserUI();
+      // 3. Connecter WebSocket
+      await this.initializeSocket();
 
-        console.log("✅ Utilisateur chargé depuis les cookies:", {
-          id: this.currentUser.id,
-          nom: this.currentUser.nom,
-          hasToken: !!this.currentUser.token,
-        });
-      } else {
-        this.loadUserFromStorage();
-      }
+      // 4. Charger les données initiales
+      await this.loadInitialData();
+
+      // 5. Configurer les événements
+      this.setupEventListeners();
+
+      // 6. Démarrer les services
+      this.startServices();
+
+      console.log("✅ Application initialisée avec succès");
+      this.showToast("Application démarrée", "success");
     } catch (error) {
-      console.error("❌ Erreur chargement cookies:", error);
-      this.clearAuthData();
+      console.error("❌ Erreur initialisation:", error);
+      this.showToast("Erreur de démarrage: " + error.message, "error");
     }
   }
 
-  // ✅ WEBSOCKET ALIGNÉ AVEC ChatHandler DU BACKEND
-  async connectWebSocket() {
+  async loadCurrentUser() {
     try {
-      if (this.socket) {
-        this.socket.disconnect();
-      }
+      // Simuler un utilisateur pour la démo (en production, récupérer depuis l'API)
+      this.currentUser = {
+        id: `user_${Date.now()}`,
+        matricule: `MAT${Math.floor(Math.random() * 1000)
+          .toString()
+          .padStart(3, "0")}`,
+        nom: "Utilisateur Test",
+        email: "test@cenadi.com",
+        role: "Utilisateur",
+        service: "IT",
+        statut: "online",
+      };
 
-      console.log("🔌 Connexion WebSocket...");
-
-      this.socket = io(this.wsUrl, {
-        transports: ["websocket", "polling"],
-        timeout: 20000,
-        auth: {
-          token: this.currentUser?.token,
-          userId: this.currentUser?.id,
-          user: this.currentUser,
-        },
-      });
-
-      // ✅ ÉVÉNEMENTS ALIGNÉS AVEC LE BACKEND
-      this.socket.on("connect", () => {
-        console.log("✅ WebSocket connecté");
-        this.updateConnectionStatus(true);
-
-        // ✅ REJOINDRE LES SALLES UTILISATEUR
-        this.socket.emit("joinUserRooms", {
-          userId: this.currentUser.id,
-        });
-      });
-
-      this.socket.on("disconnect", () => {
-        console.log("🔌 WebSocket déconnecté");
-        this.updateConnectionStatus(false);
-      });
-
-      // ✅ ÉVÉNEMENTS DE MESSAGES ALIGNÉS AVEC MessageController
-      this.socket.on("newMessage", (message) => {
-        console.log("💬 Nouveau message reçu:", message);
-        this.handleNewMessage(message);
-      });
-
-      this.socket.on("messageStatusUpdate", (update) => {
-        console.log("📝 Statut message mis à jour:", update);
-        this.updateMessageStatus(update);
-      });
-
-      // ✅ ÉVÉNEMENTS DE CONVERSATIONS ALIGNÉS AVEC ConversationController
-      this.socket.on("conversationUpdate", (conversation) => {
-        console.log("🗣️ Conversation mise à jour:", conversation);
-        this.handleConversationUpdate(conversation);
-      });
-
-      // ✅ ÉVÉNEMENTS DE FICHIERS ALIGNÉS AVEC FileController
-      this.socket.on("fileUploaded", (file) => {
-        console.log("📁 Fichier uploadé:", file);
-        this.handleFileUploaded(file);
-      });
-
-      // ✅ ÉVÉNEMENTS D'UTILISATEURS EN LIGNE ALIGNÉS AVEC OnlineUserManager
-      this.socket.on("userOnline", (user) => {
-        console.log("👤 Utilisateur en ligne:", user);
-        this.onlineUsers.add(user.id);
-        this.updateUserStatus(user.id, "online");
-      });
-
-      this.socket.on("userOffline", (user) => {
-        console.log("👋 Utilisateur hors ligne:", user);
-        this.onlineUsers.delete(user.id);
-        this.updateUserStatus(user.id, "offline");
-      });
-
-      // ✅ ÉVÉNEMENTS DE NOTIFICATIONS KAFKA
-      this.socket.on("notification", (notification) => {
-        console.log("🔔 Notification reçue:", notification);
-        this.handleNotification(notification);
-      });
+      // Mettre à jour l'interface
+      this.updateUserInfo();
     } catch (error) {
-      console.error("❌ Erreur connexion WebSocket:", error);
-      this.updateConnectionStatus(false);
-    }
-  }
-
-  // ✅ REQUÊTES API ALIGNÉES AVEC LES ROUTES BACKEND
-  async makeAuthenticatedRequest(url, options = {}) {
-    const headers = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${this.currentUser?.token}`,
-      ...options.headers,
-    };
-
-    try {
-      const response = await fetch(url, {
-        ...options,
-        headers,
-        credentials: "include",
-      });
-
-      if (response.status === 401) {
-        this.handleAuthError("Session expirée");
-        throw new Error("Non autorisé");
-      }
-
-      return response;
-    } catch (error) {
-      console.error("❌ Erreur requête API:", error);
+      console.error("❌ Erreur chargement utilisateur:", error);
       throw error;
     }
   }
 
-  // ✅ CHARGEMENT CONVERSATIONS ALIGNÉ AVEC GetConversations USE CASE
-  async loadConversations() {
-    try {
-      console.log("🗣️ Chargement des conversations...");
+  updateUserInfo() {
+    const matriculeEl = document.getElementById("matricule");
+    const userRoleEl = document.getElementById("userRole");
 
-      const response = await this.makeAuthenticatedRequest(
-        `${this.apiBaseUrl}/conversations?page=1&limit=50`
-      );
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-
-      if (data.success && data.data) {
-        this.conversations = data.data.conversations || [];
-
-        // ✅ ENRICHIR AVEC LES DONNÉES UTILISATEUR
-        this.conversations = this.conversations.map((conv) => ({
-          ...conv,
-          otherParticipant: conv.participants?.find(
-            (p) => p.id !== this.currentUser.id
-          ),
-          unreadCount: conv.unreadCount || 0,
-          lastMessage: conv.lastMessage || null,
-          isOnline: conv.participants?.some(
-            (p) => p.id !== this.currentUser.id && this.onlineUsers.has(p.id)
-          ),
-        }));
-
-        this.renderConversations();
-        console.log(`✅ ${this.conversations.length} conversations chargées`);
-      }
-    } catch (error) {
-      console.error("❌ Erreur chargement conversations:", error);
-      this.showToast(
-        `Erreur chargement conversations: ${error.message}`,
-        "error"
-      );
-    }
+    if (matriculeEl) matriculeEl.textContent = this.currentUser.matricule;
+    if (userRoleEl) userRoleEl.textContent = this.currentUser.role;
   }
 
-  // ✅ CHARGEMENT FICHIERS ALIGNÉ AVEC GetFile USE CASE
-  async loadFiles() {
+  // ================================================================
+  // WEBSOCKET
+  // ================================================================
+
+  async initializeSocket() {
     try {
-      console.log("📁 Chargement des fichiers...");
+      console.log("🔌 Connexion WebSocket...");
 
-      const response = await this.makeAuthenticatedRequest(
-        `${this.apiBaseUrl}/files?page=1&limit=50&sort=-uploadedAt`
-      );
-
-      if (!response.ok) {
-        if (response.status === 404) {
-          this.files = [];
-          this.renderFiles();
-          console.log("📁 Aucun fichier trouvé");
-          return;
-        }
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      if (data.success && data.data) {
-        this.files = Array.isArray(data.data.files)
-          ? data.data.files
-          : Array.isArray(data.data)
-          ? data.data
-          : [];
-
-        // ✅ ENRICHIR AVEC LES MÉTADONNÉES
-        this.files = this.files.map((file) => ({
-          ...file,
-          canPreview: this.canPreviewFile(file.mimeType),
-          icon: this.getFileIcon(file.mimeType),
-          formattedSize: this.formatFileSize(file.size),
-          uploadedByName: file.uploadedBy?.nom || "Inconnu",
-        }));
-
-        this.renderFiles();
-        console.log(`✅ ${this.files.length} fichiers chargés`);
-      }
-    } catch (error) {
-      console.error("❌ Erreur chargement fichiers:", error);
-      this.showToast(`Erreur chargement fichiers: ${error.message}`, "error");
-    }
-  }
-
-  // ✅ ENVOI MESSAGE ALIGNÉ AVEC SendMessage USE CASE
-  async sendMessage() {
-    const messageInput = document.getElementById("messageInput");
-    const message = messageInput?.value?.trim();
-
-    if (!message || !this.currentConversation) {
-      return;
-    }
-
-    try {
-      const messageData = {
-        content: message,
-        conversationId: this.currentConversation.id,
-        type: "text",
-        metadata: {
-          platform: "web",
-          userAgent: navigator.userAgent,
-          timestamp: new Date().toISOString(),
-        },
-      };
-
-      // ✅ ENVOYER VIA WEBSOCKET (ALIGNÉ AVEC ChatHandler)
-      this.socket.emit("sendMessage", messageData);
-
-      // ✅ AJOUTER À L'INTERFACE IMMÉDIATEMENT
-      const tempMessage = {
-        id: `temp_${Date.now()}`,
-        content: message,
-        senderId: this.currentUser.id,
-        senderName: this.currentUser.nom,
-        createdAt: new Date().toISOString(),
-        status: "SENDING",
-        type: "text",
-      };
-
-      this.addMessageToUI(tempMessage);
-      messageInput.value = "";
-
-      console.log("💬 Message envoyé:", messageData);
-    } catch (error) {
-      console.error("❌ Erreur envoi message:", error);
-      this.showToast(`Erreur envoi message: ${error.message}`, "error");
-    }
-  }
-
-  // ✅ UPLOAD FICHIER ALIGNÉ AVEC UploadFile USE CASE
-  async uploadFile(file) {
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      if (this.currentConversation) {
-        formData.append("conversationId", this.currentConversation.id);
-      }
-
-      formData.append(
-        "metadata",
-        JSON.stringify({
-          uploadedBy: this.currentUser.id,
-          platform: "web",
-          timestamp: new Date().toISOString(),
-        })
-      );
-
-      console.log("📤 Upload fichier:", file.name);
-
-      const response = await fetch(`${this.apiBaseUrl}/files/upload`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.currentUser.token}`,
-        },
-        body: formData,
+      this.socket = io(this.config.WS_URL, {
+        transports: ["websocket", "polling"],
+        timeout: 20000,
+        reconnection: true,
+        reconnectionAttempts: 5,
+        reconnectionDelay: 1000,
       });
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
+      this.setupSocketEvents();
 
-      const data = await response.json();
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Timeout de connexion WebSocket"));
+        }, 10000);
 
-      if (data.success) {
-        console.log("✅ Fichier uploadé:", data.data);
-
-        // ✅ NOTIFIER VIA WEBSOCKET
-        this.socket.emit("fileShared", {
-          fileId: data.data.id,
-          conversationId: this.currentConversation?.id,
-          fileName: file.name,
+        this.socket.on("connect", () => {
+          clearTimeout(timeout);
+          console.log("✅ WebSocket connecté");
+          this.authenticateSocket();
+          resolve();
         });
 
-        this.showToast("Fichier uploadé avec succès", "success");
-        await this.loadFiles();
-      }
+        this.socket.on("connect_error", (error) => {
+          clearTimeout(timeout);
+          console.error("❌ Erreur connexion WebSocket:", error);
+          reject(error);
+        });
+      });
     } catch (error) {
-      console.error("❌ Erreur upload fichier:", error);
-      this.showToast(`Erreur upload: ${error.message}`, "error");
+      console.error("❌ Erreur initialisation WebSocket:", error);
+      throw error;
     }
   }
 
-  // ✅ GESTION DES ÉVÉNEMENTS WEBSOCKET ALIGNÉS AVEC LE BACKEND
+  authenticateSocket() {
+    if (!this.socket || !this.currentUser) return;
+
+    console.log("🔐 Authentification WebSocket...");
+
+    this.socket.emit("authenticate", {
+      userId: this.currentUser.id,
+      matricule: this.currentUser.matricule,
+      token: "demo-token", // En production, utiliser un vrai token JWT
+    });
+  }
+
+  setupSocketEvents() {
+    if (!this.socket) return;
+
+    // Événements de connexion
+    this.socket.on("authenticated", (data) => {
+      console.log("✅ Authentifié:", data);
+      this.isConnected = true;
+      this.updateConnectionStatus(true);
+    });
+
+    this.socket.on("auth_error", (data) => {
+      console.error("❌ Erreur authentification:", data);
+      this.showToast("Erreur d'authentification: " + data.message, "error");
+    });
+
+    // Événements de messages
+    this.socket.on("newMessage", (message) => {
+      this.handleNewMessage(message);
+    });
+
+    this.socket.on("message_sent", (data) => {
+      console.log("✅ Message envoyé:", data);
+    });
+
+    // Événements de frappe
+    this.socket.on("userTyping", (data) => {
+      this.handleUserTyping(data);
+    });
+
+    this.socket.on("userStoppedTyping", (data) => {
+      this.handleUserStoppedTyping(data);
+    });
+
+    // Événements de présence
+    this.socket.on("user_connected", (data) => {
+      console.log("👤 Utilisateur connecté:", data.matricule);
+      this.onlineUsers.add(data.userId);
+      this.updateContactStatus(data.userId, "online");
+    });
+
+    this.socket.on("user_disconnected", (data) => {
+      console.log("👤 Utilisateur déconnecté:", data.matricule);
+      this.onlineUsers.delete(data.userId);
+      this.updateContactStatus(data.userId, "offline");
+    });
+
+    this.socket.on("onlineUsers", (data) => {
+      console.log("👥 Utilisateurs en ligne:", data);
+      this.onlineUsers.clear();
+      data.users.forEach((user) => {
+        this.onlineUsers.add(user.userId);
+      });
+      this.updateContactsDisplay();
+    });
+
+    // Événements de conversation
+    this.socket.on("user_joined_conversation", (data) => {
+      console.log("👥 Utilisateur rejoint conversation:", data);
+    });
+
+    this.socket.on("user_left_conversation", (data) => {
+      console.log("👋 Utilisateur quitté conversation:", data);
+    });
+
+    // Événements de déconnexion
+    this.socket.on("disconnect", (reason) => {
+      console.log("🔌 WebSocket déconnecté:", reason);
+      this.isConnected = false;
+      this.updateConnectionStatus(false);
+    });
+
+    this.socket.on("reconnect", () => {
+      console.log("🔌 WebSocket reconnecté");
+      this.authenticateSocket();
+    });
+  }
+
+  // ================================================================
+  // GESTION DES MESSAGES
+  // ================================================================
+
   handleNewMessage(message) {
-    // ✅ METTRE À JOUR LA CONVERSATION COURANTE
-    if (message.conversationId === this.currentConversation?.id) {
-      this.addMessageToUI(message);
+    console.log("📩 Nouveau message:", message);
+
+    // Ajouter le message à la collection
+    if (!this.messages.has(message.conversationId)) {
+      this.messages.set(message.conversationId, []);
+    }
+    this.messages.get(message.conversationId).push(message);
+
+    // Mettre à jour l'affichage si c'est la conversation active
+    if (
+      this.currentConversation &&
+      this.currentConversation.id === message.conversationId
+    ) {
+      this.displayMessage(message);
+      this.scrollToBottom();
     }
 
-    // ✅ METTRE À JOUR LA LISTE DES CONVERSATIONS
-    this.updateConversationLastMessage(message);
+    // Mettre à jour la liste des conversations
+    this.updateConversationLastMessage(message.conversationId, message);
 
-    // ✅ NOTIFICATION SONORE
-    if (
-      this.notificationConfig.sound &&
-      message.senderId !== this.currentUser.id
-    ) {
+    // Notification sonore/visuelle
+    if (message.senderId !== this.currentUser.id) {
+      this.showNotification(message);
       this.playNotificationSound();
     }
+  }
 
-    // ✅ MARQUER COMME LU SI CONVERSATION ACTIVE
-    if (message.conversationId === this.currentConversation?.id) {
-      this.socket.emit("markMessageAsRead", {
-        messageId: message.id,
-        conversationId: message.conversationId,
+  displayMessage(message) {
+    const container = document.getElementById("messagesContainer");
+    if (!container) return;
+
+    // Supprimer le message de bienvenue s'il existe
+    const welcomeMsg = container.querySelector(".welcome-message");
+    if (welcomeMsg) welcomeMsg.remove();
+
+    const messageEl = this.createMessageElement(message);
+    container.appendChild(messageEl);
+  }
+
+  createMessageElement(message) {
+    const isOwn = message.senderId === this.currentUser.id;
+    const time = new Date(message.timestamp).toLocaleTimeString("fr-FR", {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    const messageEl = document.createElement("div");
+    messageEl.className = `message ${isOwn ? "sent" : "received"}`;
+    messageEl.innerHTML = `
+      <div class="message-content">
+        <div class="message-text">${this.escapeHtml(message.content)}</div>
+        <div class="message-info">
+          <span class="message-time">${time}</span>
+          ${
+            isOwn
+              ? '<span class="message-status delivered"><i class="fas fa-check"></i></span>'
+              : ""
+          }
+        </div>
+      </div>
+    `;
+
+    return messageEl;
+  }
+
+  sendMessage() {
+    const input = document.getElementById("messageInput");
+    if (!input || !this.socket || !this.currentConversation) return;
+
+    const content = input.value.trim();
+    if (!content) return;
+
+    // Arrêter l'indicateur de frappe
+    this.stopTyping();
+
+    // Envoyer via WebSocket
+    this.socket.emit("sendMessage", {
+      content: content,
+      conversationId: this.currentConversation.id,
+      type: "TEXT",
+    });
+
+    // Vider le champ de saisie
+    input.value = "";
+    this.adjustTextareaHeight(input);
+  }
+
+  // ================================================================
+  // GESTION DES CONVERSATIONS
+  // ================================================================
+
+  async loadConversations() {
+    try {
+      this.showLoadingState("conversationsList");
+
+      // Simuler des conversations pour la démo
+      const mockConversations = [
+        {
+          id: "conv_1",
+          name: "Équipe IT",
+          type: "group",
+          participants: ["user_1", "user_2", "user_3"],
+          lastMessage: {
+            content: "Dernière mise à jour terminée",
+            timestamp: new Date(Date.now() - 300000),
+            senderId: "user_2",
+          },
+          unreadCount: 2,
+        },
+        {
+          id: "conv_2",
+          name: "Marie Dupont",
+          type: "private",
+          participants: [this.currentUser.id, "user_2"],
+          lastMessage: {
+            content: "Parfait, merci !",
+            timestamp: new Date(Date.now() - 1800000),
+            senderId: "user_2",
+          },
+          unreadCount: 0,
+        },
+      ];
+
+      // Stocker les conversations
+      mockConversations.forEach((conv) => {
+        this.conversations.set(conv.id, conv);
       });
+
+      // Afficher les conversations
+      this.displayConversations();
+    } catch (error) {
+      console.error("❌ Erreur chargement conversations:", error);
+      this.showErrorState(
+        "conversationsList",
+        "Erreur chargement conversations"
+      );
     }
   }
 
-  handleNotification(notification) {
-    console.log("🔔 Traitement notification:", notification);
-
-    switch (notification.type) {
-      case "NEW_MESSAGE":
-        if (notification.data?.message) {
-          this.handleNewMessage(notification.data.message);
-        }
-        break;
-
-      case "FILE_UPLOADED":
-        if (notification.data?.file) {
-          this.handleFileUploaded(notification.data.file);
-        }
-        break;
-
-      case "USER_ONLINE":
-        if (notification.data?.userId) {
-          this.onlineUsers.add(notification.data.userId);
-          this.updateUserStatus(notification.data.userId, "online");
-        }
-        break;
-
-      case "CONVERSATION_CREATED":
-        if (notification.data?.conversation) {
-          this.conversations.unshift(notification.data.conversation);
-          this.renderConversations();
-        }
-        break;
-
-      default:
-        console.log("🔔 Notification non gérée:", notification.type);
-    }
-
-    // ✅ AFFICHER TOAST POUR NOTIFICATIONS IMPORTANTES
-    if (notification.showToast) {
-      this.showToast(notification.message, notification.level || "info");
-    }
-  }
-
-  // ✅ MÉTHODES D'INTERFACE ALIGNÉES AVEC LES ENTITÉS BACKEND
-  renderConversations() {
+  displayConversations() {
     const container = document.getElementById("conversationsList");
     if (!container) return;
 
-    if (this.conversations.length === 0) {
-      container.innerHTML = `
-        <div class="empty-state">
-          <i class="fas fa-comments"></i>
-          <h3>Aucune conversation</h3>
-          <p>Commencez une nouvelle conversation</p>
-          <button class="btn btn-primary" onclick="app.showNewChatModal()">
-            <i class="fas fa-plus"></i>
-            Nouveau chat
-          </button>
-        </div>
-      `;
+    container.innerHTML = "";
+
+    if (this.conversations.size === 0) {
+      this.showEmptyState("conversationsList", "Aucune conversation");
       return;
     }
 
-    container.innerHTML = this.conversations
-      .map((conv) => {
-        const otherParticipant = conv.otherParticipant;
-        const isOnline = conv.isOnline;
-
-        return `
-          <div class="conversation-item ${
-            conv.id === this.currentConversation?.id ? "active" : ""
-          }" 
-               data-id="${conv.id}" onclick="app.selectConversation('${
-          conv.id
-        }')">
-            <div class="conversation-avatar">
-              <span>${otherParticipant?.nom?.charAt(0) || "?"}</span>
-              ${isOnline ? '<div class="status-indicator online"></div>' : ""}
-            </div>
-            <div class="conversation-info">
-              <div class="conversation-name">
-                ${otherParticipant?.nom || "Conversation"} ${
-          otherParticipant?.prenom || ""
-        }
-              </div>
-              ${
-                conv.lastMessage
-                  ? `
-                <div class="last-message">
-                  ${conv.lastMessage.type === "file" ? "📎 " : ""}
-                  ${this.escapeHtml(
-                    conv.lastMessage.content || "Fichier partagé"
-                  )}
-                </div>
-              `
-                  : ""
-              }
-              <div class="conversation-time">
-                ${
-                  conv.lastMessage
-                    ? this.formatTime(conv.lastMessage.createdAt)
-                    : ""
-                }
-              </div>
-            </div>
-            ${
-              conv.unreadCount > 0
-                ? `
-              <div class="unread-badge">${conv.unreadCount}</div>
-            `
-                : ""
-            }
-          </div>
-        `;
-      })
-      .join("");
+    Array.from(this.conversations.values()).forEach((conversation) => {
+      const convEl = this.createConversationElement(conversation);
+      container.appendChild(convEl);
+    });
   }
 
-  // ✅ REMPLACER LA MÉTHODE renderContacts EXISTANTE (autour de la ligne 850)
-  renderContacts() {
+  createConversationElement(conversation) {
+    const lastMessageTime = conversation.lastMessage
+      ? new Date(conversation.lastMessage.timestamp).toLocaleTimeString(
+          "fr-FR",
+          {
+            hour: "2-digit",
+            minute: "2-digit",
+          }
+        )
+      : "";
+
+    const isActive =
+      this.currentConversation &&
+      this.currentConversation.id === conversation.id;
+
+    const convEl = document.createElement("div");
+    convEl.className = `conversation-item ${isActive ? "active" : ""}`;
+    convEl.dataset.conversationId = conversation.id;
+
+    convEl.innerHTML = `
+      <div class="conversation-avatar">
+        <span>${conversation.name.charAt(0).toUpperCase()}</span>
+        <div class="status-indicator online"></div>
+      </div>
+      <div class="conversation-info">
+        <div class="conversation-name">${conversation.name}</div>
+        <div class="last-message">${
+          conversation.lastMessage
+            ? conversation.lastMessage.content
+            : "Aucun message"
+        }</div>
+        <div class="conversation-time">${lastMessageTime}</div>
+      </div>
+      ${
+        conversation.unreadCount > 0
+          ? `<div class="unread-badge">${conversation.unreadCount}</div>`
+          : ""
+      }
+    `;
+
+    convEl.addEventListener("click", () => {
+      this.selectConversation(conversation.id);
+    });
+
+    return convEl;
+  }
+
+  selectConversation(conversationId) {
+    const conversation = this.conversations.get(conversationId);
+    if (!conversation) return;
+
+    // Quitter l'ancienne conversation
+    if (this.currentConversation && this.socket) {
+      this.socket.emit("leaveConversation", {
+        conversationId: this.currentConversation.id,
+      });
+    }
+
+    // Sélectionner la nouvelle conversation
+    this.currentConversation = conversation;
+
+    // Rejoindre la nouvelle conversation
+    if (this.socket) {
+      this.socket.emit("joinConversation", {
+        conversationId: conversationId,
+      });
+    }
+
+    // Mettre à jour l'interface
+    this.updateConversationSelection();
+    this.updateChatHeader();
+    this.loadConversationMessages(conversationId);
+    this.showMessageInput();
+  }
+
+  updateConversationSelection() {
+    document.querySelectorAll(".conversation-item").forEach((item) => {
+      item.classList.remove("active");
+    });
+
+    if (this.currentConversation) {
+      const activeItem = document.querySelector(
+        `[data-conversation-id="${this.currentConversation.id}"]`
+      );
+      if (activeItem) activeItem.classList.add("active");
+    }
+  }
+
+  updateChatHeader() {
+    const chatHeader = document.getElementById("chatHeader");
+    if (!chatHeader || !this.currentConversation) return;
+
+    const chatInfo = chatHeader.querySelector(".chat-info");
+    if (chatInfo) {
+      chatInfo.innerHTML = `
+        <div class="avatar">
+          <span>${this.currentConversation.name.charAt(0).toUpperCase()}</span>
+        </div>
+        <div class="chat-details">
+          <h3>${this.currentConversation.name}</h3>
+          <span class="status">En ligne</span>
+        </div>
+      `;
+    }
+  }
+
+  async loadConversationMessages(conversationId) {
+    try {
+      const container = document.getElementById("messagesContainer");
+      if (!container) return;
+
+      container.innerHTML =
+        '<div class="loading-state"><i class="fas fa-spinner fa-spin"></i><p>Chargement des messages...</p></div>';
+
+      // Simuler un délai de chargement
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Récupérer les messages de la conversation
+      const messages = this.messages.get(conversationId) || [];
+
+      container.innerHTML = "";
+
+      if (messages.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <i class="fas fa-comments"></i>
+            <h3>Aucun message</h3>
+            <p>Commencez la conversation en envoyant le premier message</p>
+          </div>
+        `;
+      } else {
+        messages.forEach((message) => {
+          this.displayMessage(message);
+        });
+        this.scrollToBottom();
+      }
+    } catch (error) {
+      console.error("❌ Erreur chargement messages:", error);
+      this.showErrorState("messagesContainer", "Erreur chargement messages");
+    }
+  }
+
+  // ================================================================
+  // GESTION DES CONTACTS
+  // ================================================================
+
+  async loadContacts() {
+    try {
+      this.showLoadingState("contactsGrid");
+
+      // Simuler des contacts pour la démo
+      const mockContacts = [
+        {
+          id: "user_1",
+          matricule: "MAT001",
+          nom: "Jean Martin",
+          email: "jean.martin@cenadi.com",
+          role: "Développeur",
+          service: "IT",
+          statut: "online",
+        },
+        {
+          id: "user_2",
+          matricule: "MAT002",
+          nom: "Marie Dupont",
+          email: "marie.dupont@cenadi.com",
+          role: "Chef de projet",
+          service: "IT",
+          statut: "away",
+        },
+        {
+          id: "user_3",
+          matricule: "MAT003",
+          nom: "Pierre Dubois",
+          email: "pierre.dubois@cenadi.com",
+          role: "Administrateur",
+          service: "RH",
+          statut: "offline",
+        },
+      ];
+
+      // Stocker les contacts
+      mockContacts.forEach((contact) => {
+        this.contacts.set(contact.id, contact);
+      });
+
+      // Afficher les contacts
+      this.displayContacts();
+      this.updateContactsStats();
+    } catch (error) {
+      console.error("❌ Erreur chargement contacts:", error);
+      this.showErrorState("contactsGrid", "Erreur chargement contacts");
+    }
+  }
+
+  displayContacts() {
     const container = document.getElementById("contactsGrid");
     if (!container) return;
 
-    if (this.contacts.length === 0) {
-      container.innerHTML = `
-        <div class="empty-state">
-          <i class="fas fa-address-book"></i>
-          <h3>Aucun contact</h3>
-          <p>Les contacts s'afficheront ici</p>
-          <button class="btn btn-secondary" onclick="app.loadContacts()">
-            <i class="fas fa-sync-alt"></i>
-            Réessayer
-          </button>
-        </div>
-      `;
+    container.innerHTML = "";
+
+    const contacts = Array.from(this.contacts.values());
+
+    if (contacts.length === 0) {
+      this.showEmptyState("contactsGrid", "Aucun contact trouvé");
       return;
     }
 
-    container.innerHTML = this.contacts
-      .map(
-        (contact) => `
-    <div class="contact-card ${
-      contact.isSelf ? "self-contact" : ""
-    }" data-id="${contact.id}">
+    contacts.forEach((contact) => {
+      const contactEl = this.createContactElement(contact);
+      container.appendChild(contactEl);
+    });
+  }
+
+  createContactElement(contact) {
+    const isOnline = this.onlineUsers.has(contact.id);
+    const statusClass = isOnline ? "online" : contact.statut;
+    const isSelf = contact.id === this.currentUser.id;
+
+    const contactEl = document.createElement("div");
+    contactEl.className = `contact-card ${isSelf ? "self-contact" : ""}`;
+    contactEl.dataset.contactId = contact.id;
+
+    contactEl.innerHTML = `
       <div class="contact-avatar">
-        <span>${contact.nom.charAt(0)}</span>
-        <div class="status-indicator ${contact.statut}"></div>
+        <span>${contact.nom
+          .split(" ")
+          .map((n) => n.charAt(0))
+          .join("")}</span>
+        <div class="status-indicator ${statusClass}"></div>
       </div>
       <div class="contact-info">
         <div class="contact-name">
           ${contact.nom}
+          ${isSelf ? '<i class="fas fa-star" title="Vous"></i>' : ""}
+        </div>
+        <div class="contact-matricule">${contact.matricule}</div>
+        <div class="contact-role">${contact.role}</div>
+        <div class="contact-status ${statusClass}">
+          <i class="fas fa-circle"></i>
           ${
-            contact.isSelf
-              ? '<i class="fas fa-user-check" title="Vous"></i>'
-              : ""
+            isOnline
+              ? "En ligne"
+              : contact.statut === "away"
+              ? "Absent"
+              : "Hors ligne"
           }
         </div>
-        <div class="contact-matricule">${contact.matricule || "N/A"}</div>
-        <div class="contact-role">${contact.poste || "Utilisateur"}</div>
-        <div class="contact-status ${contact.statut}">
-          <i class="fas fa-circle"></i>
-          <span>${this.getStatusText(contact.statut)}</span>
-        </div>
-        ${
-          contact.email
-            ? `<div class="contact-email">${contact.email}</div>`
-            : ""
-        }
+        <div class="contact-email">${contact.email}</div>
       </div>
-      <div class="contact-actions">
-        ${
-          !contact.isSelf
-            ? `
-          <button class="action-btn" onclick="app.startChat('${contact.id}')" title="Démarrer une conversation">
-            <i class="fas fa-comment"></i>
-          </button>
-          <button class="action-btn" onclick="app.showContactDetails('${contact.id}')" title="Voir les détails">
-            <i class="fas fa-info"></i>
-          </button>
-        `
-            : `
-          <button class="action-btn" disabled title="Votre profil">
-            <i class="fas fa-user"></i>
-          </button>
-        `
-        }
-      </div>
-    </div>
-  `
-      )
-      .join("");
-  }
+    `;
 
-  renderFiles() {
-    const container = document.getElementById("filesGrid");
-    if (!container) return;
-
-    if (this.files.length === 0) {
-      container.innerHTML = `
-        <div class="empty-state">
-          <i class="fas fa-folder-open"></i>
-          <h3>Aucun fichier</h3>
-          <p>Vos fichiers partagés apparaîtront ici</p>
-          <button class="btn btn-primary" onclick="app.showUploadModal()">
-            <i class="fas fa-upload"></i>
-            Uploader un fichier
-          </button>
-        </div>
-      `;
-      return;
+    if (!isSelf) {
+      contactEl.addEventListener("click", () => {
+        this.startConversationWith(contact);
+      });
     }
 
-    container.innerHTML = this.files
-      .map(
-        (file) => `
-      <div class="file-card" data-id="${file.id}">
-        <div class="file-icon">
-          <i class="fas ${this.getFileIcon(file.type)}"></i>
-        </div>
-        <div class="file-info">
-          <div class="file-name">${file.name}</div>
-          <div class="file-size">${this.formatFileSize(file.size)}</div>
-          <div class="file-date">${this.formatTime(file.uploadedAt)}</div>
-        </div>
-        <div class="file-actions">
-          <button class="action-btn" onclick="app.downloadFile('${
-            file.id
-          }')" title="Télécharger">
-            <i class="fas fa-download"></i>
-          </button>
-          <button class="action-btn" onclick="app.shareFile('${
-            file.id
-          }')" title="Partager">
-            <i class="fas fa-share"></i>
-          </button>
-        </div>
-      </div>
-    `
-      )
-      .join("");
+    return contactEl;
   }
 
-  // ✅ REMPLACER LA MÉTHODE updateContactsStats EXISTANTE (autour de la ligne 950)
   updateContactsStats() {
-    const total = this.contacts.length;
-    const online = this.contacts.filter((c) => c.statut === "online").length;
-    const away = this.contacts.filter((c) => c.statut === "away").length;
-    const offline = this.contacts.filter((c) => c.statut === "offline").length;
+    const total = this.contacts.size;
+    const online = Array.from(this.contacts.values()).filter((c) =>
+      this.onlineUsers.has(c.id)
+    ).length;
+    const away = Array.from(this.contacts.values()).filter(
+      (c) => c.statut === "away"
+    ).length;
 
-    // ✅ METTRE À JOUR LES ÉLÉMENTS S'ILS EXISTENT
     const totalEl = document.getElementById("totalContacts");
     const onlineEl = document.getElementById("onlineContacts");
     const awayEl = document.getElementById("awayContacts");
@@ -665,90 +665,388 @@ class ChatFileApp {
     if (totalEl) totalEl.textContent = total;
     if (onlineEl) onlineEl.textContent = online;
     if (awayEl) awayEl.textContent = away;
-
-    console.log(
-      `📊 Stats contacts: ${total} total, ${online} en ligne, ${away} absents, ${offline} hors ligne`
-    );
   }
+
+  // ================================================================
+  // GESTION DES FICHIERS
+  // ================================================================
+
+  async loadFiles() {
+    try {
+      this.showLoadingState("filesGrid");
+
+      // Simuler des fichiers pour la démo
+      const mockFiles = [
+        {
+          id: "file_1",
+          nom: "Document_projet.pdf",
+          taille: 2048576,
+          type: "document",
+          dateCreation: new Date(Date.now() - 86400000),
+          uploaderMatricule: "MAT001",
+        },
+        {
+          id: "file_2",
+          nom: "Image_schema.png",
+          taille: 1024768,
+          type: "image",
+          dateCreation: new Date(Date.now() - 3600000),
+          uploaderMatricule: "MAT002",
+        },
+      ];
+
+      // Stocker les fichiers
+      mockFiles.forEach((file) => {
+        this.files.set(file.id, file);
+      });
+
+      // Afficher les fichiers
+      this.displayFiles();
+    } catch (error) {
+      console.error("❌ Erreur chargement fichiers:", error);
+      this.showErrorState("filesGrid", "Erreur chargement fichiers");
+    }
+  }
+
+  displayFiles() {
+    const container = document.getElementById("filesGrid");
+    if (!container) return;
+
+    container.innerHTML = "";
+
+    const files = Array.from(this.files.values());
+
+    if (files.length === 0) {
+      this.showEmptyState("filesGrid", "Aucun fichier trouvé");
+      return;
+    }
+
+    files.forEach((file) => {
+      const fileEl = this.createFileElement(file);
+      container.appendChild(fileEl);
+    });
+  }
+
+  createFileElement(file) {
+    const fileEl = document.createElement("div");
+    fileEl.className = "file-card";
+    fileEl.dataset.fileId = file.id;
+
+    const icon = this.getFileIcon(file.type);
+    const size = this.formatFileSize(file.taille);
+    const date = file.dateCreation.toLocaleDateString("fr-FR");
+
+    fileEl.innerHTML = `
+      <div class="file-icon">
+        <i class="${icon}"></i>
+      </div>
+      <div class="file-info">
+        <div class="file-name" title="${file.nom}">${file.nom}</div>
+        <div class="file-size">${size}</div>
+        <div class="file-date">${date}</div>
+      </div>
+      <div class="file-actions">
+        <button class="btn btn-secondary btn-sm" onclick="chatApp.downloadFile('${file.id}')">
+          <i class="fas fa-download"></i>
+        </button>
+        <button class="btn btn-danger btn-sm" onclick="chatApp.deleteFile('${file.id}')">
+          <i class="fas fa-trash"></i>
+        </button>
+      </div>
+    `;
+
+    return fileEl;
+  }
+
+  // ================================================================
+  // INTERFACE UTILISATEUR
+  // ================================================================
+
+  initializeUI() {
+    // Appliquer le thème
+    this.applyTheme();
+
+    // Initialiser la vue active
+    this.switchView(this.currentView);
+
+    // Configurer les éléments interactifs
+    this.setupAutoResize();
+  }
+
+  setupEventListeners() {
+    // Navigation
+    document.querySelectorAll(".nav-link").forEach((link) => {
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        const view = link.dataset.view;
+        this.switchView(view);
+      });
+    });
+
+    // Messages
+    const messageInput = document.getElementById("messageInput");
+    const sendBtn = document.getElementById("sendBtn");
+
+    if (messageInput) {
+      messageInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          this.sendMessage();
+        } else {
+          this.handleTyping();
+        }
+      });
+
+      messageInput.addEventListener("input", () => {
+        this.adjustTextareaHeight(messageInput);
+      });
+    }
+
+    if (sendBtn) {
+      sendBtn.addEventListener("click", () => {
+        this.sendMessage();
+      });
+    }
+
+    // Recherche conversations
+    const searchConversations = document.getElementById("searchConversations");
+    if (searchConversations) {
+      searchConversations.addEventListener("input", (e) => {
+        this.filterConversations(e.target.value);
+      });
+    }
+
+    // Recherche contacts
+    const searchContacts = document.getElementById("searchContacts");
+    if (searchContacts) {
+      searchContacts.addEventListener("input", (e) => {
+        this.filterContacts(e.target.value);
+      });
+    }
+
+    // Boutons d'action
+    this.setupActionButtons();
+
+    // Modales
+    this.setupModals();
+  }
+
+  setupActionButtons() {
+    // Actualisation
+    const refreshContactsBtn = document.getElementById("refreshContactsBtn");
+    if (refreshContactsBtn) {
+      refreshContactsBtn.addEventListener("click", () => {
+        this.loadContacts();
+      });
+    }
+
+    const refreshFilesBtn = document.getElementById("refreshFilesBtn");
+    if (refreshFilesBtn) {
+      refreshFilesBtn.addEventListener("click", () => {
+        this.loadFiles();
+      });
+    }
+
+    const refreshHealthBtn = document.getElementById("refreshHealthBtn");
+    if (refreshHealthBtn) {
+      refreshHealthBtn.addEventListener("click", () => {
+        this.loadHealthStatus();
+      });
+    }
+
+    // Upload
+    const uploadBtn = document.getElementById("uploadBtn");
+    if (uploadBtn) {
+      uploadBtn.addEventListener("click", () => {
+        this.openUploadModal();
+      });
+    }
+
+    // Paramètres
+    const settingsBtn = document.getElementById("settingsBtn");
+    if (settingsBtn) {
+      settingsBtn.addEventListener("click", () => {
+        this.openSettingsModal();
+      });
+    }
+  }
+
+  switchView(viewName) {
+    // Mettre à jour la navigation
+    document.querySelectorAll(".nav-link").forEach((link) => {
+      link.classList.remove("active");
+    });
+
+    const activeLink = document.querySelector(`[data-view="${viewName}"]`);
+    if (activeLink) {
+      activeLink.classList.add("active");
+    }
+
+    // Masquer toutes les sections
+    document.querySelectorAll(".content-section").forEach((section) => {
+      section.classList.remove("active");
+    });
+
+    // Afficher la section active
+    const activeSection = document.getElementById(`${viewName}Section`);
+    if (activeSection) {
+      activeSection.classList.add("active");
+    }
+
+    this.currentView = viewName;
+
+    // Charger les données selon la vue
+    this.loadViewData(viewName);
+  }
+
+  async loadViewData(viewName) {
+    switch (viewName) {
+      case "chat":
+        if (this.conversations.size === 0) {
+          await this.loadConversations();
+        }
+        break;
+      case "contacts":
+        if (this.contacts.size === 0) {
+          await this.loadContacts();
+        }
+        break;
+      case "files":
+        await this.loadFiles();
+        break;
+      case "api":
+        this.loadApiDocumentation();
+        break;
+      case "health":
+        await this.loadHealthStatus();
+        break;
+    }
+  }
+
+  // ================================================================
+  // ÉTATS D'AFFICHAGE
+  // ================================================================
+
+  showLoadingState(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    container.innerHTML = `
+      <div class="loading-state">
+        <i class="fas fa-spinner fa-spin"></i>
+        <h3>Chargement...</h3>
+        <p>Veuillez patienter</p>
+      </div>
+    `;
+  }
+
+  showEmptyState(containerId, message) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    container.innerHTML = `
+      <div class="empty-state">
+        <i class="fas fa-inbox"></i>
+        <h3>${message}</h3>
+        <p>Aucun élément à afficher</p>
+      </div>
+    `;
+  }
+
+  showErrorState(containerId, message) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    container.innerHTML = `
+      <div class="error-state">
+        <i class="fas fa-exclamation-triangle"></i>
+        <h3>Erreur</h3>
+        <p>${message}</p>
+        <button class="btn btn-primary" onclick="location.reload()">
+          <i class="fas fa-refresh"></i>
+          Actualiser
+        </button>
+      </div>
+    `;
+  }
+
+  // ================================================================
+  // UTILITAIRES
+  // ================================================================
 
   updateConnectionStatus(connected) {
-    const indicator = document.getElementById("connectionStatus");
-    if (indicator) {
-      indicator.innerHTML = connected
-        ? '<i class="fas fa-circle"></i> Connecté'
-        : '<i class="fas fa-circle"></i> Déconnecté';
-      indicator.className = `connection-status ${
-        connected ? "connected" : "disconnected"
-      }`;
+    const statusEl = document.getElementById("connectionStatus");
+    if (!statusEl) return;
+
+    statusEl.className = `connection-status ${
+      connected ? "connected" : "disconnected"
+    }`;
+    statusEl.innerHTML = `
+      <i class="fas fa-circle"></i>
+      <span>${connected ? "Connecté" : "Déconnecté"}</span>
+    `;
+  }
+
+  showMessageInput() {
+    const container = document.getElementById("messageInputContainer");
+    if (container) {
+      container.style.display = "flex";
     }
   }
 
-  updateUserUI() {
-    if (this.currentUser) {
-      const userNameEl = document.getElementById("userName");
-      const userRoleEl = document.getElementById("userRole");
-      const userAvatarEl = document.getElementById("userAvatar");
-
-      if (userNameEl) userNameEl.textContent = this.currentUser.nom;
-      if (userRoleEl)
-        userRoleEl.textContent = this.currentUser.poste || "Utilisateur";
-      if (userAvatarEl)
-        userAvatarEl.textContent = this.currentUser.nom.charAt(0);
+  scrollToBottom() {
+    const container = document.getElementById("messagesContainer");
+    if (container) {
+      container.scrollTop = container.scrollHeight;
     }
   }
 
-  // Utilitaires
-  formatTime(timestamp) {
-    if (!timestamp) return "";
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diff = now - date;
+  adjustTextareaHeight(textarea) {
+    textarea.style.height = "auto";
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + "px";
+  }
 
-    if (diff < 60000) return "À l'instant";
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
-    return date.toLocaleDateString();
+  escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
   }
 
   formatFileSize(bytes) {
-    if (!bytes) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+    const sizes = ["Bytes", "KB", "MB", "GB"];
+    if (bytes === 0) return "0 Bytes";
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return Math.round((bytes / Math.pow(1024, i)) * 100) / 100 + " " + sizes[i];
   }
 
   getFileIcon(type) {
     const icons = {
-      image: "fa-image",
-      video: "fa-video",
-      audio: "fa-music",
-      pdf: "fa-file-pdf",
-      doc: "fa-file-word",
-      xls: "fa-file-excel",
-      zip: "fa-file-archive",
+      image: "fas fa-image",
+      document: "fas fa-file-alt",
+      video: "fas fa-video",
+      audio: "fas fa-music",
+      default: "fas fa-file",
     };
-    return icons[type] || "fa-file";
-  }
-
-  getServiceIcon(service) {
-    const icons = {
-      mongodb: "fa-database",
-      redis: "fa-memory",
-      kafka: "fa-stream",
-      websocket: "fa-plug",
-    };
-    return icons[service.toLowerCase()] || "fa-cog";
+    return icons[type] || icons.default;
   }
 
   showToast(message, type = "info") {
-    const container =
-      document.getElementById("toastContainer") || this.createToastContainer();
+    const container = document.getElementById("toastContainer");
+    if (!container) return;
 
     const toast = document.createElement("div");
     toast.className = `toast ${type}`;
+
+    const icon =
+      {
+        success: "fa-check-circle",
+        error: "fa-exclamation-circle",
+        warning: "fa-exclamation-triangle",
+        info: "fa-info-circle",
+      }[type] || "fa-info-circle";
+
     toast.innerHTML = `
-      <i class="fas ${this.getToastIcon(type)}"></i>
+      <i class="fas ${icon} toast-icon"></i>
       <span>${message}</span>
       <button onclick="this.parentElement.remove()">
         <i class="fas fa-times"></i>
@@ -757,6 +1055,7 @@ class ChatFileApp {
 
     container.appendChild(toast);
 
+    // Auto-suppression après 5 secondes
     setTimeout(() => {
       if (toast.parentElement) {
         toast.remove();
@@ -764,664 +1063,162 @@ class ChatFileApp {
     }, 5000);
   }
 
-  createToastContainer() {
-    const container = document.createElement("div");
-    container.id = "toastContainer";
-    container.className = "toast-container";
-    document.body.appendChild(container);
-    return container;
+  // ================================================================
+  // SERVICES SUPPLÉMENTAIRES
+  // ================================================================
+
+  async loadInitialData() {
+    await this.loadConversations();
   }
 
-  getToastIcon(type) {
-    const icons = {
-      success: "fa-check-circle",
-      error: "fa-exclamation-circle",
-      warning: "fa-exclamation-triangle",
-      info: "fa-info-circle",
-    };
-    return icons[type] || "fa-info-circle";
-  }
+  startServices() {
+    // Service de vérification de la connexion
+    setInterval(() => {
+      if (this.socket && this.socket.connected) {
+        this.socket.emit("ping");
+      }
+    }, 30000);
 
-  // Méthodes pour les actions utilisateur
-  startChat(contactId) {
-    console.log("💬 Démarrer chat avec:", contactId);
-    this.switchView("chat");
-    // TODO: Implémenter la création de conversation
-    this.showToast("Fonctionnalité en cours de développement", "info");
-  }
-
-  showContactDetails(contactId) {
-    const contact = this.contacts.find((c) => c.id == contactId);
-    if (contact) {
-      console.log("👤 Détails contact:", contact);
-      // TODO: Afficher modal avec détails
-      this.showToast(`Détails de ${contact.nom}`, "info");
+    // Service d'actualisation automatique
+    if (this.settings.autoRefresh) {
+      setInterval(() => {
+        if (this.currentView === "health") {
+          this.loadHealthStatus();
+        }
+      }, 60000);
     }
   }
 
-  downloadFile(fileId) {
-    console.log("📥 Télécharger fichier:", fileId);
-    // TODO: Implémenter le téléchargement
-    this.showToast("Fonctionnalité en cours de développement", "info");
+  loadSettings() {
+    const defaults = {
+      theme: "light",
+      notifications: true,
+      sound: true,
+      autoRefresh: true,
+    };
+
+    try {
+      const saved = localStorage.getItem("cenadi-chat-settings");
+      return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
+    } catch {
+      return defaults;
+    }
   }
 
-  shareFile(fileId) {
-    console.log("📤 Partager fichier:", fileId);
-    // TODO: Implémenter le partage
-    this.showToast("Fonctionnalité en cours de développement", "info");
+  saveSettings() {
+    localStorage.setItem("cenadi-chat-settings", JSON.stringify(this.settings));
   }
 
-  showSettings() {
-    console.log("⚙️ Afficher paramètres");
-    this.showToast("Paramètres en cours de développement", "info");
+  applyTheme() {
+    document.documentElement.setAttribute("data-theme", this.settings.theme);
   }
 
-  showNewChatModal() {
-    console.log("💬 Nouveau chat");
-    this.showToast("Fonctionnalité en cours de développement", "info");
+  // ================================================================
+  // MÉTHODES PUBLIQUES POUR LES ÉVÉNEMENTS
+  // ================================================================
+
+  async downloadFile(fileId) {
+    try {
+      this.showToast("Téléchargement du fichier...", "info");
+      // Implémenter le téléchargement
+      console.log("Téléchargement fichier:", fileId);
+    } catch (error) {
+      this.showToast("Erreur téléchargement: " + error.message, "error");
+    }
   }
 
-  showUploadModal() {
-    console.log("📤 Upload fichier");
-    this.showToast("Fonctionnalité en cours de développement", "info");
+  async deleteFile(fileId) {
+    if (!confirm("Êtes-vous sûr de vouloir supprimer ce fichier ?")) return;
+
+    try {
+      this.showToast("Suppression du fichier...", "info");
+      // Implémenter la suppression
+      console.log("Suppression fichier:", fileId);
+    } catch (error) {
+      this.showToast("Erreur suppression: " + error.message, "error");
+    }
   }
 
+  // Méthodes de stub pour les fonctionnalités avancées
+  setupAutoResize() {
+    /* Implémentation future */
+  }
+  setupModals() {
+    /* Implémentation future */
+  }
+  openUploadModal() {
+    this.showToast("Fonctionnalité à implémenter", "info");
+  }
+  openSettingsModal() {
+    this.showToast("Fonctionnalité à implémenter", "info");
+  }
+  filterConversations(query) {
+    /* Implémentation future */
+  }
+  filterContacts(query) {
+    /* Implémentation future */
+  }
+  handleTyping() {
+    /* Implémentation future */
+  }
+  stopTyping() {
+    /* Implémentation future */
+  }
+  handleUserTyping(data) {
+    /* Implémentation future */
+  }
+  handleUserStoppedTyping(data) {
+    /* Implémentation future */
+  }
+  updateContactStatus(userId, status) {
+    /* Implémentation future */
+  }
+  updateContactsDisplay() {
+    this.updateContactsStats();
+  }
+  updateConversationLastMessage(conversationId, message) {
+    /* Implémentation future */
+  }
+  startConversationWith(contact) {
+    this.showToast(`Démarrer conversation avec ${contact.nom}`, "info");
+  }
+  showNotification(message) {
+    /* Implémentation future */
+  }
+  playNotificationSound() {
+    /* Implémentation future */
+  }
   loadApiDocumentation() {
-    const container = document.getElementById("apiEndpoints");
-    if (!container) return;
-
-    const endpoints = [
-      {
-        group: "Messages",
-        endpoints: [
-          {
-            method: "GET",
-            url: "/api/messages",
-            description: "Récupérer les messages",
-          },
-          {
-            method: "POST",
-            url: "/api/messages",
-            description: "Envoyer un message",
-          },
-          {
-            method: "PUT",
-            url: "/api/messages/:id/status",
-            description: "Marquer comme lu",
-          },
-        ],
-      },
-      {
-        group: "Conversations",
-        endpoints: [
-          {
-            method: "GET",
-            url: "/api/conversations",
-            description: "Lister les conversations",
-          },
-          {
-            method: "GET",
-            url: "/api/conversations/:id",
-            description: "Détails conversation",
-          },
-          {
-            method: "POST",
-            url: "/api/conversations",
-            description: "Créer conversation",
-          },
-        ],
-      },
-      {
-        group: "Fichiers",
-        endpoints: [
-          {
-            method: "GET",
-            url: "/api/files",
-            description: "Lister les fichiers",
-          },
-          {
-            method: "POST",
-            url: "/api/files/upload",
-            description: "Uploader un fichier",
-          },
-          {
-            method: "GET",
-            url: "/api/files/:id",
-            description: "Télécharger fichier",
-          },
-        ],
-      },
-    ];
-
-    container.innerHTML = endpoints
-      .map(
-        (group) => `
-      <div class="endpoint-group">
-        <h3>${group.group}</h3>
-        ${group.endpoints
-          .map(
-            (ep) => `
-          <div class="endpoint">
-            <span class="method ${ep.method.toLowerCase()}">${ep.method}</span>
-            <span class="url">${ep.url}</span>
-            <span class="description">${ep.description}</span>
-          </div>
-        `
-          )
-          .join("")}
-      </div>
-    `
-      )
-      .join("");
+    /* Implémentation future */
   }
-
-  // ✅ AJOUTER CETTE MÉTHODE APRÈS loadFiles() (autour de la ligne 500)
-  async loadContacts() {
-    try {
-      console.log("👥 Chargement des contacts...");
-
-      // ✅ CHARGER DEPUIS LE SERVICE UTILISATEURS
-      const response = await this.makeAuthenticatedRequest(
-        `${this.userServiceUrl}/all`,
-        {
-          method: "GET",
-        }
-      );
-
-      if (!response.ok) {
-        if (response.status === 401) {
-          this.handleAuthError("Session expirée");
-          return;
-        }
-        if (response.status === 404 || response.status === 503) {
-          console.warn("⚠️ Service utilisateurs indisponible");
-          this.contacts = this.getMockContacts();
-          this.renderContacts();
-          this.updateContactsStats();
-          this.showToast(
-            "Service utilisateurs indisponible - Données de test",
-            "warning"
-          );
-          return;
-        }
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const data = await response.json();
-
-      if (data.success && Array.isArray(data.data)) {
-        // ✅ ADAPTER LES DONNÉES DU SERVICE UTILISATEURS
-        this.contacts = data.data.map((user) => ({
-          id: user.id || user._id,
-          nom: user.nom || user.name || user.userName || "Utilisateur",
-          email: user.email || "",
-          matricule: user.matricule || user.id || "",
-          poste: user.poste || user.role || "Utilisateur",
-          statut: this.getRandomStatus(), // Status aléatoire pour la démo
-          telephone: user.telephone || "",
-          service: user.service || "",
-          lastActive: new Date().toISOString(),
-          avatar: user.avatar || null,
-          isOnline: Math.random() > 0.5, // Statut aléatoire pour la démo
-        }));
-
-        console.log(
-          `✅ ${this.contacts.length} contacts chargés depuis le service`
-        );
-      } else if (Array.isArray(data)) {
-        // ✅ SI LA RÉPONSE EST DIRECTEMENT UN ARRAY
-        this.contacts = data.map((user) => ({
-          id: user.id || user._id,
-          nom: user.nom || user.name || user.userName || "Utilisateur",
-          email: user.email || "",
-          matricule: user.matricule || user.id || "",
-          poste: user.poste || user.role || "Utilisateur",
-          statut: this.getRandomStatus(),
-          telephone: user.telephone || "",
-          service: user.service || "",
-          lastActive: new Date().toISOString(),
-          avatar: user.avatar || null,
-          isOnline: Math.random() > 0.5,
-        }));
-
-        console.log(
-          `✅ ${this.contacts.length} contacts chargés (format direct)`
-        );
-      } else {
-        console.warn("⚠️ Format de réponse inattendu:", data);
-        this.contacts = this.getMockContacts();
-      }
-
-      // ✅ AJOUTER L'UTILISATEUR ACTUEL S'IL N'EST PAS DANS LA LISTE
-      if (
-        this.currentUser &&
-        !this.contacts.find((c) => c.id === this.currentUser.id)
-      ) {
-        this.contacts.unshift({
-          id: this.currentUser.id,
-          nom: this.currentUser.nom,
-          email: this.currentUser.email || "",
-          matricule: this.currentUser.matricule || "",
-          poste: this.currentUser.poste || "Utilisateur",
-          statut: "online",
-          telephone: "",
-          service: "",
-          lastActive: new Date().toISOString(),
-          avatar: null,
-          isOnline: true,
-          isSelf: true,
-        });
-      }
-
-      this.renderContacts();
-      this.updateContactsStats();
-    } catch (error) {
-      console.error("❌ Erreur chargement contacts:", error);
-
-      // ✅ FALLBACK : DONNÉES DE TEST
-      this.contacts = this.getMockContacts();
-      this.renderContacts();
-      this.updateContactsStats();
-
-      this.showToast(
-        `Service utilisateurs indisponible: ${error.message}`,
-        "warning"
-      );
-    }
-  }
-
-  // ✅ AJOUTER MÉTHODE HELPER POUR DONNÉES DE TEST
-  getMockContacts() {
-    const mockContacts = [
-      {
-        id: "user_1",
-        nom: "DUPONT",
-        email: "dupont@cenadi.com",
-        matricule: "MAT001",
-        poste: "Développeur",
-        statut: "online",
-        telephone: "0123456789",
-        service: "Informatique",
-        lastActive: new Date().toISOString(),
-        isOnline: true,
-      },
-      {
-        id: "user_2",
-        nom: "MARTIN",
-        email: "martin@cenadi.com",
-        matricule: "MAT002",
-        poste: "Designer",
-        statut: "away",
-        telephone: "0123456790",
-        service: "Design",
-        lastActive: new Date(Date.now() - 300000).toISOString(),
-        isOnline: false,
-      },
-      {
-        id: "user_3",
-        nom: "BERNARD",
-        email: "bernard@cenadi.com",
-        matricule: "MAT003",
-        poste: "Chef de projet",
-        statut: "offline",
-        telephone: "0123456791",
-        service: "Management",
-        lastActive: new Date(Date.now() - 3600000).toISOString(),
-        isOnline: false,
-      },
-      {
-        id: "user_4",
-        nom: "THOMAS",
-        email: "thomas@cenadi.com",
-        matricule: "MAT004",
-        poste: "Analyste",
-        statut: "online",
-        telephone: "0123456792",
-        service: "Analyse",
-        lastActive: new Date().toISOString(),
-        isOnline: true,
-      },
-    ];
-
-    // ✅ AJOUTER L'UTILISATEUR ACTUEL S'IL EXISTE
-    if (this.currentUser) {
-      mockContacts.unshift({
-        id: this.currentUser.id,
-        nom: this.currentUser.nom,
-        email: this.currentUser.email || "",
-        matricule: this.currentUser.matricule || "",
-        poste: this.currentUser.poste || "Utilisateur",
-        statut: "online",
-        telephone: "",
-        service: "",
-        lastActive: new Date().toISOString(),
-        isOnline: true,
-        isSelf: true,
-      });
-    }
-
-    return mockContacts;
-  }
-
-  // ✅ AJOUTER MÉTHODE HELPER POUR STATUS ALÉATOIRE
-  getRandomStatus() {
-    const statuses = ["online", "away", "offline"];
-    return statuses[Math.floor(Math.random() * statuses.length)];
-  }
-
-  // ✅ AJOUTER MÉTHODE HELPER POUR TEXTE STATUS
-  getStatusText(status) {
-    const statusTexts = {
-      online: "En ligne",
-      away: "Absent",
-      offline: "Hors ligne",
-      busy: "Occupé",
-    };
-    return statusTexts[status] || "Inconnu";
-  }
-
-  // ✅ AJOUTER APRÈS updateContactsStats
-  filterContacts(searchTerm) {
-    const cards = document.querySelectorAll(".contact-card");
-    const term = searchTerm.toLowerCase().trim();
-
-    if (!term) {
-      // ✅ AFFICHER TOUS LES CONTACTS
-      cards.forEach((card) => {
-        card.style.display = "flex";
-      });
-      return;
-    }
-
-    cards.forEach((card) => {
-      const contactName =
-        card.querySelector(".contact-name")?.textContent?.toLowerCase() || "";
-      const contactMatricule =
-        card.querySelector(".contact-matricule")?.textContent?.toLowerCase() ||
-        "";
-      const contactRole =
-        card.querySelector(".contact-role")?.textContent?.toLowerCase() || "";
-      const contactEmail =
-        card.querySelector(".contact-email")?.textContent?.toLowerCase() || "";
-
-      const matches =
-        contactName.includes(term) ||
-        contactMatricule.includes(term) ||
-        contactRole.includes(term) ||
-        contactEmail.includes(term);
-
-      card.style.display = matches ? "flex" : "none";
-    });
-
-    console.log(`🔍 Filtrage contacts avec: "${searchTerm}"`);
-  }
-
-  // ✅ AJOUTER MÉTHODE filterFiles MANQUANTE
-  filterFiles(searchTerm) {
-    const cards = document.querySelectorAll(".file-card");
-    const term = searchTerm.toLowerCase().trim();
-
-    if (!term) {
-      cards.forEach((card) => {
-        card.style.display = "block";
-      });
-      return;
-    }
-
-    cards.forEach((card) => {
-      const fileName =
-        card.querySelector(".file-name")?.textContent?.toLowerCase() || "";
-      const matches = fileName.includes(term);
-      card.style.display = matches ? "block" : "none";
-      style.display = matches;
-    });
-
-    console.log(`🔍 Filtrage fichiers avec: "${searchTerm}"`);
-  }
-
-  // ✅ AJOUTER APRÈS filterFiles
-  async refreshSection(section) {
-    try {
-      console.log(`🔄 Actualisation section: ${section}`);
-
-      switch (section) {
-        case "contacts":
-          this.showToast("Actualisation des contacts...", "info");
-          await this.loadContacts();
-          this.showToast("Contacts actualisés", "success");
-          break;
-
-        case "conversations":
-          this.showToast("Actualisation des conversations...", "info");
-          await this.loadConversations();
-          this.showToast("Conversations actualisées", "success");
-          break;
-
-        case "files":
-          this.showToast("Actualisation des fichiers...", "info");
-          await this.loadFiles();
-          this.showToast("Fichiers actualisés", "success");
-          break;
-
-        case "health":
-          this.showToast("Actualisation de l'état du service...", "info");
-          await this.loadHealthData();
-          this.showToast("État du service actualisé", "success");
-          break;
-
-        default:
-          console.warn(`Section inconnue: ${section}`);
-          this.showToast(`Section "${section}" inconnue`, "warning");
-      }
-    } catch (error) {
-      console.error(`❌ Erreur actualisation ${section}:`, error);
-      this.showToast(
-        `Erreur actualisation ${section}: ${error.message}`,
-        "error"
-      );
-    }
-  }
-
-  // ✅ AJOUTER APRÈS refreshSection
-  async loadHealthData() {
-    try {
-      console.log("❤️ Chargement données de santé...");
-
-      // ✅ CHARGER LES DONNÉES DE SANTÉ DEPUIS L'API
-      const response = await fetch(
-        `${this.apiBaseUrl.replace("/api", "")}/health`
-      );
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const healthData = await response.json();
-      console.log("✅ Données de santé chargées:", healthData);
-
-      this.updateHealthCards(healthData);
-      this.updateSystemInfo(healthData);
-    } catch (error) {
-      console.error("❌ Erreur chargement données santé:", error);
-
-      // ✅ AFFICHER DES DONNÉES DE FALLBACK
-      const fallbackData = {
-        services: {
-          mongodb: { status: "unknown", message: "Connexion impossible" },
-          redis: { status: "unknown", message: "Connexion impossible" },
-          kafka: { status: "unknown", message: "Connexion impossible" },
-          websocket: {
-            status: this.socket?.connected ? "healthy" : "error",
-            message: this.socket?.connected ? "Connecté" : "Déconnecté",
-          },
-          userService: { status: "unknown", message: "Service indisponible" },
-        },
-        version: "1.0.0",
-        uptime: "Inconnu",
-        timestamp: new Date().toISOString(),
-      };
-
-      this.updateHealthCards(fallbackData);
-      this.showToast("Impossible de charger l'état du service", "warning");
-    }
-  }
-
-  // ✅ AJOUTER MÉTHODE updateHealthCards
-  updateHealthCards(healthData) {
-    const services = healthData.services || {};
-
-    // ✅ METTRE À JOUR CHAQUE CARTE DE SERVICE
-    const serviceCards = [
-      { id: "mongoCard", key: "mongodb", name: "MongoDB" },
-      { id: "redisCard", key: "redis", name: "Redis" },
-      { id: "kafkaCard", key: "kafka", name: "Kafka" },
-      { id: "websocketCard", key: "websocket", name: "WebSocket" },
-      { id: "userServiceCard", key: "userService", name: "User Service" },
-    ];
-
-    serviceCards.forEach(({ id, key, name }) => {
-      const card = document.getElementById(id);
-      if (!card) return;
-
-      const service = services[key] || {};
-      const status = this.normalizeHealthStatus(service.status || service);
-      const message = service.message || service.details || "État inconnu";
-
-      const indicator = card.querySelector(".status-indicator");
-      const statusText = card.querySelector(".status-text");
-
-      if (indicator) {
-        indicator.className = `status-indicator ${status}`;
-      }
-
-      if (statusText) {
-        statusText.textContent = message;
-      }
-
-      // ✅ AJOUTER CLASSE CSS POUR LE STATUT
-      card.className = `health-card ${status}`;
-    });
-  }
-
-  // ✅ AJOUTER MÉTHODE normalizeHealthStatus
-  normalizeHealthStatus(status) {
-    if (typeof status === "string") {
-      const statusLower = status.toLowerCase();
-      if (
-        statusLower.includes("connecté") ||
-        statusLower === "healthy" ||
-        statusLower === "ok"
-      ) {
-        return "active";
-      }
-      if (
-        statusLower.includes("erreur") ||
-        statusLower === "error" ||
-        statusLower === "down"
-      ) {
-        return "error";
-      }
-      if (
-        statusLower.includes("dégradé") ||
-        statusLower === "degraded" ||
-        statusLower === "warning"
-      ) {
-        return "warning";
-      }
-    }
-    return "unknown";
-  }
-
-  // ✅ AJOUTER MÉTHODE updateSystemInfo
-  updateSystemInfo(healthData) {
-    const uptimeEl = document.getElementById("uptime");
-    if (uptimeEl && healthData.uptime) {
-      uptimeEl.textContent =
-        typeof healthData.uptime === "number"
-          ? this.formatUptime(healthData.uptime)
-          : healthData.uptime;
-    }
-
-    console.log("📊 Informations système mises à jour");
-  }
-
-  // ✅ AJOUTER MÉTHODE formatUptime
-  formatUptime(seconds) {
-    if (!seconds || seconds < 0) return "Inconnu";
-
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-
-    if (days > 0) {
-      return `${days}j ${hours}h ${minutes}m`;
-    } else if (hours > 0) {
-      return `${hours}h ${minutes}m`;
-    } else {
-      return `${minutes}m`;
-    }
-  }
-
-  // ✅ AJOUTER APRÈS formatUptime
-  addMessageToUI(message) {
-    const container = document.getElementById("messagesContainer");
-    if (!container) return;
-
-    // ✅ SUPPRIMER LE MESSAGE DE BIENVENUE S'IL EXISTE
-    const welcomeMessage = container.querySelector(".welcome-message");
-    if (welcomeMessage) {
-      welcomeMessage.remove();
-    }
-
-    const messageEl = document.createElement("div");
-    const isSent =
-      message.senderId === (this.currentUser?.id || this.currentUser?.userId);
-
-    messageEl.className = `message ${isSent ? "sent" : "received"}`;
-    messageEl.innerHTML = `
-      <div class="message-content">
-        <div class="message-text">${this.escapeHtml(message.content)}</div>
-        <div class="message-info">
-          <span class="message-time">${this.formatTime(
-            message.timestamp
-          )}</span>
-          <span class="message-sender">${
-            message.senderName || "Utilisateur"
-          }</span>
-          ${
-            isSent
-              ? '<span class="message-status"><i class="fas fa-check"></i></span>'
-              : ""
-          }
-        </div>
-      </div>
-    `;
-
-    container.appendChild(messageEl);
-    container.scrollTop = container.scrollHeight;
-
-    console.log("💬 Message ajouté à l'interface:", {
-      from: message.senderName,
-      content: message.content.substring(0, 50) + "...",
-      isSent: isSent,
-    });
-  }
-
-  // ✅ AJOUTER MÉTHODE escapeHtml
-  escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
+  async loadHealthStatus() {
+    /* Implémentation future */
   }
 }
 
-// Initialisation globale
-let app;
+// ================================================================
+// INITIALISATION GLOBALE
+// ================================================================
+
+// Attendre le chargement complet de la page
 document.addEventListener("DOMContentLoaded", () => {
-  app = new ChatFileApp();
+  console.log("🌐 DOM chargé, initialisation de l'application...");
+
+  // Créer l'instance globale de l'application
+  window.chatApp = new ChatApp();
 });
 
-// Export pour utilisation externe
-if (typeof module !== "undefined" && module.exports) {
-  module.exports = ChatFileApp;
-}
+// Gestion des erreurs globales
+window.addEventListener("error", (e) => {
+  console.error("❌ Erreur globale:", e.error);
+  if (window.chatApp) {
+    window.chatApp.showToast("Une erreur est survenue", "error");
+  }
+});
+
+// Gestion de la déconnexion
+window.addEventListener("beforeunload", () => {
+  if (window.chatApp && window.chatApp.socket) {
+    window.chatApp.socket.disconnect();
+  }
+});
