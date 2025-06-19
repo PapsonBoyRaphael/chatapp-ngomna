@@ -3,9 +3,12 @@ class MessageProducer {
     this.producer = producer;
     this.isEnabled = !!producer;
     this.topicName = "chat.messages";
-    this.silentHealthChecks = process.env.KAFKA_SILENT_HEALTH === "true"; // ✅ NOUVEAU
+    this.isConnected = false;
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 5;
 
     if (this.isEnabled) {
+      this.setupEventListeners();
       console.log(
         `✅ MessageProducer initialisé pour topic: ${this.topicName}`
       );
@@ -14,72 +17,52 @@ class MessageProducer {
     }
   }
 
-  // ✅ HEALTH CHECK SILENCIEUX
-  async healthCheck(silent = false) {
-    if (!this.isEnabled) {
-      return { status: "disabled", message: "Producer Kafka non initialisé" };
-    }
+  // ✅ AJOUTER GESTION DES ÉVÉNEMENTS
+  setupEventListeners() {
+    if (!this.producer) return;
 
-    try {
-      // ✅ MODE SILENCIEUX POUR LES CHECKS AUTOMATIQUES
-      const testResult = await this.publishMessage({
-        eventType: "HEALTH_CHECK",
-        source: "MessageProducer",
-        test: "true",
-        silent: silent || this.silentHealthChecks, // ✅ PARAMÈTRE SILENT
-      });
+    this.producer.on("producer.connect", () => {
+      this.isConnected = true;
+      this.reconnectAttempts = 0;
+      console.log("✅ MessageProducer connecté à Kafka");
+    });
 
-      return {
-        status: testResult ? "healthy" : "degraded",
-        message: testResult ? "Producer opérationnel" : "Erreur lors du test",
-        topic: this.topicName,
-        lastTest: new Date().toISOString(),
-      };
-    } catch (error) {
-      return {
-        status: "error",
-        message: error.message,
-        topic: this.topicName,
-        lastTest: new Date().toISOString(),
-      };
-    }
+    this.producer.on("producer.disconnect", () => {
+      this.isConnected = false;
+      console.log("🔌 MessageProducer déconnecté de Kafka");
+    });
+
+    this.producer.on("producer.network.request_timeout", (payload) => {
+      console.warn("⚠️ Timeout MessageProducer:", payload.broker);
+    });
   }
 
-  // ✅ ALTERNATIVE : HEALTH CHECK SANS MESSAGE
-  async healthCheckAdmin() {
-    if (!this.isEnabled) {
-      return { status: "disabled", message: "Producer Kafka non initialisé" };
-    }
+  // ✅ MÉTHODE DE RECONNEXION
+  async ensureConnected() {
+    if (!this.producer) return false;
 
-    try {
-      // ✅ UTILISER ADMIN CLIENT POUR VÉRIFIER LA CONNECTIVITÉ
-      const admin = this.producer.admin ? this.producer.admin() : null;
-
-      if (admin) {
-        const metadata = await admin.fetchTopicMetadata([this.topicName]);
-        await admin.disconnect();
-
-        return {
-          status: "healthy",
-          message: "Connectivité Kafka vérifiée via admin",
-          topic: this.topicName,
-          lastTest: new Date().toISOString(),
-          metadata: {
-            partitions: metadata.topics[0]?.partitions?.length || 0,
-          },
-        };
-      } else {
-        // Fallback au test par message
-        return this.healthCheck(true); // Mode silencieux
+    if (
+      !this.isConnected &&
+      this.reconnectAttempts < this.maxReconnectAttempts
+    ) {
+      try {
+        console.log(
+          `🔄 Tentative reconnexion MessageProducer (${
+            this.reconnectAttempts + 1
+          }/${this.maxReconnectAttempts})`
+        );
+        await this.producer.connect();
+        this.isConnected = true;
+        this.reconnectAttempts = 0;
+        return true;
+      } catch (error) {
+        this.reconnectAttempts++;
+        console.warn(`⚠️ Échec reconnexion MessageProducer: ${error.message}`);
+        return false;
       }
-    } catch (error) {
-      return {
-        status: "error",
-        message: error.message,
-        topic: this.topicName,
-        lastTest: new Date().toISOString(),
-      };
     }
+
+    return this.isConnected;
   }
 
   async publishMessage(messageData) {
@@ -90,6 +73,13 @@ class MessageProducer {
 
     if (!messageData) {
       console.error("❌ MessageProducer: Données de message manquantes");
+      return false;
+    }
+
+    // ✅ VÉRIFIER LA CONNEXION AVANT D'ENVOYER
+    const connected = await this.ensureConnected();
+    if (!connected) {
+      console.warn("⚠️ MessageProducer: Impossible de se connecter à Kafka");
       return false;
     }
 
@@ -115,7 +105,7 @@ class MessageProducer {
       // ✅ PRÉPARER LE PAYLOAD AVEC TIMESTAMP CORRECT
       const payload = {
         ...sanitizedData,
-        publishedAt: new Date().toISOString(), // ISO string dans le payload
+        publishedAt: new Date().toISOString(),
         producerId: process.env.SERVER_ID || "chat-file-1",
         version: "1.0.0",
       };
@@ -124,10 +114,10 @@ class MessageProducer {
       const messageKey = this.generateMessageKey(sanitizedData);
       const messageValue = JSON.stringify(payload);
 
-      // ✅ TIMESTAMP NUMÉRIQUE POUR KAFKA (CRUCIAL!)
-      const kafkaTimestamp = Date.now(); // Timestamp numérique en millisecondes
+      // ✅ TIMESTAMP NUMÉRIQUE POUR KAFKA
+      const kafkaTimestamp = Date.now();
 
-      // Publier le message avec timestamp correct
+      // ✅ PUBLIER AVEC CONFIGURATION AMÉLIORÉE
       const result = await this.producer.send({
         topic: this.topicName,
         messages: [
@@ -135,24 +125,50 @@ class MessageProducer {
             partition: sanitizedData.conversationId
               ? this.getPartitionForConversation(sanitizedData.conversationId)
               : 0,
-            key: messageKey, // String
-            value: messageValue, // String JSON
-            timestamp: kafkaTimestamp, // ✅ NUMÉRIQUE PAS STRING!
+            key: messageKey,
+            value: messageValue,
+            timestamp: kafkaTimestamp,
+            headers: {
+              "content-type": "application/json",
+              "producer-id": process.env.SERVER_ID || "chat-file-1",
+              "event-type": sanitizedData.eventType,
+              "correlation-id": this.generateCorrelationId(),
+            },
           },
         ],
+        // ✅ CONFIGURATION SPÉCIFIQUE À L'ENVOI
+        acks: 1, // Attendre confirmation du leader
+        timeout: 30000,
       });
 
-      // ✅ RESPECTER LE MODE SILENCIEUX
-      if (!sanitizedData.silent && sanitizedData.eventType !== "HEALTH_CHECK") {
-        const offsetInfo = result?.[0]?.offset || "unknown";
-        console.log(
-          `📤 Message publié sur Kafka: ${sanitizedData.eventType} (offset: ${offsetInfo})`
-        );
-      } else if (
-        process.env.NODE_ENV === "development" &&
-        sanitizedData.eventType === "HEALTH_CHECK"
-      ) {
-        console.log(`💚 Health check Kafka silencieux: OK`);
+      // ✅ EXTRACTION AMÉLIORÉE DES OFFSETS
+      let offsetInfo = "unknown";
+      let partitionInfo = "unknown";
+
+      if (result && Array.isArray(result) && result.length > 0) {
+        const recordMetadata = result[0];
+        if (recordMetadata) {
+          offsetInfo = recordMetadata.offset?.toString() || "pending";
+          partitionInfo = recordMetadata.partition?.toString() || "0";
+
+          // ✅ LOGGING DÉTAILLÉ EN MODE DEV
+          if (
+            process.env.NODE_ENV === "development" &&
+            sanitizedData.eventType !== "HEALTH_CHECK"
+          ) {
+            console.log(
+              `📤 Message publié sur Kafka: ${sanitizedData.eventType}`
+            );
+            console.log(`   📊 Topic: ${this.topicName}`);
+            console.log(`   📍 Partition: ${partitionInfo}`);
+            console.log(`   🔗 Offset: ${offsetInfo}`);
+            console.log(`   🔑 Key: ${messageKey}`);
+          } else if (sanitizedData.eventType !== "HEALTH_CHECK") {
+            console.log(
+              `📤 Kafka: ${sanitizedData.eventType} → partition:${partitionInfo} offset:${offsetInfo}`
+            );
+          }
+        }
       }
 
       return true;
@@ -168,13 +184,26 @@ class MessageProducer {
         );
       }
 
+      // ✅ MARQUER COMME DÉCONNECTÉ EN CAS D'ERREUR RÉSEAU
+      if (
+        error.message.includes("Connection") ||
+        error.message.includes("timeout")
+      ) {
+        this.isConnected = false;
+      }
+
       return false;
     }
   }
 
-  /**
-   * ✅ FONCTION AMÉLIORÉE: CONVERTIR TOUS LES TYPES INCOMPATIBLES AVEC KAFKA
-   */
+  // ✅ GÉNÉRER UN ID DE CORRÉLATION UNIQUE
+  generateCorrelationId() {
+    return `${
+      process.env.SERVER_ID || "chat-file"
+    }-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  // ✅ MÉTHODES EXISTANTES INCHANGÉES
   sanitizeDataForKafka(data) {
     const sanitized = {};
 
@@ -182,18 +211,14 @@ class MessageProducer {
       if (value === null || value === undefined) {
         sanitized[key] = "";
       } else if (typeof value === "number") {
-        // Convertir les nombres en strings
         sanitized[key] = value.toString();
       } else if (typeof value === "boolean") {
         sanitized[key] = value.toString();
       } else if (value instanceof Date) {
-        // ✅ DATES EN ISO STRING
         sanitized[key] = value.toISOString();
       } else if (typeof value === "object") {
-        // Objets et arrays en JSON string
         sanitized[key] = JSON.stringify(value);
       } else {
-        // Strings et autres types compatibles
         sanitized[key] = String(value);
       }
     }
@@ -201,11 +226,7 @@ class MessageProducer {
     return sanitized;
   }
 
-  /**
-   * Générer une clé de message appropriée (toujours string)
-   */
   generateMessageKey(data) {
-    // Priorité : conversationId > userId > eventType
     if (data.conversationId) {
       return `conv_${data.conversationId}`;
     } else if (data.userId) {
@@ -215,76 +236,64 @@ class MessageProducer {
     }
   }
 
-  // Méthode pour déterminer la partition basée sur l'ID de conversation
   getPartitionForConversation(conversationId) {
     if (!conversationId) return 0;
 
-    // Convertir en string si nécessaire
     const convId = String(conversationId);
-
-    // Simple hash pour distribuer les conversations sur les partitions
     let hash = 0;
     for (let i = 0; i < convId.length; i++) {
       const char = convId.charCodeAt(i);
       hash = (hash << 5) - hash + char;
-      hash = hash & hash; // Convert to 32-bit integer
+      hash = hash & hash;
     }
 
-    // Retourner une partition entre 0 et 2 (assumant 3 partitions max)
     return Math.abs(hash) % 3;
   }
 
-  // ✅ PUBLIER UN ÉVÉNEMENT SIMPLE AVEC TIMESTAMP CORRECT
-  async publishSimpleMessage(eventType, data = {}) {
-    return this.publishMessage({
-      eventType,
-      ...data,
-      // ✅ NE PAS AJOUTER timestamp ICI - il sera géré automatiquement
-    });
+  // ✅ HEALTH CHECK AMÉLIORÉ
+  async healthCheck(silent = false) {
+    if (!this.isEnabled) {
+      return { status: "disabled", message: "Producer Kafka non initialisé" };
+    }
+
+    try {
+      const connected = await this.ensureConnected();
+      if (!connected) {
+        return { status: "disconnected", message: "Producer non connecté" };
+      }
+
+      const testResult = await this.publishMessage({
+        eventType: "HEALTH_CHECK",
+        source: "MessageProducer",
+        test: "true",
+        silent: true,
+      });
+
+      return {
+        status: testResult ? "healthy" : "degraded",
+        message: testResult ? "Producer opérationnel" : "Erreur lors du test",
+        topic: this.topicName,
+        connected: this.isConnected,
+        reconnectAttempts: this.reconnectAttempts,
+        lastTest: new Date().toISOString(),
+      };
+    } catch (error) {
+      return {
+        status: "error",
+        message: error.message,
+        topic: this.topicName,
+        connected: this.isConnected,
+        lastTest: new Date().toISOString(),
+      };
+    }
   }
 
-  // ✅ PUBLIER STATUT MESSAGE AVEC TIMESTAMP CORRECT
-  async publishMessageStatus(messageId, status, additionalData = {}) {
-    return this.publishMessage({
-      eventType: "MESSAGE_STATUS_UPDATED",
-      messageId: String(messageId), // Force string
-      status: String(status),
-      ...additionalData,
-      // ✅ PAS DE timestamp manuel
-    });
-  }
-
-  // ✅ PUBLIER ÉVÉNEMENT CONVERSATION AVEC TIMESTAMP CORRECT
-  async publishConversationEvent(
-    eventType,
-    conversationId,
-    userId,
-    additionalData = {}
-  ) {
-    return this.publishMessage({
-      eventType,
-      conversationId: String(conversationId), // Force string
-      userId: String(userId), // Force string
-      ...additionalData,
-      // ✅ PAS DE timestamp manuel
-    });
-  }
-
-  // ✅ PUBLIER ÉVÉNEMENT UTILISATEUR AVEC TIMESTAMP CORRECT
-  async publishUserEvent(eventType, userId, additionalData = {}) {
-    return this.publishMessage({
-      eventType,
-      userId: String(userId), // Force string
-      ...additionalData,
-      // ✅ PAS DE timestamp manuel
-    });
-  }
-
-  // Fermer le producer
+  // ✅ FERMER PROPREMENT
   async close() {
     if (this.producer) {
       try {
         await this.producer.disconnect();
+        this.isConnected = false;
         console.log("✅ MessageProducer fermé proprement");
       } catch (error) {
         console.error("❌ Erreur fermeture MessageProducer:", error.message);

@@ -33,9 +33,9 @@ class OnlineUserManager {
           userData.lastActivity instanceof Date
             ? userData.lastActivity.toISOString()
             : String(userData.lastActivity) || new Date().toISOString(),
-        userName:
-          userData.userName || userData.nom
-            ? String(userData.userName || userData.nom)
+        matricule:
+          userData.matricule || userData.nom
+            ? String(userData.matricule || userData.nom)
             : "Unknown",
       };
 
@@ -69,7 +69,7 @@ class OnlineUserManager {
       await this.redis.expire(`${this.userDataPrefix}:${userIdString}`, 3600);
 
       console.log(
-        `👤 Utilisateur ${userIdString} (${userInfo.userName}) mis en ligne`
+        `👤 Utilisateur ${userIdString} (${userInfo.matricule}) mis en ligne`
       );
       return true;
     } catch (error) {
@@ -242,7 +242,7 @@ class OnlineUserManager {
         totalOnline,
         users: users.map((user) => ({
           userId: user.userId,
-          userName: user.userName,
+          matricule: user.matricule,
           connectedAt: user.connectedAt,
           lastActivity: user.lastActivity,
         })),

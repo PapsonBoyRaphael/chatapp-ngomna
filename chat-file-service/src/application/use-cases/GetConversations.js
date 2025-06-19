@@ -11,36 +11,42 @@ class GetConversations {
     try {
       console.log(`🔍 Récupération conversations pour utilisateur: ${userId}`);
 
-      // Vérifier le cache Redis d'abord
+      // ✅ AMÉLIORER LA VÉRIFICATION DU CACHE REDIS
       if (useCache && this.redisClient) {
         try {
           const cacheKey = `conversations:${userId}`;
-          const cached = await this.redisClient.get(cacheKey);
 
-          if (cached) {
-            const result = JSON.parse(cached);
-            console.log(
-              `📦 Conversations depuis cache: ${userId} (${
-                Date.now() - startTime
-              }ms)`
-            );
-            return {
-              ...result,
-              fromCache: true,
-              processingTime: Date.now() - startTime,
-            };
+          // ✅ VÉRIFIER SI setex EXISTE AVANT DE L'UTILISER
+          if (typeof this.redisClient.get === "function") {
+            const cached = await this.redisClient.get(cacheKey);
+
+            if (cached) {
+              const result = JSON.parse(cached);
+              console.log(
+                `📦 Conversations depuis cache: ${userId} (${
+                  Date.now() - startTime
+                }ms)`
+              );
+              return {
+                ...result,
+                fromCache: true,
+                processingTime: Date.now() - startTime,
+              };
+            }
+          } else {
+            console.warn("⚠️ Redis client invalide - méthodes manquantes");
           }
         } catch (cacheError) {
           console.warn("⚠️ Erreur lecture cache:", cacheError.message);
         }
       }
 
-      // ✅ UTILISER LA MÉTHODE findByUserId QUI EXISTE MAINTENANT
+      // ✅ UTILISER LA MÉTHODE findByUserId AVEC DÉSACTIVATION DU CACHE INTERNE
       const conversationsResult =
         await this.conversationRepository.findByUserId(userId, {
           page: 1,
           limit: 50,
-          useCache: false, // On gère déjà le cache ici
+          useCache: false, // ✅ DÉSACTIVER LE CACHE INTERNE POUR ÉVITER DUPLICATION
           includeArchived: false,
         });
 
@@ -112,20 +118,48 @@ class GetConversations {
         processingTime: Date.now() - startTime,
       };
 
-      // Mettre en cache pour 5 minutes
+      // ✅ AMÉLIORER LA MISE EN CACHE AVEC VÉRIFICATION DES MÉTHODES
       if (useCache && this.redisClient) {
         try {
-          await this.redisClient.setex(
-            `conversations:${userId}`,
-            300,
-            JSON.stringify({
+          // ✅ VÉRIFIER QUE LES MÉTHODES EXISTENT
+          if (typeof this.redisClient.setex === "function") {
+            await this.redisClient.setex(
+              `conversations:${userId}`,
+              300, // 5 minutes
+              JSON.stringify({
+                conversations: result.conversations,
+                totalCount: result.totalCount,
+                unreadConversations: result.unreadConversations,
+                totalUnreadMessages: result.totalUnreadMessages,
+                cachedAt: new Date().toISOString(),
+              })
+            );
+            console.log(`💾 Conversations mises en cache pour ${userId}`);
+          } else if (typeof this.redisClient.set === "function") {
+            // ✅ FALLBACK AVEC set + expire
+            const cacheKey = `conversations:${userId}`;
+            const cacheData = JSON.stringify({
               conversations: result.conversations,
               totalCount: result.totalCount,
               unreadConversations: result.unreadConversations,
               totalUnreadMessages: result.totalUnreadMessages,
               cachedAt: new Date().toISOString(),
-            })
-          );
+            });
+
+            await this.redisClient.set(cacheKey, cacheData);
+
+            if (typeof this.redisClient.expire === "function") {
+              await this.redisClient.expire(cacheKey, 300);
+            }
+
+            console.log(
+              `💾 Conversations mises en cache pour ${userId} (fallback)`
+            );
+          } else {
+            console.warn(
+              "⚠️ Méthodes Redis non disponibles pour la mise en cache"
+            );
+          }
         } catch (cacheError) {
           console.warn(
             "⚠️ Erreur mise en cache conversations:",
@@ -147,14 +181,19 @@ class GetConversations {
     }
   }
 
-  // ✅ MÉTHODES UTILITAIRES INCHANGÉES...
+  // ✅ AMÉLIORER invalidateUserCache AVEC VÉRIFICATION
   async invalidateUserCache(userId) {
     if (!this.redisClient) return;
 
     try {
       const cacheKey = `conversations:${userId}`;
-      await this.redisClient.del(cacheKey);
-      console.log(`🗑️ Cache conversations invalidé pour ${userId}`);
+
+      if (typeof this.redisClient.del === "function") {
+        await this.redisClient.del(cacheKey);
+        console.log(`🗑️ Cache conversations invalidé pour ${userId}`);
+      } else {
+        console.warn("⚠️ Méthode del non disponible sur Redis client");
+      }
     } catch (error) {
       console.warn(
         "⚠️ Erreur invalidation cache conversations:",
@@ -172,7 +211,7 @@ class GetConversations {
       );
       if (conversation && conversation.participants) {
         const deletePromises = conversation.participants.map((userId) =>
-          this.redisClient.del(`conversations:${userId}`)
+          this.invalidateUserCache(userId)
         );
         await Promise.all(deletePromises);
         console.log(

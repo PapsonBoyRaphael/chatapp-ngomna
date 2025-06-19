@@ -19,32 +19,32 @@ if (!envValidator.validate()) {
 
 // Connexions infrastructure - TOUTES CORRIGÉES
 const connectDB = require("./infrastructure/mongodb/connection");
-const redisConfig = require("./infrastructure/redis/redisConfig"); // ✅ CORRIGÉ
-const kafkaConfig = require("./infrastructure/kafka/config/kafkaConfig"); // ✅ CORRIGÉ
+const redisConfig = require("./infrastructure/redis/redisConfig");
+const kafkaConfig = require("./infrastructure/kafka/config/kafkaConfig");
 
 // Gestionnaires Redis optionnels
 const OnlineUserManager = require("./infrastructure/redis/OnlineUserManager");
 const RoomManager = require("./infrastructure/redis/RoomManager");
 
+// Use Cases
+const SendMessage = require("./application/use-cases/SendMessage");
+const GetMessages = require("./application/use-cases/GetMessages");
+const GetConversation = require("./application/use-cases/GetConversation");
+const GetConversations = require("./application/use-cases/GetConversations");
+const GetFile = require("./application/use-cases/GetFile");
+const UpdateMessageStatus = require("./application/use-cases/UpdateMessageStatus");
+const UploadFile = require("./application/use-cases/UploadFile");
+
+// Controllers
+const FileController = require("./application/controllers/FileController");
+const MessageController = require("./application/controllers/MessageController");
+const ConversationController = require("./application/controllers/ConversationController");
+const HealthController = require("./application/controllers/HealthController");
+
 // Repositories
 const MongoMessageRepository = require("./infrastructure/repositories/MongoMessageRepository");
 const MongoConversationRepository = require("./infrastructure/repositories/MongoConversationRepository");
 const MongoFileRepository = require("./infrastructure/repositories/MongoFileRepository");
-
-// Use Cases
-const SendMessage = require("./application/use-cases/SendMessage");
-const GetMessages = require("./application/use-cases/GetMessages");
-const UpdateMessageStatus = require("./application/use-cases/UpdateMessageStatus");
-const GetConversations = require("./application/use-cases/GetConversations");
-const GetConversation = require("./application/use-cases/GetConversation");
-const UploadFile = require("./application/use-cases/UploadFile");
-const GetFile = require("./application/use-cases/GetFile");
-
-// Controllers
-const ConversationController = require("./application/controllers/ConversationController");
-const MessageController = require("./application/controllers/MessageController");
-const FileController = require("./application/controllers/FileController");
-const HealthController = require("./application/controllers/HealthController");
 
 // Routes
 const createConversationRoutes = require("./interfaces/http/routes/conversationRoutes");
@@ -65,6 +65,55 @@ const ChatHandler = require("./application/websocket/chatHandler");
 // Middleware - CORRECTION
 const { rateLimitMiddleware } = require("./interfaces/http/middleware");
 
+// ✅ DÉCLARATION DES VARIABLES GLOBALES AU BON ENDROIT
+let kafka = null;
+let kafkaProducers = null;
+let kafkaConsumer = null;
+let kafkaConsumers = null; // ✅ AJOUTER CETTE VARIABLE GLOBALE
+let kafkaStatus = "disconnected";
+
+const initializeKafka = async () => {
+  try {
+    console.log("🔧 Initialisation Kafka...");
+
+    const {
+      createKafkaInstance,
+      createProducer,
+      createConsumer,
+    } = require("./infrastructure/kafka/config/kafkaConfig");
+
+    // ✅ CRÉER L'INSTANCE KAFKA
+    kafka = createKafkaInstance();
+
+    // ✅ CRÉER ET CONNECTER LES PRODUCERS
+    const producer = createProducer(kafka);
+    await producer.connect();
+
+    kafkaProducers = {
+      messageProducer: new MessageProducer(producer),
+      fileProducer: new FileProducer(producer),
+    };
+
+    // ✅ CRÉER LE CONSUMER UNE SEULE FOIS MAIS NE PAS LE DÉMARRER ICI
+    const consumer = createConsumer(kafka, ["chat.notifications"]);
+    kafkaConsumer = new NotificationConsumer(consumer);
+
+    kafkaConsumers = {
+      notificationConsumer: kafkaConsumer,
+    };
+
+    console.log("✅ Kafka initialisé avec succès");
+    kafkaStatus = "connected";
+    return true;
+  } catch (error) {
+    console.error("❌ Erreur initialisation Kafka:", error);
+    console.warn("⚠️ L'application continuera sans Kafka");
+    kafkaStatus = "error";
+    return false;
+  }
+};
+
+// ✅ SUPPRIMER LA DOUBLE INITIALISATION DANS startServer
 const startServer = async () => {
   try {
     console.log("🚀 Démarrage du Chat-File Service...");
@@ -83,7 +132,7 @@ const startServer = async () => {
     await connectDB();
     console.log("✅ MongoDB connecté");
 
-    // Redis - Utilisation du bon fichier
+    // Redis
     let redisClient = null;
     let redisStatus = "disconnected";
     let onlineUserManager = null;
@@ -95,7 +144,6 @@ const startServer = async () => {
         redisClient = redisConfig.getClient();
         redisStatus = "connected";
 
-        // Initialiser les gestionnaires Redis
         onlineUserManager = new OnlineUserManager(redisClient);
         roomManager = new RoomManager(redisClient);
 
@@ -105,34 +153,8 @@ const startServer = async () => {
       console.log("⚠️ Redis non disponible, mode développement activé");
     }
 
-    // Kafka - Configuration complète avec votre structure
-    let kafkaProducers = null;
-    let kafkaConsumers = null;
-    let kafkaStatus = "disconnected";
-
-    try {
-      console.log("🔄 Tentative de connexion Kafka...");
-      const kafkaConnected = await kafkaConfig.connect();
-
-      if (kafkaConnected) {
-        // Initialiser les producers
-        kafkaProducers = {
-          messageProducer: new MessageProducer(kafkaConfig.getProducer()),
-          fileProducer: new FileProducer(kafkaConfig.getProducer()),
-        };
-
-        kafkaStatus = "connected";
-        console.log("✅ Kafka connecté avec producers");
-
-        // Lister les topics disponibles en mode dev
-        if (process.env.NODE_ENV === "development") {
-          await kafkaConfig.listTopics();
-        }
-      }
-    } catch (error) {
-      console.log("⚠️ Kafka non disponible, mode développement activé");
-      console.log("🔍 Détail erreur Kafka:", error.message);
-    }
+    // ✅ INITIALISER KAFKA UNE SEULE FOIS
+    const kafkaInitialized = await initializeKafka();
 
     // ===============================
     // 3. CONFIGURATION EXPRESS
@@ -155,17 +177,14 @@ const startServer = async () => {
     app.use(express.json({ limit: "10mb" }));
     app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-    // Configuration Redis pour les middleware
     app.locals.redisClient = redisClient;
     app.locals.onlineUserManager = onlineUserManager;
     app.locals.roomManager = roomManager;
 
-    // Middleware globaux - CORRECTION
     if (rateLimitMiddleware && rateLimitMiddleware.apiLimit) {
       app.use(rateLimitMiddleware.apiLimit);
     }
 
-    // Servir les fichiers statiques
     app.use(express.static(path.join(__dirname, "../public")));
     app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
@@ -190,7 +209,6 @@ const startServer = async () => {
       pingInterval: 25000,
     });
 
-    // Redis adapter si disponible
     if (redisClient) {
       try {
         io.adapter(
@@ -206,20 +224,12 @@ const startServer = async () => {
     }
 
     // ===============================
-    // 5. CONFIGURATION KAFKA CONSUMER (APRÈS SOCKET.IO)
+    // 5. DÉMARRER LE CONSUMER KAFKA UNE SEULE FOIS ICI
     // ===============================
-    if (kafkaProducers) {
+    if (kafkaConsumer && kafkaInitialized) {
       try {
-        // Initialiser le consumer de notifications avec Socket.IO
-        kafkaConsumers = {
-          notificationConsumer: new NotificationConsumer(
-            kafkaConfig.getConsumer(),
-            io
-          ),
-        };
-
-        // Démarrer le consumer
-        await kafkaConsumers.notificationConsumer.start();
+        console.log("🚀 Démarrage NotificationConsumer unique...");
+        await kafkaConsumer.start();
         console.log("✅ Kafka consumer notifications démarré");
       } catch (error) {
         console.warn("⚠️ Erreur démarrage consumer Kafka:", error.message);
@@ -229,65 +239,71 @@ const startServer = async () => {
     // ===============================
     // 6. INITIALISATION REPOSITORIES
     // ===============================
-    // ✅ S'ASSURER QUE LES REPOSITORIES SONT BIEN INITIALISÉS
     const messageRepository = new MongoMessageRepository(redisClient);
     const conversationRepository = new MongoConversationRepository(
       redisClient,
-      kafkaProducers?.messageProducer || null // ✅ Passer le producer Kafka
+      kafkaProducers?.messageProducer || null
     );
     const fileRepository = new MongoFileRepository(redisClient);
 
+    // ✅ LOG POUR VÉRIFIER LES OBJETS REDIS
+    if (redisClient) {
+      console.log("🔍 Redis client methods:", {
+        hasGet: typeof redisClient.get === "function",
+        hasSet: typeof redisClient.set === "function",
+        hasSetex: typeof redisClient.setex === "function",
+        hasExpire: typeof redisClient.expire === "function",
+        hasDel: typeof redisClient.del === "function",
+      });
+    } else {
+      console.warn("⚠️ Redis client is null/undefined");
+    }
+
     // ===============================
-    // 7. INITIALISATION USE CASES AVEC BONNES DÉPENDANCES
+    // 7. INITIALISATION USE CASES
     // ===============================
     const sendMessageUseCase = new SendMessage(
       messageRepository,
       conversationRepository,
-      kafkaProducers?.messageProducer || null,
-      redisClient // ✅ AJOUTER
+      kafkaProducers?.messageProducer || null
     );
 
-    const getMessagesUseCase = new GetMessages(
+    const getMessagesUseCase = new GetMessages(messageRepository, redisClient);
+
+    const getConversationUseCase = new GetConversation(
+      conversationRepository,
       messageRepository,
-      redisClient,
-      kafkaProducers?.messageProducer || null // ✅ AJOUTER
+      redisClient
+    );
+
+    // ✅ INITIALISATION USE CASES AVEC VÉRIFICATION
+    const getConversationsUseCase = new GetConversations(
+      conversationRepository,
+      messageRepository,
+      redisClient // ✅ S'ASSURER QUE C'EST LE MÊME CLIENT QUE LE REPOSITORY
     );
 
     const updateMessageStatusUseCase = new UpdateMessageStatus(
       messageRepository,
       conversationRepository,
-      kafkaProducers?.messageProducer || null,
-      redisClient // ✅ AJOUTER
-    );
-
-    const getConversationsUseCase = new GetConversations(
-      conversationRepository, // ✅ Repository avec findByUserId
-      messageRepository,
-      redisClient
-    );
-
-    const getConversationUseCase = new GetConversation(
-      conversationRepository,
-      messageRepository,
-      redisClient // ✅ AJOUTER
+      kafkaProducers?.messageProducer || null
     );
 
     const uploadFileUseCase = new UploadFile(
       fileRepository,
       messageRepository,
       conversationRepository,
-      kafkaProducers?.fileProducer || null,
-      redisClient // ✅ AJOUTER
+      kafkaProducers?.fileProducer || null
     );
 
     const getFileUseCase = new GetFile(
       fileRepository,
       kafkaProducers?.fileProducer || null,
-      redisClient // ✅ AJOUTER
+      redisClient
     );
 
     // ===============================
-    // 8. INITIALISATION CONTRÔLEURS
+    // 8. INITIALISATION CONTROLLERS
     // ===============================
     const fileController = new FileController(
       uploadFileUseCase,
@@ -313,98 +329,36 @@ const startServer = async () => {
 
     const healthController = new HealthController(redisClient, kafkaConfig);
 
-    // ✅ AJOUTER VALIDATION DES CONTRÔLEURS
-    console.log("✅ Contrôleurs initialisés:", {
-      fileController: !!fileController,
-      messageController: !!messageController,
-      conversationController: !!conversationController,
-      healthController: !!healthController,
-    });
-
-    // Validation des méthodes critiques
-    const validateController = (controller, name, requiredMethods) => {
-      const missingMethods = requiredMethods.filter(
-        (method) => typeof controller[method] !== "function"
-      );
-
-      if (missingMethods.length > 0) {
-        console.error(`❌ ${name} méthodes manquantes:`, missingMethods);
-        return false;
-      }
-
-      console.log(`✅ ${name} validé`);
-      return true;
-    };
-
-    validateController(messageController, "MessageController", [
-      "sendMessage",
-      "getMessages",
-      "getMessage",
-      "updateMessageStatus",
-      "deleteMessage",
-      "addReaction",
-    ]);
-
-    validateController(conversationController, "ConversationController", [
-      "getConversations",
-      "getConversation",
-      "createConversation",
-    ]);
-
-    // ✅ CORRIGER LES MÉTHODES ATTENDUES POUR FileController
-    validateController(fileController, "FileController", [
-      "uploadFile",
-      "getFile",
-      "getFiles",
-      "deleteFile",
-      "getFileMetadata",
-      "getConversationFiles",
-    ]);
-
     // ===============================
-    // 9. CONFIGURATION ROUTES
+    // 9. CONFIGURATION WEBSOCKET
     // ===============================
-    app.use("/api/files", createFileRoutes(fileController));
-    app.use("/api/messages", createMessageRoutes(messageController));
-    app.use(
-      "/api/conversations",
-      createConversationRoutes(conversationController)
-    );
-    app.use("/api/health", createHealthRoutes(healthController));
-
-    // ===============================
-    // 10. CONFIGURATION WEBSOCKET AVEC CHATHANDLER
-    // ===============================
-    console.log("🔌 Configuration du gestionnaire WebSocket...");
-
-    // ✅ CORRIGER : S'assurer que ChatHandler accepte tous les paramètres
     const chatHandler = new ChatHandler(
       io,
       sendMessageUseCase,
-      kafkaProducers?.messageProducer || null, // ✅ MessageProducer avec publishMessage
+      kafkaProducers?.messageProducer || null,
       redisClient,
       onlineUserManager,
       roomManager
     );
 
-    console.log("✅ ChatHandler configuré avec succès");
-
-    // ✅ AJOUTER VALIDATION APRÈS INITIALISATION
-    if (
-      chatHandler &&
-      typeof chatHandler.getConnectedUserCount === "function"
-    ) {
-      console.log("✅ ChatHandler méthodes validées");
-    } else {
-      console.warn("⚠️ ChatHandler peut avoir des méthodes manquantes");
-    }
+    // ===============================
+    // 10. CONFIGURATION DES ROUTES HTTP
+    // ===============================
+    app.use("/files", createFileRoutes(fileController));
+    app.use("/messages", createMessageRoutes(messageController));
+    app.use("/conversations", createConversationRoutes(conversationController));
+    app.use("/health", createHealthRoutes(healthController));
 
     // ===============================
-    // 11. ROUTES DE SANTÉ AMÉLIORÉES
+    // 11. ROUTES PERSONNALISÉES
     // ===============================
+
+    // Route de health check détaillée
     app.get("/health", async (req, res) => {
       try {
-        // ✅ AJOUTER PROTECTION CONTRE LES ERREURS
+        const redisStatus = redisClient ? "✅ Connecté" : "⚠️ Déconnecté";
+        const kafkaStatus = kafkaProducers ? "✅ Connecté" : "⚠️ Déconnecté";
+
         let redisHealthStatus = "Non connecté";
         let kafkaHealthStatus = "Non connecté";
         let connectedUsersCount = 0;
@@ -481,11 +435,11 @@ const startServer = async () => {
             websocket: "✅ Actif",
           },
           endpoints: {
-            files: "/api/files",
-            messages: "/api/messages",
-            conversations: "/api/conversations",
-            health: "/api/health",
-            stats: "/api/stats",
+            files: "/files",
+            messages: "/messages",
+            conversations: "/conversations",
+            health: "/health",
+            stats: "/stats",
             interface: "/",
           },
           features: {
@@ -516,7 +470,7 @@ const startServer = async () => {
     });
 
     // Route de statistiques Kafka/Redis
-    app.get("/api/stats", async (req, res) => {
+    app.get("/stats", async (req, res) => {
       try {
         // ✅ PROTECTION CONTRE LES ERREURS
         let websocketStats = { connectedUsers: 0, stats: {} };
@@ -614,7 +568,59 @@ const startServer = async () => {
     });
 
     // Route de test Kafka
-    app.post("/api/test/kafka", async (req, res) => {
+    app.get("/test/kafka", async (req, res) => {
+      try {
+        if (!kafkaProducers || !kafkaProducers.messageProducer) {
+          return res.status(503).json({
+            success: false,
+            message: "Kafka non disponible",
+            details: "MessageProducer non initialisé",
+            status: kafkaStatus,
+            availableEndpoints: {
+              healthCheck: "GET /health",
+              stats: "GET /stats",
+              testKafkaPost: "POST /test/kafka (pour envoyer un message)",
+            },
+          });
+        }
+
+        // ✅ HEALTH CHECK KAFKA POUR GET
+        const healthStatus = await kafkaProducers.messageProducer.healthCheck(
+          true
+        );
+
+        res.json({
+          success: true,
+          message: "Status Kafka récupéré",
+          kafka: {
+            status: kafkaStatus,
+            health: healthStatus,
+            producer: {
+              isConnected: kafkaProducers.messageProducer.isConnected,
+              isEnabled: kafkaProducers.messageProducer.isEnabled,
+            },
+            topics: kafkaConfig.isKafkaConnected
+              ? await kafkaConfig.listTopics()
+              : [],
+          },
+          usage: {
+            testMessage: "POST /test/kafka avec body JSON",
+            healthCheck: "GET /test/kafka (cette route)",
+          },
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error) {
+        console.error("❌ Erreur GET test Kafka:", error);
+        res.status(500).json({
+          success: false,
+          error: error.message,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    });
+
+    // ✅ ROUTE POST POUR ENVOYER UN MESSAGE DE TEST
+    app.post("/test/kafka", async (req, res) => {
       try {
         if (!kafkaProducers || !kafkaProducers.messageProducer) {
           return res.status(503).json({
@@ -626,12 +632,11 @@ const startServer = async () => {
 
         // ✅ VÉRIFIER QUE LA MÉTHODE EXISTE
         if (
-          typeof kafkaProducers.messageProducer.publishSimpleMessage !==
-          "function"
+          typeof kafkaProducers.messageProducer.publishMessage !== "function"
         ) {
           return res.status(503).json({
             success: false,
-            message: "Méthode publishSimpleMessage non disponible",
+            message: "Méthode publishMessage non disponible",
             availableMethods: Object.getOwnPropertyNames(
               kafkaProducers.messageProducer
             ).filter(
@@ -641,26 +646,42 @@ const startServer = async () => {
           });
         }
 
+        // ✅ UTILISER LES DONNÉES DU BODY OU VALEURS PAR DÉFAUT
+        const {
+          eventType = "TEST_MESSAGE",
+          content = "Message de test depuis l'API",
+          userId = "test-user",
+          ...additionalData
+        } = req.body || {};
+
         const testMessage = {
-          eventType: "TEST_MESSAGE",
-          content: "Message de test depuis l'API",
-          userId: "test-user",
+          eventType,
+          content,
+          userId,
+          timestamp: new Date().toISOString(),
+          source: "API_TEST",
+          ...additionalData,
         };
 
-        const result =
-          await kafkaProducers.messageProducer.publishSimpleMessage(
-            "TEST_MESSAGE",
-            testMessage
-          );
+        // ✅ UTILISER publishMessage AU LIEU DE publishSimpleMessage
+        const result = await kafkaProducers.messageProducer.publishMessage(
+          testMessage
+        );
 
         res.json({
           success: result,
-          message: "Message de test envoyé",
+          message: result
+            ? "Message de test envoyé avec succès"
+            : "Échec envoi message",
           data: testMessage,
+          kafka: {
+            status: kafkaStatus,
+            topicUsed: kafkaProducers.messageProducer.topicName,
+          },
           timestamp: new Date().toISOString(),
         });
       } catch (error) {
-        console.error("❌ Erreur test Kafka:", error);
+        console.error("❌ Erreur POST test Kafka:", error);
         res.status(500).json({
           success: false,
           error: error.message,
@@ -677,12 +698,12 @@ const startServer = async () => {
         status: "running",
         timestamp: new Date().toISOString(),
         endpoints: {
-          files: "/api/files",
-          messages: "/api/messages",
-          conversations: "/api/conversations",
-          health: "/api/health",
-          stats: "/api/stats",
-          kafkaTest: "/api/test/kafka",
+          files: "/files",
+          messages: "/messages",
+          conversations: "/conversations",
+          health: "/health",
+          stats: "/stats",
+          kafkaTest: "/test/kafka",
         },
         features: {
           chat: "✅ Chat en temps réel",
@@ -772,7 +793,9 @@ const startServer = async () => {
                 healthStatus.message
               );
             } else if (process.env.NODE_ENV === "development") {
-              console.log(`💚 Kafka health check: ${healthStatus.status}`);
+              console.log(
+                `💚 Kafka health: ${healthStatus.status} (connected: ${healthStatus.connected})`
+              );
             }
           }
         } catch (error) {
@@ -814,23 +837,21 @@ const startServer = async () => {
       );
       console.log(`   RoomMgr: ${roomManager ? "✅ Actif" : "⚠️ Désactivé"}`);
       console.log(
-        `   NotifCon: ${kafkaConsumers ? "✅ Actif" : "⚠️ Désactivé"}`
+        `   NotifCon: ${kafkaConsumers ? "✅ Actif" : "⚠️ Désactivé"}` // ✅ UTILISER kafkaConsumers QUI EST MAINTENANT DÉFINI
       );
 
       console.log("\n" + "=".repeat(70));
       console.log("🎯 LIENS RAPIDES - CHAT-FILE-SERVICE");
       console.log("=".repeat(70));
       console.log(`🌐 Interface Web     : http://localhost:${PORT}/`);
-      console.log(`📁 API Fichiers     : http://localhost:${PORT}/api/files`);
+      console.log(`📁 API Fichiers     : http://localhost:${PORT}/files`);
+      console.log(`💬 API Messages     : http://localhost:${PORT}/messages`);
       console.log(
-        `💬 API Messages     : http://localhost:${PORT}/api/messages`
+        `🗣️ API Conversations: http://localhost:${PORT}/conversations`
       );
+      console.log(`📊 Statistiques     : http://localhost:${PORT}/stats`);
       console.log(
-        `🗣️ API Conversations: http://localhost:${PORT}/api/conversations`
-      );
-      console.log(`📊 Statistiques     : http://localhost:${PORT}/api/stats`);
-      console.log(
-        `🧪 Test Kafka       : POST http://localhost:${PORT}/api/test/kafka`
+        `🧪 Test Kafka       : POST http://localhost:${PORT}/test/kafka`
       );
       console.log(`🔌 WebSocket        : ws://localhost:${PORT}`);
       console.log(`❤️ Health Check     : http://localhost:${PORT}/health`);
@@ -845,30 +866,37 @@ const startServer = async () => {
 // ===============================
 // GESTION FERMETURE PROPRE
 // ===============================
-process.on("SIGINT", async () => {
-  console.log("\n🛑 Arrêt du serveur...");
+const gracefulShutdown = async (signal) => {
+  console.log(`🛑 Signal ${signal} reçu. Arrêt en cours...`);
+
   try {
-    // Fermer les producers Kafka
-    if (kafkaProducers) {
-      await Promise.all([
-        kafkaProducers.messageProducer.close(),
-        kafkaProducers.fileProducer && kafkaProducers.fileProducer.close(),
-      ]);
+    // Arrêter Kafka
+    if (kafkaConsumer) {
+      console.log("🔌 Arrêt du consumer Kafka...");
+      await kafkaConsumer.stop();
     }
 
-    // Fermer les connexions
+    if (kafkaProducers?.messageProducer) {
+      console.log("🔌 Arrêt du producer Kafka...");
+      await kafkaProducers.messageProducer.close();
+    }
+
+    // Fermer Redis
     if (redisConfig && redisConfig.disconnect) {
+      console.log("🔌 Fermeture Redis...");
       await redisConfig.disconnect();
     }
-    if (kafkaConfig && kafkaConfig.disconnect) {
-      await kafkaConfig.disconnect();
-    }
-    console.log("✅ Services déconnectés proprement");
+
+    console.log("✅ Arrêt propre terminé");
+    process.exit(0);
   } catch (error) {
     console.error("❌ Erreur lors de l'arrêt:", error);
+    process.exit(1);
   }
-  process.exit(0);
-});
+};
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 process.on("uncaughtException", (error) => {
   console.error("❌ Exception non gérée:", error);

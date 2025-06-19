@@ -496,30 +496,37 @@ class MongoConversationRepository {
       includeArchived = false,
       sortBy = "lastMessageAt",
       sortOrder = -1,
+      publishKafkaEvent = true, // ✅ NOUVEAU PARAMÈTRE
     } = options;
 
     const cacheKey = `${this.cachePrefix}user:${userId}:page:${page}:limit:${limit}:archived:${includeArchived}`;
 
     try {
-      // Vérifier le cache Redis si activé
+      // ✅ AMÉLIORER LA VÉRIFICATION DU CACHE REDIS
       if (useCache && this.redisClient) {
         try {
-          const cached = await this.redisClient.get(cacheKey);
-          if (cached) {
-            this.metrics.cacheHits++;
-            const result = JSON.parse(cached);
+          // ✅ VÉRIFIER QUE LA MÉTHODE GET EXISTE
+          if (typeof this.redisClient.get === "function") {
+            const cached = await this.redisClient.get(cacheKey);
+            if (cached) {
+              this.metrics.cacheHits++;
+              const result = JSON.parse(cached);
 
-            console.log(
-              `📦 Conversations depuis cache: ${userId} (${
-                Date.now() - startTime
-              }ms)`
-            );
-            return {
-              ...result,
-              fromCache: true,
-              processingTime: Date.now() - startTime,
-            };
+              console.log(
+                `📦 Conversations depuis cache: ${userId} (${
+                  Date.now() - startTime
+                }ms)`
+              );
+              return {
+                ...result,
+                fromCache: true,
+                processingTime: Date.now() - startTime,
+              };
+            } else {
+              this.metrics.cacheMisses++;
+            }
           } else {
+            console.warn("⚠️ Redis client get method not available");
             this.metrics.cacheMisses++;
           }
         } catch (cacheError) {
@@ -618,18 +625,29 @@ class MongoConversationRepository {
         processingTime: Date.now() - startTime,
       };
 
-      // Mettre en cache le résultat
+      // ✅ AMÉLIORER LA MISE EN CACHE AVEC VÉRIFICATION DES MÉTHODES
       if (useCache && this.redisClient) {
         try {
-          await this.redisClient.setex(
-            cacheKey,
-            this.defaultTTL,
-            JSON.stringify({
-              conversations: result.conversations,
-              pagination: result.pagination,
-              cachedAt: new Date().toISOString(),
-            })
-          );
+          const cacheData = JSON.stringify({
+            conversations: result.conversations,
+            pagination: result.pagination,
+            cachedAt: new Date().toISOString(),
+          });
+
+          // ✅ VÉRIFIER QUE setex EXISTE
+          if (typeof this.redisClient.setex === "function") {
+            await this.redisClient.setex(cacheKey, this.defaultTTL, cacheData);
+          } else if (typeof this.redisClient.set === "function") {
+            // ✅ FALLBACK AVEC set + expire
+            await this.redisClient.set(cacheKey, cacheData);
+            if (typeof this.redisClient.expire === "function") {
+              await this.redisClient.expire(cacheKey, this.defaultTTL);
+            }
+          } else {
+            console.warn(
+              "⚠️ Méthodes Redis non disponibles pour la mise en cache"
+            );
+          }
         } catch (cacheError) {
           console.warn(
             "⚠️ Erreur mise en cache conversations:",
@@ -638,8 +656,8 @@ class MongoConversationRepository {
         }
       }
 
-      // Publier événement Kafka si disponible
-      if (this.kafkaProducer) {
+      // ✅ PUBLIER ÉVÉNEMENT KAFKA SEULEMENT SI DEMANDÉ
+      if (publishKafkaEvent && this.kafkaProducer) {
         try {
           await this.kafkaProducer.publishMessage({
             eventType: "CONVERSATIONS_RETRIEVED",
@@ -649,6 +667,7 @@ class MongoConversationRepository {
             page,
             processingTime: result.processingTime,
             fromCache: false,
+            source: "MongoConversationRepository",
           });
           this.metrics.kafkaEvents++;
         } catch (kafkaError) {
@@ -672,14 +691,15 @@ class MongoConversationRepository {
         `❌ Erreur findByUserId conversations: ${error.message} (${processingTime}ms)`
       );
 
-      // Publier erreur Kafka si disponible
-      if (this.kafkaProducer) {
+      // Publier erreur Kafka si disponible et demandé
+      if (publishKafkaEvent && this.kafkaProducer) {
         try {
           await this.kafkaProducer.publishMessage({
             eventType: "CONVERSATIONS_RETRIEVAL_ERROR",
             userId,
             error: error.message,
             processingTime,
+            source: "MongoConversationRepository",
           });
         } catch (kafkaError) {
           console.warn(

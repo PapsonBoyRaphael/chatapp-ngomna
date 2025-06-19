@@ -76,9 +76,9 @@ class ChatHandler {
   // ✅ MÉTHODE D'AUTHENTIFICATION AMÉLIORÉE
   handleAuthentication(socket, data) {
     try {
-      const { userId, userName, token } = data;
+      const { userId, matricule, token } = data;
 
-      if (!userId || !userName) {
+      if (!userId || !matricule) {
         socket.emit("auth_error", {
           message: "Données d'authentification manquantes",
         });
@@ -87,7 +87,7 @@ class ChatHandler {
 
       // ✅ CONVERTIR ET VALIDER LES DONNÉES
       const userIdString = String(userId);
-      const userNameString = String(userName);
+      const matriculeString = String(matricule);
 
       if (
         userIdString === "undefined" ||
@@ -101,12 +101,12 @@ class ChatHandler {
       }
 
       socket.userId = userIdString;
-      socket.userName = userNameString;
+      socket.matricule = matriculeString;
       socket.userToken = token;
 
       const userData = {
         socketId: socket.id,
-        userName: userNameString,
+        matricule: matriculeString,
         connectedAt: new Date(),
         lastActivity: new Date(),
       };
@@ -114,19 +114,19 @@ class ChatHandler {
       this.connectedUsers.set(userIdString, userData);
       this.userSockets.set(socket.id, {
         userId: userIdString,
-        userName: userNameString,
+        matricule: matriculeString,
       });
 
       socket.join(`user_${userIdString}`);
       socket.emit("authenticated", {
         success: true,
         userId: userIdString,
-        userName: userNameString,
+        matricule: matriculeString,
         timestamp: new Date().toISOString(),
       });
 
       console.log(
-        `✅ Utilisateur authentifié: ${userNameString} (${userIdString})`
+        `✅ Utilisateur authentifié: ${matriculeString} (${userIdString})`
       );
 
       // ✅ SYNC AVEC REDIS AVEC DONNÉES VALIDÉES
@@ -135,7 +135,7 @@ class ChatHandler {
       // Notifier les autres utilisateurs
       socket.broadcast.emit("user_connected", {
         userId: userIdString,
-        userName: userNameString,
+        matricule: matriculeString,
         timestamp: new Date(),
       });
     } catch (error) {
@@ -157,7 +157,7 @@ class ChatHandler {
       const messageData = {
         id: require("uuid").v4(),
         senderId: socket.userId,
-        senderName: socket.userName,
+        senderMatricule: socket.matricule,
         content,
         conversationId: conversationId || "general",
         timestamp: new Date(),
@@ -181,7 +181,7 @@ class ChatHandler {
             eventType: "MESSAGE_SENT",
             messageId: messageData.id,
             senderId: socket.userId,
-            senderName: socket.userName,
+            senderMatricule: socket.matricule,
             content: messageData.content,
             conversationId: messageData.conversationId,
             timestamp: messageData.timestamp.toISOString(),
@@ -200,7 +200,7 @@ class ChatHandler {
       this.io.to(targetRoom).emit("newMessage", {
         id: messageData.id,
         senderId: socket.userId,
-        senderName: socket.userName,
+        senderMatricule: socket.matricule,
         content: messageData.content,
         conversationId: messageData.conversationId,
         timestamp: messageData.timestamp,
@@ -241,20 +241,20 @@ class ChatHandler {
       socket.join(roomName);
 
       console.log(
-        `👥 ${socket.userName} a rejoint la conversation ${conversationIdString}`
+        `👥 ${socket.matricule} a rejoint la conversation ${conversationIdString}`
       );
 
       // ✅ SYNC AVEC REDIS AVEC DONNÉES VALIDÉES
       this.syncRoomWithRedis(roomName, {
         userId: socket.userId, // Déjà converti en string dans handleAuthentication
-        userName: socket.userName,
+        matricule: socket.matricule,
         conversationId: conversationIdString,
         joinedAt: new Date(),
       });
 
       socket.to(roomName).emit("user_joined_conversation", {
         userId: socket.userId,
-        userName: socket.userName,
+        matricule: socket.matricule,
         conversationId: conversationIdString,
         timestamp: new Date(),
       });
@@ -287,13 +287,13 @@ class ChatHandler {
 
       socket.to(roomName).emit("user_left_conversation", {
         userId: socket.userId,
-        userName: socket.userName,
+        matricule: socket.matricule,
         conversationId: conversationId,
         timestamp: new Date(),
       });
 
       console.log(
-        `👋 ${socket.userName} a quitté la conversation ${conversationId}`
+        `👋 ${socket.matricule} a quitté la conversation ${conversationId}`
       );
     } catch (error) {
       console.error("❌ Erreur quitter conversation:", error);
@@ -313,7 +313,7 @@ class ChatHandler {
 
       socket.to(roomName).emit("userTyping", {
         userId: socket.userId,
-        userName: socket.userName,
+        matricule: socket.matricule,
         conversationId: conversationId,
         timestamp: new Date(),
       });
@@ -335,7 +335,7 @@ class ChatHandler {
 
       socket.to(roomName).emit("userStoppedTyping", {
         userId: socket.userId,
-        userName: socket.userName,
+        matricule: socket.matricule,
         conversationId: conversationId,
         timestamp: new Date(),
       });
@@ -362,10 +362,10 @@ class ChatHandler {
   // ✅ DÉCONNEXION
   handleDisconnection(socket) {
     const userId = socket.userId;
-    const userName = socket.userName;
+    const matricule = socket.matricule;
 
     console.log(
-      `🔌 Utilisateur déconnecté: ${userName || "Anonyme"} (${socket.id})`
+      `🔌 Utilisateur déconnecté: ${matricule || "Anonyme"} (${socket.id})`
     );
 
     if (userId) {
@@ -380,7 +380,7 @@ class ChatHandler {
 
       socket.broadcast.emit("user_disconnected", {
         userId: userId,
-        userName: userName,
+        matricule: matricule,
         timestamp: new Date(),
       });
 
@@ -391,7 +391,7 @@ class ChatHandler {
             .publishMessage({
               eventType: "USER_DISCONNECTED",
               userId: userId,
-              userName: userName,
+              matricule: matricule,
               timestamp: new Date().toISOString(),
             })
             .catch((error) => {
@@ -413,7 +413,9 @@ class ChatHandler {
         // ✅ S'ASSURER QUE TOUS LES TYPES SONT CORRECTS
         const sanitizedData = {
           socketId: userData.socketId ? String(userData.socketId) : null,
-          userName: userData.userName ? String(userData.userName) : "Unknown",
+          matricule: userData.matricule
+            ? String(userData.matricule)
+            : "Unknown",
           connectedAt:
             userData.connectedAt instanceof Date
               ? userData.connectedAt
@@ -439,7 +441,7 @@ class ChatHandler {
       try {
         // ✅ S'ASSURER QUE TOUS LES TYPES SONT CORRECTS
         const sanitizedData = {
-          userName: data.userName ? String(data.userName) : "Unknown",
+          matricule: data.matricule ? String(data.matricule) : "Unknown",
           conversationId: data.conversationId
             ? String(data.conversationId)
             : null,
@@ -486,7 +488,7 @@ class ChatHandler {
     for (const [userId, userData] of this.connectedUsers.entries()) {
       users.push({
         userId,
-        userName: userData.userName,
+        matricule: userData.matricule,
         connectedAt: userData.connectedAt,
         lastActivity: userData.lastActivity,
       });
