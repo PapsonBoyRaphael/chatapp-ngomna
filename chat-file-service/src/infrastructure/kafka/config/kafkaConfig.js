@@ -149,7 +149,7 @@ const createConsumer = (kafka, topics = []) => {
         process.env.NODE_ENV === "development" &&
         process.env.DEBUG_KAFKA === "true"
       ) {
-        console.log("💓 Consumer heartbeat");
+        // console.log("💓 Consumer heartbeat");
       }
     });
 

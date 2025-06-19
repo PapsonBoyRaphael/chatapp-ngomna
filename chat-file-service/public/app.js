@@ -14,6 +14,7 @@ class ChatApp {
     this.isConnected = false;
     this.typingTimer = null;
     this.isTyping = false;
+    this.authToken = null;
 
     // Collections de données
     this.conversations = new Map();
@@ -39,7 +40,7 @@ class ChatApp {
     try {
       console.log("🚀 Initialisation de CENADI Chat App...");
 
-      // 1. Charger les données utilisateur
+      // 1. Charger les données utilisateur depuis les cookies
       await this.loadCurrentUser();
 
       // 2. Initialiser l'interface
@@ -62,38 +63,146 @@ class ChatApp {
     } catch (error) {
       console.error("❌ Erreur initialisation:", error);
       this.showToast("Erreur de démarrage: " + error.message, "error");
+
+      // Rediriger vers la page de connexion si pas d'authentification
+      if (error.message.includes("authentification")) {
+        this.redirectToLogin();
+      }
     }
   }
 
   async loadCurrentUser() {
     try {
-      // Simuler un utilisateur pour la démo (en production, récupérer depuis l'API)
-      this.currentUser = {
-        id: `user_${Date.now()}`,
-        matricule: `MAT${Math.floor(Math.random() * 1000)
-          .toString()
-          .padStart(3, "0")}`,
-        nom: "Utilisateur Test",
-        email: "test@cenadi.com",
-        role: "Utilisateur",
-        service: "IT",
-        statut: "online",
-      };
+      console.log(
+        "🔐 Chargement des données utilisateur depuis les cookies..."
+      );
+
+      // Extraire le token et les données utilisateur des cookies
+      const authData = this.getAuthDataFromCookies();
+
+      if (!authData.token || !authData.user) {
+        throw new Error("Aucune donnée d'authentification trouvée");
+      }
+
+      this.authToken = authData.token;
+      this.currentUser = authData.user;
+
+      console.log("✅ Utilisateur chargé:", {
+        id: this.currentUser.id,
+        matricule: this.currentUser.matricule,
+        nom: this.currentUser.nom,
+      });
 
       // Mettre à jour l'interface
       this.updateUserInfo();
     } catch (error) {
       console.error("❌ Erreur chargement utilisateur:", error);
-      throw error;
+      throw new Error("Erreur d'authentification: " + error.message);
     }
+  }
+
+  getAuthDataFromCookies() {
+    const cookies = document.cookie.split(";").reduce((acc, cookie) => {
+      const [name, value] = cookie.trim().split("=");
+      if (name && value) {
+        acc[name] = decodeURIComponent(value);
+      }
+      return acc;
+    }, {});
+
+    let token = cookies.token;
+    let user = null;
+
+    try {
+      if (cookies.user) {
+        user = JSON.parse(cookies.user);
+      }
+    } catch (error) {
+      console.error("❌ Erreur parsing données utilisateur:", error);
+    }
+
+    return { token, user };
   }
 
   updateUserInfo() {
     const matriculeEl = document.getElementById("matricule");
     const userRoleEl = document.getElementById("userRole");
 
-    if (matriculeEl) matriculeEl.textContent = this.currentUser.matricule;
-    if (userRoleEl) userRoleEl.textContent = this.currentUser.role;
+    if (matriculeEl)
+      matriculeEl.textContent = this.currentUser.matricule || "N/A";
+    if (userRoleEl)
+      userRoleEl.textContent = this.currentUser.role || "Utilisateur";
+  }
+
+  redirectToLogin() {
+    // Supprimer les cookies d'authentification
+    document.cookie = "token=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT;";
+    document.cookie = "user=; path=/; expires=Thu, 01 Jan 1970 00:00:01 GMT;";
+    // Rediriger vers la gateway (qui gère l'authentification)
+    window.location.href = "http://localhost:8001/";
+  }
+
+  // ================================================================
+  // UTILITAIRES HTTP
+  // ================================================================
+
+  async makeAuthenticatedRequest(url, options = {}) {
+    const defaultOptions = {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.authToken}`,
+        ...options.headers,
+      },
+      ...options,
+    };
+
+    try {
+      console.log("🌐 Requête HTTP:", {
+        url: url,
+        method: defaultOptions.method || "GET",
+        hasAuth: !!this.authToken,
+      });
+
+      const response = await fetch(url, defaultOptions);
+
+      console.log("📡 Réponse HTTP:", {
+        status: response.status,
+        statusText: response.statusText,
+        contentType: response.headers.get("content-type"),
+      });
+
+      if (response.status === 401) {
+        console.error("❌ Token expiré, redirection vers login");
+        this.redirectToLogin();
+        throw new Error("Session expirée");
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("❌ Erreur HTTP:", errorText);
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const contentType = response.headers.get("content-type");
+      let responseData;
+
+      if (contentType && contentType.includes("application/json")) {
+        responseData = await response.json();
+        console.log("📋 Données JSON reçues:", responseData);
+      } else {
+        responseData = await response.text();
+        console.log("📋 Données texte reçues:", responseData.substring(0, 200));
+      }
+
+      return responseData;
+    } catch (error) {
+      console.error("❌ Erreur requête HTTP complète:", {
+        url: url,
+        error: error.message,
+        stack: error.stack,
+      });
+      throw error;
+    }
   }
 
   // ================================================================
@@ -110,6 +219,9 @@ class ChatApp {
         reconnection: true,
         reconnectionAttempts: 5,
         reconnectionDelay: 1000,
+        auth: {
+          token: this.authToken,
+        },
       });
 
       this.setupSocketEvents();
@@ -146,7 +258,7 @@ class ChatApp {
     this.socket.emit("authenticate", {
       userId: this.currentUser.id,
       matricule: this.currentUser.matricule,
-      token: "demo-token", // En production, utiliser un vrai token JWT
+      token: this.authToken,
     });
   }
 
@@ -163,6 +275,7 @@ class ChatApp {
     this.socket.on("auth_error", (data) => {
       console.error("❌ Erreur authentification:", data);
       this.showToast("Erreur d'authentification: " + data.message, "error");
+      this.redirectToLogin();
     });
 
     // Événements de messages
@@ -319,56 +432,247 @@ class ChatApp {
     this.adjustTextareaHeight(input);
   }
 
+  async loadMessageHistory(conversationId) {
+    try {
+      const url = `${this.config.MESSAGE_SERVICE_URL}?conversationId=${conversationId}&limit=50`;
+      const response = await this.makeAuthenticatedRequest(url);
+
+      if (response.success && response.data) {
+        return response.data;
+      }
+
+      return [];
+    } catch (error) {
+      console.error("❌ Erreur chargement historique messages:", error);
+      return [];
+    }
+  }
+
   // ================================================================
-  // GESTION DES CONVERSATIONS
+  // GESTION DES CONVERSATIONS - CORRIGÉE
   // ================================================================
 
   async loadConversations() {
     try {
       this.showLoadingState("conversationsList");
 
-      // Simuler des conversations pour la démo
-      const mockConversations = [
-        {
-          id: "conv_1",
-          name: "Équipe IT",
-          type: "group",
-          participants: ["user_1", "user_2", "user_3"],
-          lastMessage: {
-            content: "Dernière mise à jour terminée",
-            timestamp: new Date(Date.now() - 300000),
-            senderId: "user_2",
-          },
-          unreadCount: 2,
-        },
-        {
-          id: "conv_2",
-          name: "Marie Dupont",
-          type: "private",
-          participants: [this.currentUser.id, "user_2"],
-          lastMessage: {
-            content: "Parfait, merci !",
-            timestamp: new Date(Date.now() - 1800000),
-            senderId: "user_2",
-          },
-          unreadCount: 0,
-        },
-      ];
+      console.log("📥 Chargement des conversations...");
+      const url = `${this.config.CONVERSATION_SERVICE_URL}`;
 
-      // Stocker les conversations
-      mockConversations.forEach((conv) => {
-        this.conversations.set(conv.id, conv);
-      });
+      console.log("🔗 URL appelée:", url);
+      const response = await this.makeAuthenticatedRequest(url);
 
-      // Afficher les conversations
-      this.displayConversations();
+      console.log("📦 Réponse reçue:", response);
+
+      // ✅ VALIDATION ROBUSTE DE LA RÉPONSE AVEC STRUCTURE IMBRIQUÉE
+      let conversations = [];
+
+      if (response) {
+        // Cas 1: Structure API CENADI { success: true, data: { conversations: [...] } }
+        if (
+          response.success &&
+          response.data &&
+          Array.isArray(response.data.conversations)
+        ) {
+          conversations = response.data.conversations;
+          console.log("✅ Format API CENADI détecté (data.conversations)");
+        }
+        // Cas 2: Structure API standard { success: true, data: [...] }
+        else if (response.success && Array.isArray(response.data)) {
+          conversations = response.data;
+          console.log("✅ Format API standard détecté (data direct)");
+        }
+        // Cas 3: Réponse directe sous forme de tableau
+        else if (Array.isArray(response)) {
+          conversations = response;
+          console.log("✅ Format tableau direct détecté");
+        }
+        // Cas 4: Réponse avec data direct (sans success)
+        else if (response.data && Array.isArray(response.data)) {
+          conversations = response.data;
+          console.log("✅ Format data direct détecté");
+        }
+        // Cas 5: Réponse avec conversations dans un autre champ
+        else if (
+          response.conversations &&
+          Array.isArray(response.conversations)
+        ) {
+          conversations = response.conversations;
+          console.log("✅ Format conversations direct détecté");
+        }
+        // Cas 6: Réponse avec results
+        else if (response.results && Array.isArray(response.results)) {
+          conversations = response.results;
+          console.log("✅ Format results détecté");
+        }
+        // Cas 7: Réponse avec items
+        else if (response.items && Array.isArray(response.items)) {
+          conversations = response.items;
+          console.log("✅ Format items détecté");
+        } else {
+          // ✅ LOGGING DÉTAILLÉ POUR DEBUG
+          console.warn("⚠️ Format de réponse non reconnu:", {
+            type: typeof response,
+            success: response.success,
+            hasData: !!response.data,
+            dataType: response.data ? typeof response.data : "undefined",
+            hasConversations: response.data
+              ? !!response.data.conversations
+              : false,
+            conversationsType:
+              response.data && response.data.conversations
+                ? typeof response.data.conversations
+                : "undefined",
+            isArray:
+              response.data && response.data.conversations
+                ? Array.isArray(response.data.conversations)
+                : false,
+            structure: Object.keys(response),
+            dataStructure: response.data
+              ? Object.keys(response.data)
+              : "no data",
+          });
+
+          // ✅ ESSAYER D'EXTRAIRE LES CONVERSATIONS MÊME SI FORMAT INATTENDU
+          if (response.data && response.data.conversations !== undefined) {
+            conversations = Array.isArray(response.data.conversations)
+              ? response.data.conversations
+              : [];
+            console.log("🔄 Tentative d'extraction forcée des conversations");
+          } else {
+            throw new Error(
+              `Format de réponse non supporté. Structure: ${JSON.stringify(
+                Object.keys(response)
+              )}`
+            );
+          }
+        }
+      } else {
+        throw new Error("Réponse vide du serveur");
+      }
+
+      // ✅ VALIDATION DU CONTENU
+      if (!Array.isArray(conversations)) {
+        console.error("❌ Conversations n'est pas un tableau:", {
+          type: typeof conversations,
+          value: conversations,
+        });
+        throw new Error(
+          "Format de données invalide - conversations n'est pas un tableau"
+        );
+      }
+
+      console.log(`📊 ${conversations.length} conversations trouvées`);
+
+      // ✅ TRAITEMENT DES CONVERSATIONS
+      if (conversations.length > 0) {
+        // Stocker les conversations avec validation
+        conversations.forEach((conv, index) => {
+          try {
+            // Validation de base
+            if (!conv.id) {
+              console.warn(`⚠️ Conversation ${index} sans ID:`, conv);
+              conv.id = `conv_${Date.now()}_${index}`;
+            }
+
+            // Normalisation des données
+            const normalizedConv = {
+              id: conv.id,
+              name:
+                conv.name ||
+                conv.title ||
+                conv.nom ||
+                `Conversation ${conv.id}`,
+              type: conv.type || "group",
+              participants: Array.isArray(conv.participants)
+                ? conv.participants
+                : [],
+              lastMessage: conv.lastMessage || conv.dernierMessage || null,
+              unreadCount: conv.unreadCount || conv.messagesNonLus || 0,
+              createdAt: conv.createdAt || conv.dateCreation || new Date(),
+              updatedAt: conv.updatedAt || conv.dateMiseAJour || new Date(),
+            };
+
+            this.conversations.set(normalizedConv.id, normalizedConv);
+            console.log(
+              `✅ Conversation ajoutée: ${normalizedConv.name} (${normalizedConv.id})`
+            );
+          } catch (convError) {
+            console.warn(
+              `⚠️ Erreur traitement conversation ${index}:`,
+              convError,
+              conv
+            );
+          }
+        });
+
+        // Afficher les conversations
+        this.displayConversations();
+        console.log(
+          `✅ ${conversations.length} conversations chargées et ${this.conversations.size} stockées`
+        );
+      } else {
+        console.log(
+          "ℹ️ Aucune conversation trouvée - Affichage de l'état vide"
+        );
+        this.showEmptyState("conversationsList", "Aucune conversation");
+
+        // ✅ AJOUTER QUELQUES CONVERSATIONS DE DÉMONSTRATION
+        console.log("🔄 Ajout de conversations de démonstration...");
+        this.loadMockConversations();
+      }
     } catch (error) {
       console.error("❌ Erreur chargement conversations:", error);
+      console.error("📋 Détails de l'erreur:", {
+        message: error.message,
+        stack: error.stack,
+        url: this.config.CONVERSATION_SERVICE_URL,
+      });
+
       this.showErrorState(
         "conversationsList",
-        "Erreur chargement conversations"
+        `Erreur chargement conversations: ${error.message}`
       );
+
+      // Fallback: utiliser des données de démonstration
+      console.log("🔄 Chargement des conversations de démonstration...");
+      this.loadMockConversations();
     }
+  }
+
+  loadMockConversations() {
+    const mockConversations = [
+      {
+        id: "conv_1",
+        name: "Équipe IT",
+        type: "group",
+        participants: ["user_1", "user_2", "user_3"],
+        lastMessage: {
+          content: "Dernière mise à jour terminée",
+          timestamp: new Date(Date.now() - 300000),
+          senderId: "user_2",
+        },
+        unreadCount: 2,
+      },
+      {
+        id: "conv_2",
+        name: "Support Technique",
+        type: "group",
+        participants: [this.currentUser.id, "user_2"],
+        lastMessage: {
+          content: "Parfait, merci !",
+          timestamp: new Date(Date.now() - 1800000),
+          senderId: "user_2",
+        },
+        unreadCount: 0,
+      },
+    ];
+
+    mockConversations.forEach((conv) => {
+      this.conversations.set(conv.id, conv);
+    });
+
+    this.displayConversations();
   }
 
   displayConversations() {
@@ -502,11 +806,11 @@ class ChatApp {
       container.innerHTML =
         '<div class="loading-state"><i class="fas fa-spinner fa-spin"></i><p>Chargement des messages...</p></div>';
 
-      // Simuler un délai de chargement
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Charger l'historique des messages depuis l'API
+      const messages = await this.loadMessageHistory(conversationId);
 
-      // Récupérer les messages de la conversation
-      const messages = this.messages.get(conversationId) || [];
+      // Stocker les messages dans la collection locale
+      this.messages.set(conversationId, messages);
 
       container.innerHTML = "";
 
@@ -531,56 +835,203 @@ class ChatApp {
   }
 
   // ================================================================
-  // GESTION DES CONTACTS
+  // GESTION DES CONTACTS - MÊME LOGIQUE APPLIQUÉE
   // ================================================================
 
   async loadContacts() {
     try {
       this.showLoadingState("contactsGrid");
 
-      // Simuler des contacts pour la démo
-      const mockContacts = [
-        {
-          id: "user_1",
-          matricule: "MAT001",
-          nom: "Jean Martin",
-          email: "jean.martin@cenadi.com",
-          role: "Développeur",
-          service: "IT",
-          statut: "online",
-        },
-        {
-          id: "user_2",
-          matricule: "MAT002",
-          nom: "Marie Dupont",
-          email: "marie.dupont@cenadi.com",
-          role: "Chef de projet",
-          service: "IT",
-          statut: "away",
-        },
-        {
-          id: "user_3",
-          matricule: "MAT003",
-          nom: "Pierre Dubois",
-          email: "pierre.dubois@cenadi.com",
-          role: "Administrateur",
-          service: "RH",
-          statut: "offline",
-        },
-      ];
+      console.log("👥 Chargement des contacts...");
+      const url = `${this.config.USER_SERVICE_URL}/all`;
 
-      // Stocker les contacts
-      mockContacts.forEach((contact) => {
-        this.contacts.set(contact.id, contact);
-      });
+      console.log("🔗 URL appelée:", url);
+      const response = await this.makeAuthenticatedRequest(url);
 
-      // Afficher les contacts
-      this.displayContacts();
-      this.updateContactsStats();
+      console.log("📦 Réponse contacts reçue:", response);
+
+      // ✅ VALIDATION ROBUSTE AVEC STRUCTURE IMBRIQUÉE
+      let contacts = [];
+
+      if (response) {
+        // Cas 1: Structure API CENADI { success: true, data: { users: [...] } }
+        if (
+          response.success &&
+          response.data &&
+          Array.isArray(response.data.users)
+        ) {
+          contacts = response.data.users;
+          console.log("✅ Format API CENADI détecté (data.users)");
+        }
+        // Cas 2: Structure API CENADI { success: true, data: { contacts: [...] } }
+        else if (
+          response.success &&
+          response.data &&
+          Array.isArray(response.data.contacts)
+        ) {
+          contacts = response.data.contacts;
+          console.log("✅ Format API CENADI détecté (data.contacts)");
+        }
+        // Cas 3: Structure API standard { success: true, data: [...] }
+        else if (response.success && Array.isArray(response.data)) {
+          contacts = response.data;
+          console.log("✅ Format API standard détecté");
+        }
+        // Cas 4: Réponse directe sous forme de tableau
+        else if (Array.isArray(response)) {
+          contacts = response;
+          console.log("✅ Format tableau direct détecté");
+        }
+        // Cas 5: Réponse avec data direct
+        else if (response.data && Array.isArray(response.data)) {
+          contacts = response.data;
+          console.log("✅ Format data direct détecté");
+        }
+        // Cas 6: Réponse avec users
+        else if (response.users && Array.isArray(response.users)) {
+          contacts = response.users;
+          console.log("✅ Format users détecté");
+        }
+        // Cas 7: Réponse avec contacts
+        else if (response.contacts && Array.isArray(response.contacts)) {
+          contacts = response.contacts;
+          console.log("✅ Format contacts détecté");
+        } else {
+          console.warn("⚠️ Format de réponse contacts non reconnu:", {
+            type: typeof response,
+            success: response.success,
+            hasData: !!response.data,
+            dataType: response.data ? typeof response.data : "undefined",
+            structure: Object.keys(response),
+            dataStructure: response.data
+              ? Object.keys(response.data)
+              : "no data",
+          });
+
+          // Essayer d'extraire quand même
+          if (response.data) {
+            const possibleArrays = Object.values(response.data).filter(
+              Array.isArray
+            );
+            if (possibleArrays.length > 0) {
+              contacts = possibleArrays[0];
+              console.log("🔄 Extraction forcée du premier tableau trouvé");
+            }
+          }
+
+          if (!Array.isArray(contacts) || contacts.length === 0) {
+            throw new Error("Format de réponse contacts invalide");
+          }
+        }
+      } else {
+        throw new Error("Réponse vide du serveur pour les contacts");
+      }
+
+      // ✅ VALIDATION ET TRAITEMENT
+      if (!Array.isArray(contacts)) {
+        throw new Error("Les données contacts ne sont pas un tableau");
+      }
+
+      console.log(`📊 ${contacts.length} contacts trouvés`);
+
+      if (contacts.length > 0) {
+        // Stocker les contacts avec validation
+        contacts.forEach((contact, index) => {
+          try {
+            // Validation de base
+            if (!contact.id && !contact.agt_id) {
+              console.warn(`⚠️ Contact ${index} sans ID:`, contact);
+              contact.id = `user_${Date.now()}_${index}`;
+            }
+
+            // Normalisation des données
+            const normalizedContact = {
+              id: contact.id || contact.agt_id,
+              matricule: contact.matricule || contact.agt_id || "N/A",
+              nom: contact.nom || contact.name || "Nom inconnu",
+              prenom: contact.prenom || contact.firstName || "",
+              email: contact.email || "",
+              role: contact.role || "Utilisateur",
+              service: contact.service || contact.ministere || "",
+              statut: contact.statut || "offline",
+            };
+
+            this.contacts.set(normalizedContact.id, normalizedContact);
+          } catch (contactError) {
+            console.warn(
+              `⚠️ Erreur traitement contact ${index}:`,
+              contactError,
+              contact
+            );
+          }
+        });
+
+        // Afficher les contacts
+        this.displayContacts();
+        this.updateContactsStats();
+        console.log(
+          `✅ ${contacts.length} contacts chargés et ${this.contacts.size} stockés`
+        );
+      } else {
+        console.log("ℹ️ Aucun contact trouvé");
+        this.showEmptyState("contactsGrid", "Aucun contact trouvé");
+
+        // Fallback avec données de démonstration
+        this.loadMockContacts();
+      }
     } catch (error) {
       console.error("❌ Erreur chargement contacts:", error);
-      this.showErrorState("contactsGrid", "Erreur chargement contacts");
+      this.showErrorState(
+        "contactsGrid",
+        `Erreur chargement contacts: ${error.message}`
+      );
+
+      // Fallback: utiliser des données de démonstration
+      console.log("🔄 Chargement des contacts de démonstration...");
+      this.loadMockContacts();
     }
+  }
+
+  loadMockContacts() {
+    const mockContacts = [
+      {
+        id: "user_1",
+        matricule: "MAT001",
+        nom: "Jean Martin",
+        prenom: "Jean",
+        email: "jean.martin@cenadi.com",
+        role: "Développeur",
+        service: "IT",
+        statut: "online",
+      },
+      {
+        id: "user_2",
+        matricule: "MAT002",
+        nom: "Marie Dupont",
+        prenom: "Marie",
+        email: "marie.dupont@cenadi.com",
+        role: "Chef de projet",
+        service: "IT",
+        statut: "away",
+      },
+      {
+        id: "user_3",
+        matricule: "MAT003",
+        nom: "Pierre Dubois",
+        prenom: "Pierre",
+        email: "pierre.dubois@cenadi.com",
+        role: "Administrateur",
+        service: "RH",
+        statut: "offline",
+      },
+    ];
+
+    mockContacts.forEach((contact) => {
+      this.contacts.set(contact.id, contact);
+    });
+
+    this.displayContacts();
+    this.updateContactsStats();
   }
 
   displayContacts() {
@@ -611,21 +1062,25 @@ class ChatApp {
     contactEl.className = `contact-card ${isSelf ? "self-contact" : ""}`;
     contactEl.dataset.contactId = contact.id;
 
+    const fullName = `${contact.prenom || ""} ${contact.nom || ""}`.trim();
+    const initials = fullName
+      .split(" ")
+      .map((n) => n.charAt(0))
+      .join("")
+      .substring(0, 2);
+
     contactEl.innerHTML = `
       <div class="contact-avatar">
-        <span>${contact.nom
-          .split(" ")
-          .map((n) => n.charAt(0))
-          .join("")}</span>
+        <span>${initials}</span>
         <div class="status-indicator ${statusClass}"></div>
       </div>
       <div class="contact-info">
         <div class="contact-name">
-          ${contact.nom}
+          ${fullName}
           ${isSelf ? '<i class="fas fa-star" title="Vous"></i>' : ""}
         </div>
         <div class="contact-matricule">${contact.matricule}</div>
-        <div class="contact-role">${contact.role}</div>
+        <div class="contact-role">${contact.role || "N/A"}</div>
         <div class="contact-status ${statusClass}">
           <i class="fas fa-circle"></i>
           ${
@@ -636,7 +1091,7 @@ class ChatApp {
               : "Hors ligne"
           }
         </div>
-        <div class="contact-email">${contact.email}</div>
+        <div class="contact-email">${contact.email || "N/A"}</div>
       </div>
     `;
 
@@ -668,44 +1123,160 @@ class ChatApp {
   }
 
   // ================================================================
-  // GESTION DES FICHIERS
+  // GESTION DES FICHIERS - MÊME LOGIQUE APPLIQUÉE
   // ================================================================
 
   async loadFiles() {
     try {
       this.showLoadingState("filesGrid");
 
-      // Simuler des fichiers pour la démo
-      const mockFiles = [
-        {
-          id: "file_1",
-          nom: "Document_projet.pdf",
-          taille: 2048576,
-          type: "document",
-          dateCreation: new Date(Date.now() - 86400000),
-          uploaderMatricule: "MAT001",
-        },
-        {
-          id: "file_2",
-          nom: "Image_schema.png",
-          taille: 1024768,
-          type: "image",
-          dateCreation: new Date(Date.now() - 3600000),
-          uploaderMatricule: "MAT002",
-        },
-      ];
+      console.log("📁 Chargement des fichiers...");
+      const url = `${this.config.FILE_SERVICE_URL}`;
 
-      // Stocker les fichiers
-      mockFiles.forEach((file) => {
-        this.files.set(file.id, file);
-      });
+      console.log("🔗 URL appelée:", url);
+      const response = await this.makeAuthenticatedRequest(url);
 
-      // Afficher les fichiers
-      this.displayFiles();
+      console.log("📦 Réponse fichiers reçue:", response);
+
+      // ✅ VALIDATION ROBUSTE AVEC STRUCTURE IMBRIQUÉE
+      let files = [];
+
+      if (response) {
+        // Cas 1: Structure API CENADI { success: true, data: { files: [...] } }
+        if (
+          response.success &&
+          response.data &&
+          Array.isArray(response.data.files)
+        ) {
+          files = response.data.files;
+          console.log("✅ Format API CENADI détecté (data.files)");
+        }
+        // Cas 2: Structure API standard { success: true, data: [...] }
+        else if (response.success && Array.isArray(response.data)) {
+          files = response.data;
+          console.log("✅ Format API standard détecté");
+        }
+        // Cas 3: Réponse directe sous forme de tableau
+        else if (Array.isArray(response)) {
+          files = response;
+          console.log("✅ Format tableau direct détecté");
+        }
+        // Cas 4: Réponse avec data direct
+        else if (response.data && Array.isArray(response.data)) {
+          files = response.data;
+          console.log("✅ Format data direct détecté");
+        }
+        // Cas 5: Réponse avec files
+        else if (response.files && Array.isArray(response.files)) {
+          files = response.files;
+          console.log("✅ Format files détecté");
+        } else {
+          console.warn("⚠️ Format de réponse fichiers non reconnu:", {
+            type: typeof response,
+            structure: Object.keys(response),
+            dataStructure: response.data
+              ? Object.keys(response.data)
+              : "no data",
+          });
+
+          // Essayer d'extraire quand même
+          if (response.data) {
+            const possibleArrays = Object.values(response.data).filter(
+              Array.isArray
+            );
+            if (possibleArrays.length > 0) {
+              files = possibleArrays[0];
+              console.log("🔄 Extraction forcée du premier tableau trouvé");
+            }
+          }
+
+          if (!Array.isArray(files)) {
+            throw new Error("Format de réponse fichiers invalide");
+          }
+        }
+      } else {
+        throw new Error("Réponse vide du serveur pour les fichiers");
+      }
+
+      if (!Array.isArray(files)) {
+        throw new Error("Les données fichiers ne sont pas un tableau");
+      }
+
+      console.log(`📊 ${files.length} fichiers trouvés`);
+
+      if (files.length > 0) {
+        // Stocker les fichiers avec validation
+        files.forEach((file, index) => {
+          try {
+            const normalizedFile = {
+              id: file.id || `file_${Date.now()}_${index}`,
+              nom: file.nom || file.name || file.filename || "Fichier sans nom",
+              taille: file.taille || file.size || 0,
+              type: file.type || file.mimeType || "unknown",
+              dateCreation: file.dateCreation || file.createdAt || new Date(),
+              uploaderMatricule:
+                file.uploaderMatricule || file.uploader || "N/A",
+            };
+
+            this.files.set(normalizedFile.id, normalizedFile);
+          } catch (fileError) {
+            console.warn(
+              `⚠️ Erreur traitement fichier ${index}:`,
+              fileError,
+              file
+            );
+          }
+        });
+
+        this.displayFiles();
+        console.log(
+          `✅ ${files.length} fichiers chargés et ${this.files.size} stockés`
+        );
+      } else {
+        console.log("ℹ️ Aucun fichier trouvé");
+        this.showEmptyState("filesGrid", "Aucun fichier trouvé");
+
+        // Fallback avec données de démonstration
+        this.loadMockFiles();
+      }
     } catch (error) {
       console.error("❌ Erreur chargement fichiers:", error);
-      this.showErrorState("filesGrid", "Erreur chargement fichiers");
+      this.showErrorState(
+        "filesGrid",
+        `Erreur chargement fichiers: ${error.message}`
+      );
+
+      // Fallback: utiliser des données de démonstration
+      console.log("🔄 Chargement des fichiers de démonstration...");
+      this.loadMockFiles();
     }
+  }
+
+  loadMockFiles() {
+    const mockFiles = [
+      {
+        id: "file_1",
+        nom: "Document_projet.pdf",
+        taille: 2048576,
+        type: "document",
+        dateCreation: new Date(Date.now() - 86400000),
+        uploaderMatricule: "MAT001",
+      },
+      {
+        id: "file_2",
+        nom: "Image_schema.png",
+        taille: 1024768,
+        type: "image",
+        dateCreation: new Date(Date.now() - 3600000),
+        uploaderMatricule: "MAT002",
+      },
+    ];
+
+    mockFiles.forEach((file) => {
+      this.files.set(file.id, file);
+    });
+
+    this.displayFiles();
   }
 
   displayFiles() {
@@ -734,7 +1305,7 @@ class ChatApp {
 
     const icon = this.getFileIcon(file.type);
     const size = this.formatFileSize(file.taille);
-    const date = file.dateCreation.toLocaleDateString("fr-FR");
+    const date = new Date(file.dateCreation).toLocaleDateString("fr-FR");
 
     fileEl.innerHTML = `
       <div class="file-icon">
@@ -756,6 +1327,116 @@ class ChatApp {
     `;
 
     return fileEl;
+  }
+
+  async downloadFile(fileId) {
+    try {
+      this.showToast("Téléchargement du fichier...", "info");
+
+      const url = `${this.config.FILE_SERVICE_URL}/${fileId}/download`;
+      const response = await this.makeAuthenticatedRequest(url, {
+        method: "GET",
+      });
+
+      // Si c'est une URL de téléchargement, ouvrir dans un nouvel onglet
+      if (typeof response === "string" && response.startsWith("http")) {
+        window.open(response, "_blank");
+      } else {
+        console.log("Fichier téléchargé:", response);
+      }
+
+      this.showToast("Fichier téléchargé avec succès", "success");
+    } catch (error) {
+      console.error("❌ Erreur téléchargement:", error);
+      this.showToast("Erreur téléchargement: " + error.message, "error");
+    }
+  }
+
+  async deleteFile(fileId) {
+    if (!confirm("Êtes-vous sûr de vouloir supprimer ce fichier ?")) return;
+
+    try {
+      this.showToast("Suppression du fichier...", "info");
+
+      const url = `${this.config.FILE_SERVICE_URL}/${fileId}`;
+      await this.makeAuthenticatedRequest(url, {
+        method: "DELETE",
+      });
+
+      // Supprimer de la collection locale
+      this.files.delete(fileId);
+
+      // Mettre à jour l'affichage
+      this.displayFiles();
+
+      this.showToast("Fichier supprimé avec succès", "success");
+    } catch (error) {
+      console.error("❌ Erreur suppression:", error);
+      this.showToast("Erreur suppression: " + error.message, "error");
+    }
+  }
+
+  // ================================================================
+  // HEALTH CHECK
+  // ================================================================
+
+  async loadHealthStatus() {
+    try {
+      this.showLoadingState("healthCards");
+
+      console.log("🏥 Chargement du statut de santé...");
+      const url = this.config.HEALTH_CHECK_URL;
+      const response = await this.makeAuthenticatedRequest(url);
+
+      this.displayHealthStatus(response);
+    } catch (error) {
+      console.error("❌ Erreur chargement santé:", error);
+      this.showErrorState("healthCards", "Erreur chargement statut");
+    }
+  }
+
+  displayHealthStatus(healthData) {
+    const container = document.getElementById("healthCards");
+    if (!container) return;
+
+    container.innerHTML = `
+      <div class="health-card">
+        <div class="health-icon ${healthData.status}">
+          <i class="fas fa-heartbeat"></i>
+        </div>
+        <div class="health-info">
+          <h3>Service Principal</h3>
+          <span class="health-status ${healthData.status}">${
+      healthData.status
+    }</span>
+          <small>Dernière vérification: ${new Date(
+            healthData.timestamp
+          ).toLocaleString("fr-FR")}</small>
+        </div>
+      </div>
+    `;
+
+    if (healthData.services) {
+      Object.entries(healthData.services).forEach(
+        ([serviceName, serviceData]) => {
+          const serviceCard = document.createElement("div");
+          serviceCard.className = "health-card";
+          serviceCard.innerHTML = `
+          <div class="health-icon ${serviceData.status}">
+            <i class="fas fa-server"></i>
+          </div>
+          <div class="health-info">
+            <h3>${serviceName}</h3>
+            <span class="health-status ${serviceData.status}">${
+            serviceData.status
+          }</span>
+            <small>${serviceData.message || "N/A"}</small>
+          </div>
+        `;
+          container.appendChild(serviceCard);
+        }
+      );
+    }
   }
 
   // ================================================================
@@ -1114,32 +1795,9 @@ class ChatApp {
   }
 
   // ================================================================
-  // MÉTHODES PUBLIQUES POUR LES ÉVÉNEMENTS
+  // MÉTHODES DE STUB POUR FONCTIONNALITÉS AVANCÉES
   // ================================================================
 
-  async downloadFile(fileId) {
-    try {
-      this.showToast("Téléchargement du fichier...", "info");
-      // Implémenter le téléchargement
-      console.log("Téléchargement fichier:", fileId);
-    } catch (error) {
-      this.showToast("Erreur téléchargement: " + error.message, "error");
-    }
-  }
-
-  async deleteFile(fileId) {
-    if (!confirm("Êtes-vous sûr de vouloir supprimer ce fichier ?")) return;
-
-    try {
-      this.showToast("Suppression du fichier...", "info");
-      // Implémenter la suppression
-      console.log("Suppression fichier:", fileId);
-    } catch (error) {
-      this.showToast("Erreur suppression: " + error.message, "error");
-    }
-  }
-
-  // Méthodes de stub pour les fonctionnalités avancées
   setupAutoResize() {
     /* Implémentation future */
   }
@@ -1189,9 +1847,6 @@ class ChatApp {
     /* Implémentation future */
   }
   loadApiDocumentation() {
-    /* Implémentation future */
-  }
-  async loadHealthStatus() {
     /* Implémentation future */
   }
 }
