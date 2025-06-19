@@ -2,6 +2,7 @@ require('express-async-errors');
 const express = require('express');
 const path = require('path');
 const agentRoutes = require('./routes/agents');
+const unitRoutes = require('./routes/units');
 
 const app = express();
 
@@ -18,6 +19,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Routes
 app.use('/agents', agentRoutes);
+app.use('/units', unitRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {

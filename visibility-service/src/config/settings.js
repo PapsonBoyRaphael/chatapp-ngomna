@@ -16,4 +16,10 @@ module.exports = {
     user: process.env.POSTGRES_USER || 'postgres',
     password: process.env.POSTGRES_PASSWORD || '',
   },
+  redis: {
+    host: process.env.REDIS_HOST || 'localhost',
+    port: process.env.REDIS_PORT || 6379,
+  },
+  //REDIS_HOST: process.env.REDIS_HOST || 'localhost',
+  //REDIS_PORT: process.env.REDIS_PORT || 6379,
 };
