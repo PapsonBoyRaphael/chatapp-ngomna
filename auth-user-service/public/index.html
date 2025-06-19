@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Login</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="login-container">
+      <h1>Connexion</h1>
+      <form id="login-form">
+        <input
+          type="text"
+          id="matricule"
+          placeholder="Entrez votre matricule"
+          required
+        />
+        <button type="submit">Se connecter</button>
+      </form>
+      <div id="error-message" class="error"></div>
+    </div>
+
+    <script>
+      document
+        .getElementById("login-form")
+        .addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const matricule = document.getElementById("matricule").value;
+
+          try {
+            const response = await fetch("http://localhost:8001/login", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ matricule }),
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+              // Stocker le token JWT et rediriger vers le chat-service
+              localStorage.setItem("token", data.token);
+              localStorage.setItem("user", JSON.stringify(data.user));
+              document.cookie = `token=${data.token}; path=/; secure; SameSite=None`;
+              document.cookie = `user=${encodeURIComponent(
+                JSON.stringify(data.user)
+              )}; path=/; secure; SameSite=None`;
+
+<<<<<<< HEAD:auth-service/public/index.html
+              window.location.href = "http://localhost:3000/agents/verify";
+=======
+              window.location.href = "http://localhost:8003/";
+>>>>>>> 5afb68cb99da895fb031bad300392628033691c9:auth-user-service/public/index.html
+            } else {
+              document.getElementById("error-message").textContent =
+                data.message;
+            }
+          } catch (error) {
+            document.getElementById("error-message").textContent =
+              "Erreur de connexion.";
+          }
+        });
+    </script>
+  </body>
+</html>
