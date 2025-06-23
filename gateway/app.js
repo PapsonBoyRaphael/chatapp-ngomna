@@ -95,29 +95,14 @@ const routes = [
     description: "Utilisateurs",
   },
   {
-    path: "/api/groups",
-    target: process.env.VISIBILITY_SERVICE_URL,
-    description: "Groupes",
-  },
-  {
     path: "/api/visibility",
     target: process.env.VISIBILITY_SERVICE_URL,
     description: "Visibilité",
   },
   {
-    path: "/api/messages",
+    path: "/api/chat",
     target: process.env.CHAT_FILE_SERVICE_URL,
-    description: "Messages",
-  },
-  {
-    path: "/api/conversations",
-    target: process.env.CHAT_FILE_SERVICE_URL,
-    description: "Conversations",
-  },
-  {
-    path: "/api/files",
-    target: process.env.CHAT_FILE_SERVICE_URL,
-    description: "Fichiers",
+    description: "Chat et Fichiers",
   },
 ];
 

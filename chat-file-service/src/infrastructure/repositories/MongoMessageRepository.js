@@ -12,28 +12,111 @@ class MongoMessageRepository {
   // MÉTHODES PRINCIPALES
   // ===============================
 
-  async save(message) {
+  async save(messageOrData) {
     const startTime = Date.now();
 
     try {
-      // Valider l'entité
-      message.validate();
+      console.log(`💾 Début sauvegarde message:`, {
+        senderId: messageOrData.senderId,
+        conversationId: messageOrData.conversationId,
+        type: messageOrData.type,
+        contentLength: messageOrData.content ? messageOrData.content.length : 0,
+      });
 
-      // Sauvegarder en base
-      const savedMessage = await Message.findByIdAndUpdate(
-        message._id,
-        message.toObject(),
-        {
-          new: true,
-          upsert: true,
-          runValidators: true,
-          setDefaultsOnInsert: true,
+      let message;
+
+      // ✅ GÉRER LES DONNÉES BRUTES ET LES ENTITÉS
+      if (
+        messageOrData.validate &&
+        typeof messageOrData.validate === "function"
+      ) {
+        // C'est déjà une entité Message
+        message = messageOrData;
+
+        try {
+          message.validate();
+        } catch (validationError) {
+          console.error(
+            `❌ Erreur validation entité message:`,
+            validationError.message
+          );
+          throw new Error(`Message invalide: ${validationError.message}`);
         }
-      );
+      } else {
+        // ✅ CRÉER UNE NOUVELLE INSTANCE À PARTIR DES DONNÉES
+        try {
+          message = new Message(messageOrData);
+
+          // ✅ VALIDATION AVANT SAUVEGARDE
+          const validationError = message.validateSync();
+          if (validationError) {
+            console.error(
+              `❌ Erreur validation nouveau message:`,
+              validationError.message
+            );
+            throw new Error(
+              `Données de message invalides: ${validationError.message}`
+            );
+          }
+        } catch (modelError) {
+          console.error(
+            `❌ Erreur création modèle message:`,
+            modelError.message
+          );
+          throw new Error(
+            `Impossible de créer le modèle message: ${modelError.message}`
+          );
+        }
+      }
+
+      // ✅ SAUVEGARDER AVEC GESTION D'ERREUR ROBUSTE
+      let savedMessage;
+      try {
+        savedMessage = await Message.findByIdAndUpdate(
+          message._id,
+          message.toObject ? message.toObject() : message,
+          {
+            new: true,
+            upsert: true,
+            runValidators: true,
+            setDefaultsOnInsert: true,
+          }
+        );
+
+        if (!savedMessage || !savedMessage._id) {
+          throw new Error("Sauvegarde a échoué - message invalide retourné");
+        }
+
+        console.log(`✅ Message sauvegardé en base: ${savedMessage._id}`);
+      } catch (saveError) {
+        console.error(`❌ Erreur sauvegarde MongoDB message:`, {
+          error: saveError.message,
+          code: saveError.code,
+          messageId: message._id,
+          conversationId: message.conversationId,
+        });
+
+        // ✅ GESTION SPÉCIFIQUE DES ERREURS MONGODB
+        if (saveError.name === "ValidationError") {
+          throw new Error(`Données de message invalides: ${saveError.message}`);
+        }
+
+        if (saveError.code === 11000) {
+          throw new Error(`Message en doublon détecté`);
+        }
+
+        if (saveError.message.includes("Cast to ObjectId failed")) {
+          throw new Error(
+            `ID de conversation invalide: ${message.conversationId}`
+          );
+        }
+
+        throw new Error(`Erreur MongoDB: ${saveError.message}`);
+      }
 
       const processingTime = Date.now() - startTime;
 
-      // 🚀 MISE EN CACHE REDIS
+      // ✅ CACHE ET KAFKA AVEC GESTION D'ERREUR
       if (this.redisClient) {
         try {
           await this._cacheMessage(savedMessage);
@@ -43,12 +126,11 @@ class MongoMessageRepository {
         }
       }
 
-      // 🚀 PUBLIER ÉVÉNEMENT KAFKA
       if (this.kafkaProducer) {
         try {
           await this._publishMessageEvent("MESSAGE_SAVED", savedMessage, {
             processingTime,
-            isNew: !message._id,
+            isNew: !messageOrData._id,
           });
         } catch (kafkaError) {
           console.warn("⚠️ Erreur publication message:", kafkaError.message);
@@ -56,19 +138,35 @@ class MongoMessageRepository {
       }
 
       console.log(
-        `💾 Message sauvegardé: ${savedMessage._id} (${processingTime}ms)`
+        `✅ Message complètement sauvegardé: ${savedMessage._id} (${processingTime}ms)`
       );
       return savedMessage;
     } catch (error) {
-      console.error("❌ Erreur sauvegarde message:", error);
+      const processingTime = Date.now() - startTime;
+      console.error("❌ Erreur complète sauvegarde message:", {
+        error: error.message,
+        stack: error.stack,
+        messageData: messageOrData.conversationId
+          ? {
+              conversationId: messageOrData.conversationId,
+              senderId: messageOrData.senderId,
+              type: messageOrData.type,
+            }
+          : "données invalides",
+        processingTime,
+      });
 
       // Publier l'erreur dans Kafka
       if (this.kafkaProducer) {
         try {
-          await this._publishMessageEvent("MESSAGE_SAVE_FAILED", message, {
-            error: error.message,
-            processingTime: Date.now() - startTime,
-          });
+          await this._publishMessageEvent(
+            "MESSAGE_SAVE_FAILED",
+            messageOrData,
+            {
+              error: error.message,
+              processingTime,
+            }
+          );
         } catch (kafkaError) {
           console.warn("⚠️ Erreur publication échec:", kafkaError.message);
         }
@@ -581,19 +679,46 @@ class MongoMessageRepository {
   // ===============================
 
   async _cacheMessage(message) {
-    try {
-      const cacheKey = `${this.cachePrefix}${message._id}`;
-      const cacheData = {
-        ...message,
-        cached: true,
-        cachedAt: new Date().toISOString(),
-      };
+    if (!this.redisClient) return false;
 
-      await this.redisClient.setex(
-        cacheKey,
-        this.defaultTTL,
-        JSON.stringify(cacheData)
-      );
+    try {
+      const cacheKey = `message:${message._id}`;
+      const messageData = JSON.stringify({
+        id: message._id,
+        conversationId: message.conversationId,
+        senderId: message.senderId,
+        content: message.content,
+        type: message.type,
+        status: message.status,
+        timestamp: message.timestamp,
+        createdAt: message.createdAt,
+        updatedAt: message.updatedAt,
+      });
+
+      // ✅ GÉRER LES DIFFÉRENTES API REDIS
+      if (typeof this.redisClient.setex === "function") {
+        // Redis classique
+        await this.redisClient.setex(cacheKey, this.defaultTTL, messageData);
+      } else if (typeof this.redisClient.setEx === "function") {
+        // Redis v4+ (méthode avec majuscule)
+        await this.redisClient.setEx(cacheKey, this.defaultTTL, messageData);
+      } else if (typeof this.redisClient.set === "function") {
+        // ✅ FALLBACK avec set + expire séparé
+        await this.redisClient.set(cacheKey, messageData);
+
+        if (typeof this.redisClient.expire === "function") {
+          await this.redisClient.expire(cacheKey, this.defaultTTL);
+        } else if (typeof this.redisClient.expireAt === "function") {
+          const expireTime = Math.floor(Date.now() / 1000) + this.defaultTTL;
+          await this.redisClient.expireAt(cacheKey, expireTime);
+        }
+      } else {
+        console.warn(
+          "⚠️ Aucune méthode Redis compatible trouvée pour la mise en cache"
+        );
+        return false;
+      }
+
       console.log(`💾 Message mis en cache: ${message._id}`);
       return true;
     } catch (error) {
@@ -647,27 +772,71 @@ class MongoMessageRepository {
   }
 
   async _invalidateRelatedCaches(message) {
-    if (!this.redisClient) return;
+    if (!this.redisClient) return false;
 
-    const patterns = [
-      `${this.cachePrefix}conv:${message.conversationId}:*`,
-      `${this.cachePrefix}unread:${message.senderId}:*`,
-      `${this.cachePrefix}unread:${message.receiverId}:*`,
-      `${this.cachePrefix}stats:${message.conversationId}`,
-    ];
+    try {
+      const keysToInvalidate = [
+        `messages:${message.conversationId}:*`,
+        `conversation:${message.conversationId}`,
+        `unread:${message.receiverId || "unknown"}:*`,
+        `user:messages:${message.senderId}:*`,
+      ];
 
-    for (const pattern of patterns) {
-      try {
-        const keys = await this.redisClient.keys(pattern);
-        if (keys.length > 0) {
-          await this.redisClient.del(keys);
+      for (const keyPattern of keysToInvalidate) {
+        try {
+          // ✅ GÉRER LES DIFFÉRENTES API REDIS POUR LA SUPPRESSION
+          if (keyPattern.includes("*")) {
+            // Pattern avec wildcard
+            if (
+              typeof this.redisClient.keys === "function" &&
+              typeof this.redisClient.del === "function"
+            ) {
+              const keys = await this.redisClient.keys(keyPattern);
+              if (keys.length > 0) {
+                await this.redisClient.del(...keys);
+              }
+            } else if (typeof this.redisClient.scanStream === "function") {
+              // Scanner et supprimer avec stream
+              const keys = [];
+              const stream = this.redisClient.scanStream({
+                match: keyPattern,
+                count: 100,
+              });
+
+              stream.on("data", (resultKeys) => {
+                keys.push(...resultKeys);
+              });
+
+              stream.on("end", async () => {
+                if (
+                  keys.length > 0 &&
+                  typeof this.redisClient.del === "function"
+                ) {
+                  await this.redisClient.del(...keys);
+                }
+              });
+            }
+          } else {
+            // Clé simple
+            if (typeof this.redisClient.del === "function") {
+              await this.redisClient.del(keyPattern);
+            } else if (typeof this.redisClient.unlink === "function") {
+              await this.redisClient.unlink(keyPattern);
+            }
+          }
+        } catch (keyError) {
+          console.warn(
+            `⚠️ Erreur invalidation clé ${keyPattern}:`,
+            keyError.message
+          );
         }
-      } catch (error) {
-        console.warn(
-          `⚠️ Erreur invalidation pattern ${pattern}:`,
-          error.message
-        );
       }
+
+      console.log(`🗑️ Caches invalidés pour message: ${message._id}`);
+      return true;
+    } catch (error) {
+      console.warn(`⚠️ Erreur invalidation caches:`, error.message);
+      return false;
     }
   }
 
@@ -829,6 +998,38 @@ class MongoMessageRepository {
       console.error("❌ Erreur nettoyage cache:", error);
       throw error;
     }
+  }
+
+  _testRedisAPI() {
+    if (!this.redisClient) {
+      console.log("❌ Pas de client Redis");
+      return false;
+    }
+
+    const methods = {
+      // Méthodes de base
+      get: typeof this.redisClient.get === "function",
+      set: typeof this.redisClient.set === "function",
+      del: typeof this.redisClient.del === "function",
+
+      // Méthodes avec expiration
+      setex: typeof this.redisClient.setex === "function",
+      setEx: typeof this.redisClient.setEx === "function", // Redis v4+
+      expire: typeof this.redisClient.expire === "function",
+      expireAt: typeof this.redisClient.expireAt === "function",
+
+      // Méthodes de recherche
+      keys: typeof this.redisClient.keys === "function",
+      scan: typeof this.redisClient.scan === "function",
+      scanStream: typeof this.redisClient.scanStream === "function",
+
+      // Méthodes avancées
+      unlink: typeof this.redisClient.unlink === "function",
+      exists: typeof this.redisClient.exists === "function",
+    };
+
+    console.log("🔍 API Redis disponible:", methods);
+    return methods;
   }
 }
 

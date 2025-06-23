@@ -3,714 +3,254 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CENADI Chat-File Service v1.0</title>
-    <meta
-      name="description"
-      content="Interface de chat et partage de fichiers CENADI"
-    />
-    <meta name="author" content="CENADI Team" />
+    <title>🔧 Testeur Socket.IO - CENADI Chat Service</title>
     <link rel="stylesheet" href="styles.css" />
-    <link
-      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
-      rel="stylesheet"
-    />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
-      rel="stylesheet"
-    />
+    <script src="/socket.io/socket.io.js"></script>
   </head>
   <body>
-    <div class="app-container">
-      <!-- Header Navigation -->
+    <div class="container">
       <header class="header">
-        <div class="header-content">
-          <div class="logo">
-            <i class="fas fa-comments"></i>
-            <span>CENADI Chat</span>
-          </div>
-          <nav class="nav">
-            <a href="#" class="nav-link active" data-view="chat">
-              <i class="fas fa-comments"></i>
-              <span>Chat</span>
-            </a>
-            <a href="#" class="nav-link" data-view="contacts">
-              <i class="fas fa-users"></i>
-              <span>Contacts</span>
-            </a>
-            <a href="#" class="nav-link" data-view="files">
-              <i class="fas fa-folder"></i>
-              <span>Fichiers</span>
-            </a>
-            <a href="#" class="nav-link" data-view="api">
-              <i class="fas fa-code"></i>
-              <span>API</span>
-            </a>
-            <a href="#" class="nav-link" data-view="health">
-              <i class="fas fa-heartbeat"></i>
-              <span>État</span>
-            </a>
-          </nav>
-          <div class="user-status">
-            <div class="connection-status" id="connectionStatus">
-              <i class="fas fa-circle"></i>
-              <span>Connecté</span>
-            </div>
-            <div class="user-info" id="userInfo">
-              <span id="matricule">Chargement...</span>
-              <span id="userRole">Utilisateur</span>
-            </div>
-            <button class="settings-btn" id="settingsBtn">
-              <i class="fas fa-cog"></i>
-            </button>
-          </div>
-        </div>
+        <h1>🔧 Testeur Socket.IO - CENADI Chat Service</h1>
+        <div class="connection-status" id="connectionStatus">🔴 Déconnecté</div>
       </header>
 
-      <!-- Main Content -->
-      <main class="main-content">
-        <!-- Chat Section -->
-        <section id="chatSection" class="content-section active">
-          <div class="chat-container">
-            <div class="conversations-sidebar">
-              <div class="sidebar-header">
-                <h3>Conversations</h3>
-                <button
-                  class="new-chat-btn"
-                  id="newChatBtn"
-                  title="Nouvelle conversation"
-                >
-                  <i class="fas fa-plus"></i>
-                </button>
-              </div>
+      <div class="main-content">
+        <!-- Section Authentification -->
+        <div class="section auth-section">
+          <h2>🔐 Authentification</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="userId"
+              placeholder="ID Utilisateur (ex: 3)"
+              value="3"
+            />
+            <input
+              type="text"
+              id="matricule"
+              placeholder="Matricule (ex: 559296X)"
+              value="559296X"
+            />
+            <input type="text" id="token" placeholder="Token JWT (optionnel)" />
+            <button onclick="authenticate()" class="btn-primary">
+              🔑 S'authentifier
+            </button>
+          </div>
+          <div class="status" id="authStatus"></div>
+        </div>
 
-              <!-- ✅ AJOUT FILTRES CONVERSATIONS -->
-              <div class="search-bar">
-                <i class="fas fa-search"></i>
-                <input
-                  type="text"
-                  placeholder="Rechercher une conversation..."
-                  id="searchConversations"
-                />
-              </div>
+        <!-- Section Tests de Base -->
+        <div class="section test-section">
+          <h2>🧪 Tests de Base</h2>
+          <div class="button-grid">
+            <button onclick="pingTest()" class="btn-secondary">
+              🏓 Test Ping
+            </button>
+            <button onclick="getOnlineUsers()" class="btn-secondary">
+              👥 Utilisateurs en ligne
+            </button>
+            <button onclick="disconnect()" class="btn-warning">
+              🔌 Déconnecter
+            </button>
+            <button onclick="reconnect()" class="btn-success">
+              🔄 Reconnecter
+            </button>
+          </div>
+        </div>
 
-              <!-- ✅ AJOUT ONGLETS CONVERSATIONS -->
-              <div class="conversation-tabs">
-                <button class="tab-btn active" data-tab="all">
-                  <i class="fas fa-comments"></i>
-                  Toutes
-                </button>
-                <button class="tab-btn" data-tab="unread">
-                  <i class="fas fa-bell"></i>
-                  Non lues <span id="unreadCount" class="badge">0</span>
-                </button>
-                <button class="tab-btn" data-tab="pinned">
-                  <i class="fas fa-thumbtack"></i>
-                  Épinglées
-                </button>
-              </div>
-
-              <div class="conversations-list" id="conversationsList">
-                <div class="loading-state">
-                  <i class="fas fa-spinner fa-spin"></i>
-                  <p>Chargement des conversations...</p>
-                </div>
-              </div>
-            </div>
-
-            <div class="chat-main">
-              <div class="chat-header" id="chatHeader">
-                <div class="chat-info">
-                  <div class="avatar">
-                    <i class="fas fa-user"></i>
-                  </div>
-                  <div class="chat-details">
-                    <h3>Sélectionnez une conversation</h3>
-                    <span class="status">En ligne</span>
-                  </div>
-                </div>
-                <div class="chat-actions">
-                  <!-- ✅ ACTIONS CHAT AMÉLIORÉES -->
-                  <button
-                    class="action-btn"
-                    id="searchInChatBtn"
-                    title="Rechercher dans le chat"
-                  >
-                    <i class="fas fa-search"></i>
-                  </button>
-                  <button class="action-btn" id="callBtn" title="Appel vocal">
-                    <i class="fas fa-phone"></i>
-                  </button>
-                  <button class="action-btn" id="videoBtn" title="Appel vidéo">
-                    <i class="fas fa-video"></i>
-                  </button>
-                  <button
-                    class="action-btn"
-                    id="pinConversationBtn"
-                    title="Épingler la conversation"
-                  >
-                    <i class="fas fa-thumbtack"></i>
-                  </button>
-                  <button
-                    class="action-btn"
-                    id="muteConversationBtn"
-                    title="Couper les notifications"
-                  >
-                    <i class="fas fa-bell-slash"></i>
-                  </button>
-                  <button class="action-btn" id="infoBtn" title="Informations">
-                    <i class="fas fa-info-circle"></i>
-                  </button>
-                </div>
-              </div>
-
-              <div class="messages-container" id="messagesContainer">
-                <div class="welcome-message">
-                  <i class="fas fa-comments"></i>
-                  <h3>Bienvenue dans CENADI Chat</h3>
-                  <p>Sélectionnez une conversation pour commencer à chatter</p>
-                </div>
-              </div>
-
-              <!-- ✅ ZONE DE FRAPPE AMÉLIORÉE -->
-              <div
-                class="message-input-container"
-                id="messageInputContainer"
-                style="display: none"
+        <!-- Section Messages -->
+        <div class="section message-section">
+          <h2>💬 Test Messages</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="conversationId"
+              placeholder="ID Conversation (24 caractères hexa)"
+              value="60f7b3b3b3b3b3b3b3b3b3b4"
+            />
+            <input
+              type="text"
+              id="receiverId"
+              placeholder="ID Destinataire (REQUIS pour nouvelles conversations)"
+              value="1"
+            />
+            <textarea
+              id="messageContent"
+              placeholder="Contenu du message..."
+              rows="3"
+            >
+Message de test depuis le testeur Socket.IO 🚀</textarea
+            >
+            <select id="messageType">
+              <option value="TEXT">TEXT</option>
+              <option value="IMAGE">IMAGE</option>
+              <option value="FILE">FILE</option>
+            </select>
+            <div class="button-grid">
+              <button
+                onclick="validateMessageData() && sendMessage()"
+                class="btn-primary"
               >
-                <!-- Indicateur de frappe -->
-                <div
-                  class="typing-indicator"
-                  id="typingIndicator"
-                  style="display: none"
-                >
-                  <span id="typingUsers"></span> est en train d'écrire...
-                  <div class="typing-dots">
-                    <span></span>
-                    <span></span>
-                    <span></span>
-                  </div>
-                </div>
-
-                <div class="input-actions">
-                  <button
-                    class="action-btn"
-                    id="attachBtn"
-                    title="Joindre un fichier"
-                  >
-                    <i class="fas fa-paperclip"></i>
-                  </button>
-                  <button
-                    class="action-btn"
-                    id="emojiBtn"
-                    title="Insérer un emoji"
-                  >
-                    <i class="fas fa-smile"></i>
-                  </button>
-                  <button
-                    class="action-btn"
-                    id="voiceBtn"
-                    title="Message vocal"
-                  >
-                    <i class="fas fa-microphone"></i>
-                  </button>
-                </div>
-
-                <div class="input-wrapper">
-                  <textarea
-                    id="messageInput"
-                    placeholder="Tapez votre message..."
-                    rows="1"
-                    maxlength="2000"
-                  ></textarea>
-                  <div class="input-footer">
-                    <span class="char-count" id="charCount">0/2000</span>
-                    <button
-                      class="send-btn"
-                      id="sendBtn"
-                      disabled
-                      title="Envoyer le message"
-                    >
-                      <i class="fas fa-paper-plane"></i>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- Contacts Section -->
-        <section id="contactsSection" class="content-section">
-          <div class="contacts-container">
-            <div class="contacts-header">
-              <h2>Contacts</h2>
-              <div class="contacts-actions">
-                <button class="btn btn-secondary" id="refreshContactsBtn">
-                  <i class="fas fa-sync-alt"></i>
-                  Actualiser
-                </button>
-              </div>
-            </div>
-
-            <div class="contacts-filters">
-              <div class="search-contacts">
-                <i class="fas fa-search"></i>
-                <input
-                  type="text"
-                  placeholder="Rechercher un contact..."
-                  id="searchContacts"
-                />
-              </div>
-              <div class="filter-group">
-                <label>Statut:</label>
-                <select id="statusFilter">
-                  <option value="">Tous</option>
-                  <option value="online">En ligne</option>
-                  <option value="away">Absent</option>
-                  <option value="offline">Hors ligne</option>
-                </select>
-              </div>
-              <div class="filter-group">
-                <label>Service:</label>
-                <select id="serviceFilter">
-                  <option value="">Tous</option>
-                  <option value="IT">Informatique</option>
-                  <option value="RH">Ressources Humaines</option>
-                  <option value="Finance">Finance</option>
-                  <option value="Direction">Direction</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="contacts-stats">
-              <div class="stat-card">
-                <i class="fas fa-users"></i>
-                <div class="stat-info">
-                  <span class="stat-number" id="totalContacts">-</span>
-                  <span class="stat-label">Total</span>
-                </div>
-              </div>
-              <div class="stat-card">
-                <i class="fas fa-circle" style="color: #10b981"></i>
-                <div class="stat-info">
-                  <span class="stat-number" id="onlineContacts">-</span>
-                  <span class="stat-label">En ligne</span>
-                </div>
-              </div>
-              <div class="stat-card">
-                <i class="fas fa-clock"></i>
-                <div class="stat-info">
-                  <span class="stat-number" id="awayContacts">-</span>
-                  <span class="stat-label">Absents</span>
-                </div>
-              </div>
-            </div>
-
-            <div class="contacts-grid" id="contactsGrid">
-              <div class="loading-state">
-                <i class="fas fa-spinner fa-spin"></i>
-                <p>Chargement des contacts...</p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- Files Section -->
-        <section id="filesSection" class="content-section">
-          <div class="files-container">
-            <div class="files-header">
-              <h2>Gestionnaire de Fichiers</h2>
-              <div class="files-actions">
-                <button class="btn btn-primary" id="uploadBtn">
-                  <i class="fas fa-upload"></i>
-                  Téléverser
-                </button>
-                <button class="btn btn-secondary" id="refreshFilesBtn">
-                  <i class="fas fa-sync-alt"></i>
-                  Actualiser
-                </button>
-              </div>
-            </div>
-
-            <div class="files-filters">
-              <div class="search-files">
-                <i class="fas fa-search"></i>
-                <input
-                  type="text"
-                  placeholder="Rechercher des fichiers..."
-                  id="searchFiles"
-                />
-              </div>
-              <div class="filter-group">
-                <label>Type:</label>
-                <select id="typeFilter">
-                  <option value="">Tous</option>
-                  <option value="image">Images</option>
-                  <option value="document">Documents</option>
-                  <option value="video">Vidéos</option>
-                  <option value="audio">Audio</option>
-                </select>
-              </div>
-            </div>
-
-            <div class="files-grid" id="filesGrid">
-              <div class="loading-state">
-                <i class="fas fa-spinner fa-spin"></i>
-                <p>Chargement des fichiers...</p>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- API Section -->
-        <section id="apiSection" class="content-section">
-          <div class="api-container">
-            <div class="api-header">
-              <h2>Documentation API</h2>
-              <div class="api-status">
-                <span class="status-indicator active"></span>
-                <span>Service actif</span>
-              </div>
-            </div>
-
-            <div class="api-endpoints" id="apiEndpoints">
-              <!-- ✅ DOCUMENTATION API STATIQUE AMÉLIORÉE -->
-              <div class="endpoint-group">
-                <h3><i class="fas fa-comments"></i> Conversations</h3>
-                <div class="endpoint">
-                  <span class="method get">GET</span>
-                  <span class="url">/conversations</span>
-                  <span class="description"
-                    >Récupérer toutes les conversations de l'utilisateur</span
-                  >
-                </div>
-                <div class="endpoint">
-                  <span class="method get">GET</span>
-                  <span class="url">/conversations/:id</span>
-                  <span class="description"
-                    >Récupérer une conversation spécifique</span
-                  >
-                </div>
-                <div class="endpoint">
-                  <span class="method post">POST</span>
-                  <span class="url">/conversations</span>
-                  <span class="description"
-                    >Créer une nouvelle conversation</span
-                  >
-                </div>
-              </div>
-
-              <div class="endpoint-group">
-                <h3><i class="fas fa-envelope"></i> Messages</h3>
-                <div class="endpoint">
-                  <span class="method get">GET</span>
-                  <span class="url">/messages</span>
-                  <span class="description"
-                    >Récupérer les messages d'une conversation</span
-                  >
-                </div>
-                <div class="endpoint">
-                  <span class="method post">POST</span>
-                  <span class="url">/messages</span>
-                  <span class="description">Envoyer un nouveau message</span>
-                </div>
-              </div>
-
-              <div class="endpoint-group">
-                <h3><i class="fas fa-users"></i> Utilisateurs</h3>
-                <div class="endpoint">
-                  <span class="method get">GET</span>
-                  <span class="url">/api/users/all</span>
-                  <span class="description">Récupérer tous les contacts</span>
-                </div>
-              </div>
-
-              <div class="endpoint-group">
-                <h3><i class="fas fa-folder"></i> Fichiers</h3>
-                <div class="endpoint">
-                  <span class="method get">GET</span>
-                  <span class="url">/files</span>
-                  <span class="description">Lister les fichiers</span>
-                </div>
-                <div class="endpoint">
-                  <span class="method post">POST</span>
-                  <span class="url">/files/upload</span>
-                  <span class="description">Téléverser un fichier</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <!-- Health Section -->
-        <section id="healthSection" class="content-section">
-          <div class="health-container">
-            <div class="health-header">
-              <h2>État du Service</h2>
-              <button class="btn btn-secondary" id="refreshHealthBtn">
-                <i class="fas fa-sync-alt"></i>
-                Actualiser
+                📤 Envoyer Message
+              </button>
+              <button onclick="generateTestIds()" class="btn-secondary">
+                🔧 Générer IDs Test
               </button>
             </div>
-
-            <div class="health-cards" id="healthCards">
-              <!-- Chargé dynamiquement par app.js -->
-            </div>
-
-            <div class="system-info" id="systemInfo">
-              <!-- Chargé dynamiquement par app.js -->
-            </div>
-          </div>
-        </section>
-      </main>
-
-      <!-- Upload Modal -->
-      <div class="modal" id="uploadModal">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h3>Téléverser un fichier</h3>
-            <button class="close-btn" id="closeUploadModal">
-              <i class="fas fa-times"></i>
-            </button>
-          </div>
-          <div class="modal-body">
-            <div class="upload-area" id="uploadArea">
-              <i class="fas fa-cloud-upload-alt"></i>
-              <p>
-                Glissez-déposez vos fichiers ici ou
-                <button class="browse-btn">parcourir</button>
-              </p>
-              <input type="file" id="fileInput" multiple accept="*/*" />
-            </div>
-            <div
-              class="upload-progress"
-              id="uploadProgress"
-              style="display: none"
-            >
-              <div class="progress-bar">
-                <div class="progress-fill" id="progressFill"></div>
-              </div>
-              <span class="progress-text" id="progressText">0%</span>
+            <div class="form-help">
+              <small>
+                💡 Pour une nouvelle conversation privée, le receiverId est
+                obligatoire
+              </small>
             </div>
           </div>
         </div>
-      </div>
 
-      <!-- Settings Modal -->
-      <div class="modal" id="settingsModal">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h3>Paramètres</h3>
-            <button class="close-btn" id="closeSettingsModal">
-              <i class="fas fa-times"></i>
+        <!-- Section Conversations -->
+        <div class="section conversation-section">
+          <h2>🗨️ Test Conversations</h2>
+          <div class="button-grid">
+            <button onclick="joinConversation()" class="btn-success">
+              ➕ Rejoindre Conversation
+            </button>
+            <button onclick="leaveConversation()" class="btn-warning">
+              ➖ Quitter Conversation
+            </button>
+            <button onclick="startTyping()" class="btn-secondary">
+              ⌨️ Commencer à taper
+            </button>
+            <button onclick="stopTyping()" class="btn-secondary">
+              ⏹️ Arrêter de taper
             </button>
           </div>
-          <div class="modal-body">
-            <div class="setting-group">
-              <label>Thème:</label>
-              <select id="themeSelect">
-                <option value="light">Clair</option>
-                <option value="dark">Sombre</option>
-                <option value="auto">Automatique</option>
-              </select>
-            </div>
-            <div class="setting-group">
-              <label>Notifications:</label>
-              <label class="switch">
-                <input type="checkbox" id="notificationsToggle" checked />
-                <span class="slider"></span>
-              </label>
-            </div>
-            <div class="setting-group">
-              <label>Son:</label>
-              <label class="switch">
-                <input type="checkbox" id="soundToggle" checked />
-                <span class="slider"></span>
-              </label>
-            </div>
-            <div class="setting-group">
-              <label>Actualisation automatique:</label>
-              <label class="switch">
-                <input type="checkbox" id="autoRefreshToggle" checked />
-                <span class="slider"></span>
-              </label>
-            </div>
-          </div>
         </div>
-      </div>
 
-      <!-- ✅ NOUVELLE SECTION API AMÉLIORÉE -->
-      <section id="apiSection" class="content-section">
-        <div class="api-container">
-          <div class="api-header">
-            <h2>Documentation API</h2>
-            <div class="api-status">
-              <span class="status-indicator active"></span>
-              <span>Service actif</span>
-            </div>
-          </div>
-
-          <div class="api-endpoints" id="apiEndpoints">
-            <!-- ✅ DOCUMENTATION API STATIQUE AMÉLIORÉE -->
-            <div class="endpoint-group">
-              <h3><i class="fas fa-comments"></i> Conversations</h3>
-              <div class="endpoint">
-                <span class="method get">GET</span>
-                <span class="url">/conversations</span>
-                <span class="description"
-                  >Récupérer toutes les conversations de l'utilisateur</span
-                >
-              </div>
-              <div class="endpoint">
-                <span class="method get">GET</span>
-                <span class="url">/conversations/:id</span>
-                <span class="description"
-                  >Récupérer une conversation spécifique</span
-                >
-              </div>
-              <div class="endpoint">
-                <span class="method post">POST</span>
-                <span class="url">/conversations</span>
-                <span class="description">Créer une nouvelle conversation</span>
-              </div>
-            </div>
-
-            <div class="endpoint-group">
-              <h3><i class="fas fa-envelope"></i> Messages</h3>
-              <div class="endpoint">
-                <span class="method get">GET</span>
-                <span class="url">/messages</span>
-                <span class="description"
-                  >Récupérer les messages d'une conversation</span
-                >
-              </div>
-              <div class="endpoint">
-                <span class="method post">POST</span>
-                <span class="url">/messages</span>
-                <span class="description">Envoyer un nouveau message</span>
-              </div>
-            </div>
-
-            <div class="endpoint-group">
-              <h3><i class="fas fa-users"></i> Utilisateurs</h3>
-              <div class="endpoint">
-                <span class="method get">GET</span>
-                <span class="url">/api/users/all</span>
-                <span class="description">Récupérer tous les contacts</span>
-              </div>
-            </div>
-
-            <div class="endpoint-group">
-              <h3><i class="fas fa-folder"></i> Fichiers</h3>
-              <div class="endpoint">
-                <span class="method get">GET</span>
-                <span class="url">/files</span>
-                <span class="description">Lister les fichiers</span>
-              </div>
-              <div class="endpoint">
-                <span class="method post">POST</span>
-                <span class="url">/files/upload</span>
-                <span class="description">Téléverser un fichier</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Modales existantes... -->
-
-      <!-- ✅ NOUVELLE MODALE NOUVELLE CONVERSATION -->
-      <div class="modal" id="newConversationModal">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h3>Nouvelle Conversation</h3>
-            <button class="close-btn" id="closeNewConversationModal">
-              <i class="fas fa-times"></i>
+        <!-- Section Tests Avancés -->
+        <div class="section advanced-section">
+          <h2>🔬 Tests Avancés</h2>
+          <div class="button-grid">
+            <button onclick="testInvalidData()" class="btn-danger">
+              ❌ Test Données Invalides
+            </button>
+            <button onclick="testLongMessage()" class="btn-secondary">
+              📝 Test Message Long
+            </button>
+            <button onclick="testSpecialChars()" class="btn-secondary">
+              🔤 Test Caractères Spéciaux
+            </button>
+            <button onclick="stressTest()" class="btn-warning">
+              ⚡ Test de Charge
             </button>
           </div>
-          <div class="modal-body">
-            <div class="form-group">
-              <label for="conversationName"
-                >Nom de la conversation (optionnel)</label
+        </div>
+
+        <!-- ✅ AJOUTER CETTE SECTION APRÈS LA SECTION TESTS AVANCÉS -->
+        <div class="section messages-display-section">
+          <h2>📨 Messages & Événements Reçus</h2>
+          <div class="messages-container">
+            <!-- Onglets pour filtrer les types de messages -->
+            <div class="message-tabs">
+              <button
+                class="tab-btn active"
+                onclick="switchMessageTab('all')"
+                id="allTab"
               >
-              <input
-                type="text"
-                id="conversationName"
-                placeholder="Ex: Équipe Marketing"
-              />
-            </div>
-
-            <div class="form-group">
-              <label>Sélectionner les participants</label>
-              <div class="participants-search">
-                <input
-                  type="text"
-                  id="participantSearch"
-                  placeholder="Rechercher un contact..."
-                />
-              </div>
-              <div class="participants-list" id="participantsList">
-                <!-- Chargé dynamiquement -->
-              </div>
-            </div>
-
-            <div class="selected-participants" id="selectedParticipants">
-              <!-- Participants sélectionnés -->
-            </div>
-
-            <div class="modal-actions">
-              <button class="btn btn-secondary" id="cancelNewConversation">
-                Annuler
+                📋 Tous
               </button>
               <button
-                class="btn btn-primary"
-                id="createNewConversation"
-                disabled
+                class="tab-btn"
+                onclick="switchMessageTab('messages')"
+                id="messagesTab"
               >
-                <i class="fas fa-plus"></i>
-                Créer la conversation
+                💬 Messages
               </button>
+              <button
+                class="tab-btn"
+                onclick="switchMessageTab('typing')"
+                id="typingTab"
+              >
+                ⌨️ Frappe
+              </button>
+              <button
+                class="tab-btn"
+                onclick="switchMessageTab('users')"
+                id="usersTab"
+              >
+                👥 Utilisateurs
+              </button>
+            </div>
+
+            <!-- Zone d'affichage des messages -->
+            <div class="messages-display" id="messagesDisplay">
+              <div class="empty-state">
+                <i class="fas fa-inbox"></i>
+                <p>Aucun message reçu</p>
+                <small>Les messages et événements apparaîtront ici</small>
+              </div>
+            </div>
+
+            <!-- Contrôles -->
+            <div class="message-controls">
+              <button onclick="clearMessages()" class="btn-clear">
+                🗑️ Vider Messages
+              </button>
+              <button
+                onclick="toggleAutoScroll()"
+                class="btn-secondary"
+                id="autoScrollBtn"
+              >
+                📜 Auto-scroll: ON
+              </button>
+              <div class="message-stats">
+                <span id="messageCount">0 messages</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section Utilisateurs En Ligne -->
+        <div class="section online-users-section">
+          <h2>👥 Utilisateurs En Ligne</h2>
+          <div class="online-users-container">
+            <div class="users-grid" id="onlineUsersGrid">
+              <div class="empty-state">
+                <i class="fas fa-users"></i>
+                <p>Aucun utilisateur en ligne</p>
+                <small
+                  >Authentifiez-vous pour voir les utilisateurs connectés</small
+                >
+              </div>
+            </div>
+            <div class="users-stats">
+              <span id="onlineCount">0 utilisateurs en ligne</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section Indicateurs de Frappe -->
+        <div class="section typing-indicators-section">
+          <h2>⌨️ Indicateurs de Frappe</h2>
+          <div class="typing-container">
+            <div class="typing-list" id="typingList">
+              <div class="empty-state">
+                <i class="fas fa-keyboard"></i>
+                <p>Personne n'écrit actuellement</p>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <!-- ...existing modals... -->
+      <!-- Logs en temps réel -->
+      <div class="logs-section">
+        <div class="logs-header">
+          <h3>📊 Logs en temps réel</h3>
+          <button onclick="clearLogs()" class="btn-clear">🧹 Vider</button>
+        </div>
+        <div class="logs-container" id="logsContainer"></div>
+      </div>
     </div>
 
-    <!-- Toast Notifications -->
-    <div class="toast-container" id="toastContainer"></div>
-
-    <!-- Scripts -->
-    <script>
-      // ✅ CONFIGURATION ALIGNÉE AVEC LE BACKEND CORRIGÉ
-      window.CHAT_CONFIG = {
-        API_BASE_URL: "http://localhost:8003/",
-        WS_URL: "http://localhost:8003",
-        USER_SERVICE_URL: "http://localhost:8000/api/users",
-        FILE_SERVICE_URL: "http://localhost:8003/files",
-        CONVERSATION_SERVICE_URL: "http://localhost:8003/conversations",
-        MESSAGE_SERVICE_URL: "http://localhost:8003/messages",
-        HEALTH_CHECK_URL: "http://localhost:8003/health",
-        VERSION: "1.0.0",
-        DEBUG: true,
-        ENABLE_REAL_TIME: true,
-        ENABLE_NOTIFICATIONS: true,
-        ENABLE_FILE_UPLOAD: true,
-        MAX_FILE_SIZE: 10485760, // 10MB
-        ALLOWED_FILE_TYPES: [
-          "image/jpeg",
-          "image/png",
-          "image/gif",
-          "image/webp",
-          "application/pdf",
-          "text/plain",
-          "application/msword",
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ],
-      };
-    </script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

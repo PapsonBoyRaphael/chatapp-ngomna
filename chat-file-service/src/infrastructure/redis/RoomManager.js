@@ -196,77 +196,146 @@ class RoomManager {
     }
   }
 
+  // ✅ AJOUTER LA MÉTHODE MANQUANTE removeUserFromAllRooms
+  async removeUserFromAllRooms(userId) {
+    try {
+      const userIdString = String(userId);
+
+      if (
+        !userIdString ||
+        userIdString === "undefined" ||
+        userIdString === "null"
+      ) {
+        console.warn("⚠️ UserId invalide pour removeUserFromAllRooms:", userId);
+        return false;
+      }
+
+      // ✅ RÉCUPÉRER TOUTES LES ROOMS DE L'UTILISATEUR
+      const userRooms = await this.redis.sMembers(
+        `${this.userRoomsPrefix}:${userIdString}`
+      );
+
+      if (!userRooms || userRooms.length === 0) {
+        console.log(`👤 Utilisateur ${userIdString} n'était dans aucune room`);
+        return true;
+      }
+
+      console.log(
+        `🏠 Suppression utilisateur ${userIdString} de ${
+          userRooms.length
+        } room(s): ${userRooms.join(", ")}`
+      );
+
+      // ✅ SUPPRIMER L'UTILISATEUR DE CHAQUE ROOM
+      const removePromises = userRooms.map(async (roomName) => {
+        try {
+          await this.removeUserFromRoom(roomName, userIdString);
+          return { roomName, success: true };
+        } catch (error) {
+          console.warn(
+            `⚠️ Erreur suppression room ${roomName} pour ${userIdString}:`,
+            error.message
+          );
+          return { roomName, success: false, error: error.message };
+        }
+      });
+
+      const results = await Promise.allSettled(removePromises);
+
+      // ✅ ANALYSER LES RÉSULTATS
+      const successful = results.filter(
+        (r) => r.status === "fulfilled" && r.value.success
+      ).length;
+      const failed = results.length - successful;
+
+      if (failed > 0) {
+        console.warn(
+          `⚠️ ${failed} échecs lors de la suppression des rooms pour ${userIdString}`
+        );
+      }
+
+      // ✅ NETTOYER LA LISTE DES ROOMS DE L'UTILISATEUR
+      await this.redis.del(`${this.userRoomsPrefix}:${userIdString}`);
+
+      console.log(
+        `✅ Utilisateur ${userIdString} supprimé de toutes ses rooms (${successful}/${results.length} succès)`
+      );
+      return true;
+    } catch (error) {
+      console.error("❌ Erreur removeUserFromAllRooms:", error);
+      return false;
+    }
+  }
+
+  // ✅ MÉTHODE UTILITAIRE POUR RÉCUPÉRER LES ROOMS D'UN UTILISATEUR
   async getUserRooms(userId) {
     try {
       const userIdString = String(userId);
-      const roomNames = await this.redis.sMembers(
+      const rooms = await this.redis.sMembers(
         `${this.userRoomsPrefix}:${userIdString}`
       );
-      const rooms = [];
-
-      for (const roomName of roomNames) {
-        const roomData = await this.redis.hGetAll(
-          `${this.roomPrefix}:${roomName}`
-        );
-        if (Object.keys(roomData).length > 0) {
-          const usersCount = await this.redis.sCard(
-            `${this.roomUsersPrefix}:${roomName}`
-          );
-          rooms.push({
-            ...roomData,
-            name: roomName,
-            usersCount,
-          });
-        }
-      }
-
-      return rooms;
+      return rooms || [];
     } catch (error) {
       console.error("❌ Erreur getUserRooms:", error);
       return [];
     }
   }
 
-  async isUserInRoom(roomName, userId) {
+  // ✅ MÉTHODE POUR NETTOYER LES ROOMS INACTIVES (AMÉLIORATION)
+  async cleanupInactiveRooms() {
     try {
-      const roomNameString = String(roomName);
-      const userIdString = String(userId);
-      return await this.redis.sIsMember(
-        `${this.roomUsersPrefix}:${roomNameString}`,
-        userIdString
-      );
+      let cleanedCount = 0;
+      const allRoomKeys = await this.redis.keys(`${this.roomPrefix}:*`);
+
+      for (const roomKey of allRoomKeys) {
+        const roomName = roomKey.replace(`${this.roomPrefix}:`, "");
+        const usersCount = await this.redis.sCard(
+          `${this.roomUsersPrefix}:${roomName}`
+        );
+
+        // Si la room est vide, la supprimer
+        if (usersCount === 0) {
+          await this.redis.del(roomKey);
+          await this.redis.del(`${this.roomUsersPrefix}:${roomName}`);
+          cleanedCount++;
+          console.log(`🧹 Room vide supprimée: ${roomName}`);
+        }
+      }
+
+      return cleanedCount;
     } catch (error) {
-      console.error("❌ Erreur isUserInRoom:", error);
-      return false;
+      console.error("❌ Erreur cleanupInactiveRooms:", error);
+      return 0;
     }
   }
 
+  // ✅ MÉTHODE POUR OBTENIR LE NOMBRE TOTAL DE ROOMS (CORRIGÉE)
   async getRoomsCount() {
     try {
-      const keys = await this.redis.keys(`${this.roomPrefix}:*`);
-      return keys.length;
+      const roomKeys = await this.redis.keys(`${this.roomPrefix}:*`);
+      return roomKeys ? roomKeys.length : 0;
     } catch (error) {
       console.error("❌ Erreur getRoomsCount:", error);
       return 0;
     }
   }
 
+  // ✅ MÉTHODE POUR LISTER TOUTES LES ROOMS (CORRIGÉE)
   async getRooms() {
     try {
-      const keys = await this.redis.keys(`${this.roomPrefix}:*`);
+      const roomKeys = await this.redis.keys(`${this.roomPrefix}:*`);
       const rooms = [];
 
-      for (const key of keys) {
-        const roomName = key.replace(`${this.roomPrefix}:`, "");
-        const roomData = await this.redis.hGetAll(key);
+      for (const roomKey of roomKeys) {
+        const roomName = roomKey.replace(`${this.roomPrefix}:`, "");
         const usersCount = await this.redis.sCard(
           `${this.roomUsersPrefix}:${roomName}`
         );
 
         rooms.push({
-          ...roomData,
           name: roomName,
-          usersCount,
+          usersCount: usersCount,
+          key: roomKey,
         });
       }
 
@@ -274,47 +343,6 @@ class RoomManager {
     } catch (error) {
       console.error("❌ Erreur getRooms:", error);
       return [];
-    }
-  }
-
-  async cleanupInactiveRooms() {
-    try {
-      const keys = await this.redis.keys(`${this.roomPrefix}:*`);
-      let cleanedCount = 0;
-
-      for (const key of keys) {
-        const roomName = key.replace(`${this.roomPrefix}:`, "");
-        const usersCount = await this.redis.sCard(
-          `${this.roomUsersPrefix}:${roomName}`
-        );
-
-        if (usersCount === 0) {
-          // Room vide, supprimer
-          await this.redis.del(key);
-          cleanedCount++;
-        } else {
-          // Vérifier l'activité
-          const roomData = await this.redis.hGetAll(key);
-          if (roomData.lastActivity) {
-            const lastActivity = new Date(roomData.lastActivity);
-            const now = new Date();
-            const diffHours = (now - lastActivity) / (1000 * 60 * 60);
-
-            if (diffHours > 2) {
-              // Pas d'activité depuis 2h, supprimer
-              await this.redis.del(key);
-              await this.redis.del(`${this.roomUsersPrefix}:${roomName}`);
-              cleanedCount++;
-            }
-          }
-        }
-      }
-
-      console.log(`🧹 ${cleanedCount} rooms inactives nettoyées`);
-      return cleanedCount;
-    } catch (error) {
-      console.error("❌ Erreur cleanupInactiveRooms:", error);
-      return 0;
     }
   }
 

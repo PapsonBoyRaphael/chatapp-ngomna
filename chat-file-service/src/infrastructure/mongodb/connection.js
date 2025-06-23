@@ -12,7 +12,7 @@ const connectDB = async () => {
     };
 
     await mongoose.connect(
-      process.env.MONGODB_URI || "mongodb://localhost:27017/chatapp_ngomna",
+      process.env.MONGODB_URI || "mongodb://localhost:27017/chat_file_service",
       options
     );
 

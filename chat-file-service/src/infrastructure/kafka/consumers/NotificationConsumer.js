@@ -11,8 +11,14 @@ class NotificationConsumer {
     this.isConnected = false;
     this.topicName = "chat.notifications";
     this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 5;
-    this.reconnectDelay = 5000;
+    this.maxReconnectAttempts = 3; // ✅ RÉDUIRE
+    this.reconnectDelay = 10000; // ✅ AUGMENTER
+
+    // ✅ NOUVEAUX PARAMÈTRES ANTI-REBALANCE
+    this.heartbeatInterval = null;
+    this.isRebalancing = false;
+    this.lastHeartbeat = Date.now();
+    this.maxProcessingTime = 25000; // ✅ LIMITE TRAITEMENT MESSAGE
 
     if (this.isEnabled) {
       this.setupEventListeners();
@@ -24,18 +30,19 @@ class NotificationConsumer {
     }
   }
 
-  // ✅ CONFIGURATION DES LISTENERS D'ÉVÉNEMENTS CORRIGÉE
   setupEventListeners() {
     if (!this.consumer) return;
 
     this.consumer.on("consumer.connect", () => {
       this.isConnected = true;
       this.reconnectAttempts = 0;
+      this.isRebalancing = false;
       console.log("✅ NotificationConsumer connecté à Kafka");
     });
 
     this.consumer.on("consumer.disconnect", () => {
       this.isConnected = false;
+      this.isRebalancing = false;
       console.log("🔌 NotificationConsumer déconnecté de Kafka");
 
       if (this.isRunning) {
@@ -43,28 +50,35 @@ class NotificationConsumer {
       }
     });
 
-    this.consumer.on("consumer.crash", (payload) => {
-      console.error("❌ NotificationConsumer crash:", payload.error.message);
-      this.isConnected = false;
-
-      if (this.isRunning) {
-        this.scheduleReconnect();
-      }
-    });
-
+    // ✅ GESTION SPÉCIFIQUE DU REBALANCING
     this.consumer.on("consumer.group_join", (payload) => {
-      // ✅ CORRECTION: Récupérer le groupId de plusieurs sources
-      const groupId =
-        payload.groupId ||
-        this.consumer._groupId ||
-        this.consumer.groupId ||
-        (this.consumer.options && this.consumer.options.groupId) ||
-        "unknown";
+      this.isRebalancing = false;
+      const groupId = payload.groupId || this.consumer._groupId || "unknown";
       console.log("👥 NotificationConsumer rejoint groupe:", groupId);
     });
 
+    // ✅ DÉTECTER LE DÉBUT DU REBALANCING
+    this.consumer.on("consumer.rebalancing", () => {
+      this.isRebalancing = true;
+      console.log("⚖️ Rebalancing en cours...");
+    });
+
+    this.consumer.on("consumer.crash", (payload) => {
+      console.error("❌ NotificationConsumer crash:", payload.error.message);
+      this.isConnected = false;
+      this.isRebalancing = false;
+
+      // ✅ ATTENDRE AVANT DE RECONNECTER EN CAS DE CRASH
+      setTimeout(() => {
+        if (this.isRunning) {
+          this.scheduleReconnect();
+        }
+      }, 5000);
+    });
+
+    // ✅ HEARTBEAT INTELLIGENT
     this.consumer.on("consumer.heartbeat", () => {
-      // ✅ MASQUER LES HEARTBEATS SAUF EN DEBUG
+      this.lastHeartbeat = Date.now();
       if (process.env.DEBUG_KAFKA_HEARTBEAT === "true") {
         console.log("💓 NotificationConsumer heartbeat");
       }
@@ -75,15 +89,19 @@ class NotificationConsumer {
     });
   }
 
-  // ✅ PLANIFIER UNE RECONNEXION
+  // ✅ RECONNEXION AVEC BACKOFF EXPONENTIEL
   scheduleReconnect() {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.error("❌ Nombre maximum de tentatives de reconnexion atteint");
+      this.isRunning = false;
       return;
     }
 
     this.reconnectAttempts++;
-    const delay = this.reconnectDelay * this.reconnectAttempts;
+    const delay = Math.min(
+      this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+      60000
+    ); // ✅ BACKOFF EXPONENTIEL PLAFONNÉ
 
     console.log(
       `🔄 Reconnexion consumer dans ${delay}ms (tentative ${this.reconnectAttempts}/${this.maxReconnectAttempts})`
@@ -113,27 +131,39 @@ class NotificationConsumer {
     try {
       console.log("🚀 Démarrage NotificationConsumer...");
 
-      // ✅ CONNEXION AVEC RETRY ET TIMEOUT
+      // ✅ CONNEXION AVEC TIMEOUT PLUS LONG
       if (!this.isConnected) {
         const connectPromise = this.consumer.connect();
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Connection timeout")), 15000)
+        const timeoutPromise = new Promise(
+          (_, reject) =>
+            setTimeout(() => reject(new Error("Connection timeout")), 30000) // ✅ 30s au lieu de 15s
         );
 
         await Promise.race([connectPromise, timeoutPromise]);
       }
 
-      // ✅ SUBSCRIPTION AU TOPIC AVEC VÉRIFICATION
+      // ✅ ATTENDRE LA FIN D'UN ÉVENTUEL REBALANCING
+      let rebalanceWait = 0;
+      while (this.isRebalancing && rebalanceWait < 30000) {
+        console.log("⚖️ Attente fin rebalancing...");
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        rebalanceWait += 1000;
+      }
+
+      // ✅ SUBSCRIPTION AU TOPIC
       await this.consumer.subscribe({
         topic: this.topicName,
         fromBeginning: false,
       });
 
-      // ✅ DÉMARRER LE CONSUMER AVEC CONFIGURATION OPTIMISÉE
+      console.log(`📨 Abonné au topic: ${this.topicName}`);
+
+      // ✅ DÉMARRER AVEC CONFIGURATION ANTI-REBALANCE
       await this.consumer.run({
         autoCommit: true,
-        autoCommitInterval: 5000,
-        autoCommitThreshold: 100,
+        autoCommitInterval: 10000, // ✅ AUGMENTER
+        autoCommitThreshold: 50, // ✅ RÉDUIRE
+        partitionsConsumedConcurrently: 1, // ✅ LIMITER CONCURRENCE
         eachMessage: async ({
           topic,
           partition,
@@ -141,9 +171,15 @@ class NotificationConsumer {
           heartbeat,
           pause,
         }) => {
+          const processingStart = Date.now();
+
           try {
-            // ✅ HEARTBEAT IMMÉDIAT
-            await heartbeat();
+            // ✅ HEARTBEAT IMMÉDIAT SI PROCHE DE LA LIMITE
+            const timeSinceLastHeartbeat = Date.now() - this.lastHeartbeat;
+            if (timeSinceLastHeartbeat > 10000) {
+              // 10s
+              await heartbeat();
+            }
 
             const messageValue = message.value?.toString();
             if (!messageValue) {
@@ -153,8 +189,8 @@ class NotificationConsumer {
 
             const parsedMessage = JSON.parse(messageValue);
 
-            // ✅ TRAITEMENT DU MESSAGE
-            await this.processMessage(parsedMessage, {
+            // ✅ TRAITEMENT AVEC TIMEOUT
+            const processingPromise = this.processMessage(parsedMessage, {
               topic,
               partition,
               offset: message.offset,
@@ -162,13 +198,38 @@ class NotificationConsumer {
               headers: message.headers,
             });
 
+            const timeoutPromise = new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error("Message processing timeout")),
+                this.maxProcessingTime
+              )
+            );
+
+            await Promise.race([processingPromise, timeoutPromise]);
+
             // ✅ HEARTBEAT APRÈS TRAITEMENT
-            await heartbeat();
+            const processingTime = Date.now() - processingStart;
+            if (processingTime > 5000) {
+              // Si traitement > 5s
+              await heartbeat();
+            }
           } catch (error) {
             console.error(
               "❌ Erreur traitement message NotificationConsumer:",
-              error
+              error.message
             );
+
+            // ✅ GESTION SPÉCIFIQUE DES ERREURS DE REBALANCING
+            if (
+              error.message.includes("rebalancing") ||
+              error.message.includes("rejoin")
+            ) {
+              console.log("⚖️ Rebalancing détecté, pause temporaire");
+              this.isRebalancing = true;
+
+              // ✅ NE PAS PAUSER PENDANT UN REBALANCING
+              return;
+            }
 
             // ✅ GESTION DES ERREURS RÉSEAU
             if (
@@ -184,7 +245,7 @@ class NotificationConsumer {
               setTimeout(() => {
                 console.log("▶️ Reprise du consumer");
                 this.consumer.resume([{ topic, partitions: [partition] }]);
-              }, 10000);
+              }, 15000); // ✅ AUGMENTER LE DÉLAI
             }
           }
         },
@@ -199,12 +260,16 @@ class NotificationConsumer {
       this.isRunning = false;
       this.isConnected = false;
 
-      this.scheduleReconnect();
+      // ✅ DÉLAI AVANT RETRY EN CAS D'ERREUR DE DÉMARRAGE
+      setTimeout(() => {
+        this.scheduleReconnect();
+      }, 5000);
+
       return false;
     }
   }
 
-  // ✅ TRAITEMENT DES MESSAGES AMÉLIORÉ
+  // ✅ TRAITEMENT OPTIMISÉ DES MESSAGES
   async processMessage(message, metadata) {
     try {
       const { eventType, ...data } = message;
@@ -217,7 +282,7 @@ class NotificationConsumer {
         });
       }
 
-      // ✅ TRAITEMENT SELON LE TYPE D'ÉVÉNEMENT
+      // ✅ TRAITEMENT RAPIDE SELON LE TYPE
       switch (eventType) {
         case "USER_CONNECTED":
           await this.handleUserConnected(data);
@@ -235,22 +300,24 @@ class NotificationConsumer {
           await this.handleFileUploaded(data);
           break;
         case "HEALTH_CHECK":
-          // Ignorer les health checks
+          // ✅ IGNORER SILENCIEUSEMENT LES HEALTH CHECKS
           break;
         default:
-          console.log(`📨 Événement non géré: ${eventType}`);
+          if (process.env.NODE_ENV === "development") {
+            console.log(`📨 Événement non géré: ${eventType}`);
+          }
       }
     } catch (error) {
       console.error("❌ Erreur processMessage:", error);
-      throw error; // Re-throw pour gestion niveau supérieur
+      throw error;
     }
   }
 
-  // ✅ HANDLERS POUR CHAQUE TYPE D'ÉVÉNEMENT
+  // ✅ HANDLERS OPTIMISÉS (traitement rapide)
   async handleUserConnected(data) {
     try {
       console.log(`👤 Utilisateur connecté: ${data.matricule || data.userId}`);
-      // Logique spécifique pour connexion utilisateur
+      // ✅ Traitement minimal et rapide
     } catch (error) {
       console.error("❌ Erreur handleUserConnected:", error);
     }
@@ -261,7 +328,7 @@ class NotificationConsumer {
       console.log(
         `👋 Utilisateur déconnecté: ${data.matricule || data.userId}`
       );
-      // Logique spécifique pour déconnexion utilisateur
+      // ✅ Traitement minimal et rapide
     } catch (error) {
       console.error("❌ Erreur handleUserDisconnected:", error);
     }
@@ -272,7 +339,7 @@ class NotificationConsumer {
       console.log(
         `💬 Message envoyé: ${data.senderId} → ${data.conversationId}`
       );
-      // Logique spécifique pour message envoyé
+      // ✅ Traitement minimal et rapide
     } catch (error) {
       console.error("❌ Erreur handleMessageSent:", error);
     }
@@ -281,7 +348,7 @@ class NotificationConsumer {
   async handleConversationCreated(data) {
     try {
       console.log(`🆕 Conversation créée: ${data.conversationId}`);
-      // Logique spécifique pour nouvelle conversation
+      // ✅ Traitement minimal et rapide
     } catch (error) {
       console.error("❌ Erreur handleConversationCreated:", error);
     }
@@ -290,37 +357,45 @@ class NotificationConsumer {
   async handleFileUploaded(data) {
     try {
       console.log(`📁 Fichier uploadé: ${data.fileName}`);
-      // Logique spécifique pour upload fichier
+      // ✅ Traitement minimal et rapide
     } catch (error) {
       console.error("❌ Erreur handleFileUploaded:", error);
     }
   }
 
-  // ✅ ARRÊT PROPRE
+  // ✅ ARRÊT PROPRE AMÉLIORÉ
   async stop() {
     if (!this.isEnabled || !this.isRunning) {
       return;
     }
 
     try {
+      console.log("🛑 Arrêt NotificationConsumer...");
       this.isRunning = false;
-      await this.consumer.stop();
-      await this.consumer.disconnect();
+
+      // ✅ ARRÊTER LE CONSUMER PROPREMENT
+      if (this.consumer) {
+        await this.consumer.stop();
+        await this.consumer.disconnect();
+      }
+
       this.isConnected = false;
+      this.isRebalancing = false;
       console.log("✅ NotificationConsumer arrêté proprement");
     } catch (error) {
       console.error("❌ Erreur arrêt NotificationConsumer:", error);
     }
   }
 
-  // ✅ HEALTH CHECK
   getStatus() {
     return {
       isEnabled: this.isEnabled,
       isRunning: this.isRunning,
       isConnected: this.isConnected,
+      isRebalancing: this.isRebalancing,
       reconnectAttempts: this.reconnectAttempts,
       topic: this.topicName,
+      lastHeartbeat: new Date(this.lastHeartbeat).toISOString(),
       timestamp: new Date().toISOString(),
     };
   }

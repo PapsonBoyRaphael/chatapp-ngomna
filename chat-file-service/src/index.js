@@ -94,10 +94,12 @@ const initializeKafka = async () => {
       fileProducer: new FileProducer(producer),
     };
 
-    // ✅ CRÉER LE CONSUMER UNE SEULE FOIS MAIS NE PAS LE DÉMARRER ICI
-    const consumer = createConsumer(kafka, ["chat.notifications"]);
+    // ✅ CRÉER UN SEUL CONSUMER AVEC ID UNIQUE
+    const uniqueTopics = ["chat.notifications"]; // ✅ ÉVITER LES DOUBLONS
+    const consumer = createConsumer(kafka, uniqueTopics);
     kafkaConsumer = new NotificationConsumer(consumer);
 
+    // ✅ ÉVITER LA DUPLICATION
     kafkaConsumers = {
       notificationConsumer: kafkaConsumer,
     };
@@ -224,13 +226,21 @@ const startServer = async () => {
     }
 
     // ===============================
-    // 5. DÉMARRER LE CONSUMER KAFKA UNE SEULE FOIS ICI
+    // 5. DÉMARRER LE CONSUMER UNE SEULE FOIS
     // ===============================
     if (kafkaConsumer && kafkaInitialized) {
       try {
         console.log("🚀 Démarrage NotificationConsumer unique...");
-        await kafkaConsumer.start();
-        console.log("✅ Kafka consumer notifications démarré");
+
+        // ✅ ATTENDRE UN PEU POUR ÉVITER LES CONFLITS DE DÉMARRAGE
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+
+        const started = await kafkaConsumer.start();
+        if (started) {
+          console.log("✅ Kafka consumer notifications démarré");
+        } else {
+          console.warn("⚠️ Échec démarrage consumer Kafka");
+        }
       } catch (error) {
         console.warn("⚠️ Erreur démarrage consumer Kafka:", error.message);
       }
@@ -337,15 +347,31 @@ const startServer = async () => {
     // ✅ IMPORT ET CONFIGURATION DES ROUTES CONVERSATIONS
     const createConversationRoutes = require("./interfaces/http/routes/conversationRoutes");
 
-    app.use("/api/files", createFileRoutes(fileController));
-    app.use("/api/messages", createMessageRoutes(messageController));
+    app.use("/files", createFileRoutes(fileController));
+    app.use("/messages", createMessageRoutes(messageController));
     // ✅ AJOUTER LA ROUTE CONVERSATIONS
     app.use("/conversations", createConversationRoutes(conversationController));
-    app.use(
-      "/api/conversations",
-      createConversationRoutes(conversationController)
+    app.use("/health", createHealthRoutes(healthController));
+
+    // ===============================
+    // 10. CONFIGURATION WEBSOCKET
+    // ===============================
+    console.log("🔌 Configuration du gestionnaire WebSocket...");
+
+    // ✅ CRÉER LE CHATHANDLER AVEC TOUS LES PARAMÈTRES
+    const chatHandler = new ChatHandler(
+      io,
+      sendMessageUseCase,
+      kafkaProducers?.messageProducer || null,
+      redisClient,
+      onlineUserManager, // ✅ AJOUTER LE GESTIONNAIRE D'UTILISATEURS
+      roomManager // ✅ AJOUTER LE GESTIONNAIRE DE SALLES
     );
-    app.use("/api/health", createHealthRoutes(healthController));
+
+    // ✅ CONFIGURER LES GESTIONNAIRES D'ÉVÉNEMENTS SOCKET.IO
+    chatHandler.setupSocketHandlers();
+
+    console.log("✅ ChatHandler configuré avec succès");
 
     // ===============================
     // 10. ROUTES PERSONNALISÉES

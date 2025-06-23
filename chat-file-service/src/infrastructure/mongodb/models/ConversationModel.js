@@ -1,547 +1,559 @@
 const mongoose = require("mongoose");
+const { Schema } = mongoose;
 
-const conversationSchema = new mongoose.Schema(
+// ✅ SCHÉMA AUDIT LOG AVEC ENUM ÉTENDU
+const auditLogEntrySchema = new Schema(
   {
+    action: {
+      type: String,
+      enum: [
+        // ✅ ACTIONS STANDARDS
+        "CREATED",
+        "UPDATED",
+        "DELETED",
+
+        // ✅ ACTIONS PARTICIPANTS
+        "PARTICIPANT_ADDED",
+        "PARTICIPANT_REMOVED",
+        "PARTICIPANT_INVITED",
+        "PARTICIPANT_LEFT",
+
+        // ✅ ACTIONS GESTION
+        "ARCHIVED",
+        "UNARCHIVED",
+        "MUTED",
+        "UNMUTED",
+        "PINNED",
+        "UNPINNED",
+
+        // ✅ ACTIONS AUTOMATIQUES
+        "AUTO_CREATED", // ✅ AJOUTÉ
+        "AUTO_ARCHIVED", // ✅ AJOUTÉ
+        "AUTO_DELETED", // ✅ AJOUTÉ
+        "AUTO_PARTICIPANT_REMOVED", // ✅ AJOUTÉ
+
+        // ✅ ACTIONS MESSAGES
+        "MESSAGE_SENT",
+        "MESSAGE_DELETED",
+        "MESSAGE_EDITED",
+
+        // ✅ ACTIONS STATUT
+        "STATUS_CHANGED",
+        "SETTINGS_UPDATED",
+        "PERMISSIONS_CHANGED",
+      ],
+      required: true,
+    },
+    userId: {
+      type: String,
+      required: true,
+    },
+    timestamp: {
+      type: Date,
+      default: Date.now,
+      required: true,
+    },
+    details: {
+      type: Schema.Types.Mixed,
+      default: {},
+    },
+    metadata: {
+      type: Schema.Types.Mixed,
+      default: {},
+    },
+  },
+  {
+    _id: true,
+    timestamps: false,
+  }
+);
+
+// ✅ SCHÉMA USER METADATA
+const userMetadataSchema = new Schema(
+  {
+    userId: {
+      type: String,
+      required: true,
+    },
+    unreadCount: {
+      type: Number,
+      default: 0,
+    },
+    lastReadAt: {
+      type: Date,
+      default: null,
+    },
+    isMuted: {
+      type: Boolean,
+      default: false,
+    },
+    isPinned: {
+      type: Boolean,
+      default: false,
+    },
+    customName: {
+      type: String,
+      default: null,
+    },
+    notificationSettings: {
+      enabled: { type: Boolean, default: true },
+      sound: { type: Boolean, default: true },
+      vibration: { type: Boolean, default: true },
+    },
+  },
+  {
+    _id: true,
+    timestamps: false,
+  }
+);
+
+// ✅ SCHÉMA LAST MESSAGE
+const lastMessageSchema = new Schema(
+  {
+    _id: {
+      type: Schema.Types.ObjectId,
+      required: true,
+    },
+    content: {
+      type: String,
+      maxlength: 200, // Tronqué pour performance
+      required: true,
+    },
+    type: {
+      type: String,
+      enum: ["TEXT", "IMAGE", "VIDEO", "AUDIO", "FILE", "SYSTEM"],
+      default: "TEXT",
+    },
+    senderId: {
+      type: String,
+      required: true,
+    },
+    senderName: {
+      type: String,
+      default: null,
+    },
+    timestamp: {
+      type: Date,
+      required: true,
+    },
+  },
+  {
+    _id: false,
+    timestamps: false,
+  }
+);
+
+// ✅ SCHÉMA PRINCIPAL CONVERSATION
+const conversationSchema = new Schema(
+  {
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 100,
+    },
+    type: {
+      type: String,
+      enum: ["PRIVATE", "GROUP", "CHANNEL", "SUPPORT"],
+      default: "PRIVATE",
+      required: true,
+    },
+    description: {
+      type: String,
+      maxlength: 500,
+      default: null,
+    },
     participants: [
       {
         type: String,
         required: true,
       },
     ],
-    type: {
+    createdBy: {
       type: String,
-      enum: ["PRIVATE", "GROUP", "CHANNEL"],
-      default: "PRIVATE",
-      index: true,
+      required: true,
     },
-    name: {
-      type: String,
-      maxlength: 100,
-      trim: true,
+    isActive: {
+      type: Boolean,
+      default: true,
     },
-    description: {
-      type: String,
-      maxlength: 500,
-      trim: true,
-    },
-    avatar: {
-      type: String,
-      default: null,
+    isArchived: {
+      type: Boolean,
+      default: false,
     },
 
-    // Message le plus récent
+    // ✅ MÉTADONNÉES UTILISATEUR
+    userMetadata: [userMetadataSchema],
+
+    // ✅ COMPTEURS NON-LUS - OBJET PLAIN AU LIEU DE MAP
+    unreadCounts: {
+      type: Schema.Types.Mixed, // ✅ ACCEPTER TOUT TYPE D'OBJET
+      default: {},
+    },
+
+    // ✅ DERNIER MESSAGE
     lastMessage: {
-      _id: mongoose.Schema.Types.ObjectId,
-      content: String,
-      type: String,
-      senderId: String,
-      timestamp: Date,
+      type: lastMessageSchema,
+      default: null,
     },
     lastMessageAt: {
       type: Date,
-      default: Date.now,
+      default: null,
     },
 
-    // Compteurs de messages non lus par utilisateur
-    unreadCounts: {
-      type: Map,
-      of: Number,
-      default: new Map(),
-    },
-
-    // Paramètres de conversation
+    // ✅ PARAMÈTRES
     settings: {
-      notifications: {
-        enabled: {
-          type: Boolean,
-          default: true,
-        },
-        sound: {
-          type: Boolean,
-          default: true,
-        },
-        vibration: {
-          type: Boolean,
-          default: true,
-        },
-      },
-      privacy: {
-        readReceipts: {
-          type: Boolean,
-          default: true,
-        },
-        lastSeen: {
-          type: Boolean,
-          default: true,
-        },
-      },
-      group: {
-        allowMembersToAddOthers: {
-          type: Boolean,
-          default: true,
-        },
-        allowMembersToEditInfo: {
-          type: Boolean,
-          default: false,
-        },
-        admins: [String],
-      },
-      retention: {
-        autoDeleteAfterDays: {
-          type: Number,
-          default: null,
-        },
-        backupEnabled: {
-          type: Boolean,
-          default: true,
-        },
-      },
+      allowInvites: { type: Boolean, default: true },
+      isPublic: { type: Boolean, default: false },
+      maxParticipants: { type: Number, default: 200 },
+      messageRetention: { type: Number, default: 0 }, // 0 = illimité
+      autoDeleteAfter: { type: Number, default: 0 }, // 0 = jamais
     },
 
-    // Métadonnées enrichies
+    // ✅ MÉTADONNÉES ET AUDIT - AVEC ENUM CORRIGÉ
     metadata: {
-      // Métadonnées Kafka
-      kafkaMetadata: {
-        topic: {
-          type: String,
-          default: "chat.conversations",
-        },
-        lastEventOffset: Number,
-        lastEventTimestamp: Date,
-        events: [
-          {
-            type: String,
-            timestamp: Date,
-            success: Boolean,
-            error: String,
-          },
-        ],
-      },
+      autoCreated: { type: Boolean, default: false },
+      createdFrom: { type: String, default: null },
+      version: { type: Number, default: 1 },
+      tags: [{ type: String }],
 
-      // Métadonnées Redis
-      redisMetadata: {
-        cacheKey: String,
-        ttl: {
-          type: Number,
-          default: 1800, // 30 minutes
-        },
-        lastCached: Date,
-        cacheHits: {
-          type: Number,
-          default: 0,
-        },
+      // ✅ AUDIT LOG AVEC ENUM ÉTENDU
+      auditLog: {
+        type: [auditLogEntrySchema],
+        default: [],
       },
 
       // Statistiques
-      statistics: {
-        totalMessages: {
-          type: Number,
-          default: 0,
-        },
-        totalFiles: {
-          type: Number,
-          default: 0,
-        },
-        totalImages: {
-          type: Number,
-          default: 0,
-        },
-        totalVideos: {
-          type: Number,
-          default: 0,
-        },
-        lastActivity: Date,
-        mostActiveUser: String,
-        averageResponseTime: Number,
-        peakConcurrentUsers: {
-          type: Number,
-          default: 0,
-        },
+      stats: {
+        totalMessages: { type: Number, default: 0 },
+        totalFiles: { type: Number, default: 0 },
+        totalParticipants: { type: Number, default: 0 },
+        lastActivity: { type: Date, default: null },
       },
+    },
 
-      // Audit trail
-      auditLog: [
+    // ✅ INTÉGRATIONS EXTERNES
+    integrations: {
+      webhooks: [
         {
-          action: {
-            type: String,
-            enum: [
-              "CREATED",
-              "PARTICIPANT_ADDED",
-              "PARTICIPANT_REMOVED",
-              "SETTINGS_CHANGED",
-              "INFO_UPDATED",
-            ],
-          },
-          userId: String,
-          timestamp: {
-            type: Date,
-            default: Date.now,
-          },
-          details: mongoose.Schema.Types.Mixed,
-          ip: String,
-          userAgent: String,
+          url: String,
+          events: [String],
+          isActive: { type: Boolean, default: true },
+        },
+      ],
+      bots: [
+        {
+          botId: String,
+          permissions: [String],
+          isActive: { type: Boolean, default: true },
         },
       ],
     },
-
-    // Gestion des participants
-    archivedBy: [String], // Utilisateurs ayant archivé la conversation
-    mutedBy: [String], // Utilisateurs ayant mis en sourdine
-    pinnedBy: [String], // Utilisateurs ayant épinglé
-
-    // Dates importantes
-    createdAt: {
-      type: Date,
-      default: Date.now,
-    },
-    updatedAt: {
-      type: Date,
-      default: Date.now,
-    },
   },
   {
+    timestamps: true,
     collection: "conversations",
-    versionKey: false,
+    // ✅ OPTIONS POUR GÉRER LES OBJETS MIXTES
+    minimize: false, // ✅ NE PAS SUPPRIMER LES OBJETS VIDES
+    strict: false, // ✅ PERMETTRE LES CHAMPS NON DÉFINIS DANS LE SCHÉMA
   }
 );
 
-// ===============================
-// INDEXATION
-// ===============================
+// ✅ INDEX COMPOSITES
+conversationSchema.index({ participants: 1, lastMessageAt: -1 });
+conversationSchema.index({ participants: 1, type: 1 });
+conversationSchema.index({ createdBy: 1, createdAt: -1 });
+conversationSchema.index({ "userMetadata.userId": 1 });
+conversationSchema.index({ isActive: 1, isArchived: 1 });
 
-conversationSchema.index({ participants: 1 }); // Recherche par participant
-conversationSchema.index({ type: 1, lastMessageAt: -1 }); // Tri par activité
-conversationSchema.index({ "settings.group.admins": 1 }); // Admins de groupe
-conversationSchema.index({ lastMessageAt: -1 }); // Conversations récentes
-conversationSchema.index({ createdAt: -1 }); // Nouvelles conversations
-
-// Index composé pour recherche avancée
-conversationSchema.index({
-  participants: 1,
-  type: 1,
-  lastMessageAt: -1,
+// ✅ MÉTHODES VIRTUELLES
+conversationSchema.virtual("participantCount").get(function () {
+  return this.participants ? this.participants.length : 0;
 });
 
-// Index de recherche textuelle
-conversationSchema.index({
-  name: "text",
-  description: "text",
+conversationSchema.virtual("isPrivate").get(function () {
+  return this.type === "PRIVATE";
 });
 
-// ===============================
-// MÉTHODES D'INSTANCE
-// ===============================
+conversationSchema.virtual("isGroup").get(function () {
+  return this.type === "GROUP";
+});
 
-// Générer clé de cache
-conversationSchema.methods.generateCacheKey = function () {
-  return `conversation:${this._id}`;
-};
-
-// Ajouter un participant
-conversationSchema.methods.addParticipant = async function (
-  userId,
-  addedBy = null
-) {
+// ✅ MÉTHODES D'INSTANCE
+conversationSchema.methods.addParticipant = function (userId, addedBy = null) {
   if (!this.participants.includes(userId)) {
     this.participants.push(userId);
-    this.unreadCounts.set(userId, 0);
 
-    // Ajouter à l'audit log
-    this.metadata.auditLog.push({
-      action: "PARTICIPANT_ADDED",
-      userId,
-      details: { addedBy },
-      timestamp: new Date(),
+    // Ajouter métadonnées utilisateur
+    this.userMetadata.push({
+      userId: userId,
+      unreadCount: 0,
+      lastReadAt: null,
+      isMuted: false,
+      isPinned: false,
     });
 
-    await this.publishKafkaEvent("PARTICIPANT_ADDED", { userId, addedBy });
-  }
+    // ✅ AUDIT LOG AVEC ACTION VALIDE
+    this.metadata.auditLog.push({
+      action: "PARTICIPANT_ADDED",
+      userId: addedBy || userId,
+      timestamp: new Date(),
+      details: {
+        participantId: userId,
+        addedBy: addedBy,
+      },
+    });
 
-  return this.save();
+    this.metadata.stats.totalParticipants = this.participants.length;
+    this.updatedAt = new Date();
+  }
 };
 
-// Supprimer un participant
-conversationSchema.methods.removeParticipant = async function (
+conversationSchema.methods.removeParticipant = function (
   userId,
   removedBy = null
 ) {
-  this.participants = this.participants.filter((id) => id !== userId);
-  this.unreadCounts.delete(userId);
-  this.archivedBy = this.archivedBy.filter((id) => id !== userId);
-  this.mutedBy = this.mutedBy.filter((id) => id !== userId);
-  this.pinnedBy = this.pinnedBy.filter((id) => id !== userId);
+  const index = this.participants.indexOf(userId);
+  if (index > -1) {
+    this.participants.splice(index, 1);
 
-  // Ajouter à l'audit log
-  this.metadata.auditLog.push({
-    action: "PARTICIPANT_REMOVED",
-    userId,
-    details: { removedBy },
-    timestamp: new Date(),
-  });
+    // Supprimer métadonnées utilisateur
+    this.userMetadata = this.userMetadata.filter(
+      (meta) => meta.userId !== userId
+    );
 
-  await this.publishKafkaEvent("PARTICIPANT_REMOVED", { userId, removedBy });
-
-  return this.save();
-};
-
-// Mettre à jour le dernier message
-conversationSchema.methods.updateLastMessage = async function (
-  messageId,
-  content,
-  type,
-  senderId
-) {
-  this.lastMessage = {
-    _id: messageId,
-    content: content.substring(0, 100), // Truncate pour performance
-    type,
-    senderId,
-    timestamp: new Date(),
-  };
-  this.lastMessageAt = new Date();
-
-  // Incrémenter les compteurs non lus (sauf pour l'expéditeur)
-  this.participants.forEach((participantId) => {
-    if (participantId !== senderId) {
-      const currentCount = this.unreadCounts.get(participantId) || 0;
-      this.unreadCounts.set(participantId, currentCount + 1);
-    }
-  });
-
-  // Mettre à jour les statistiques
-  this.metadata.statistics.totalMessages++;
-  this.metadata.statistics.lastActivity = new Date();
-
-  if (["IMAGE", "VIDEO", "AUDIO", "FILE"].includes(type)) {
-    this.metadata.statistics.totalFiles++;
-
-    if (type === "IMAGE") this.metadata.statistics.totalImages++;
-    if (type === "VIDEO") this.metadata.statistics.totalVideos++;
-  }
-
-  await this.publishKafkaEvent("LAST_MESSAGE_UPDATED", {
-    messageId,
-    content: content.substring(0, 50),
-    type,
-    senderId,
-  });
-
-  return this.save();
-};
-
-// Marquer comme lu pour un utilisateur
-conversationSchema.methods.markAsRead = async function (userId) {
-  const previousCount = this.unreadCounts.get(userId) || 0;
-  this.unreadCounts.set(userId, 0);
-
-  if (previousCount > 0) {
-    await this.publishKafkaEvent("CONVERSATION_READ", {
-      userId,
-      previousUnreadCount: previousCount,
-    });
-  }
-
-  return this.save();
-};
-
-// Publier événement Kafka
-conversationSchema.methods.publishKafkaEvent = async function (
-  eventType,
-  additionalData = {}
-) {
-  try {
-    const indexModule = require("../../../index"); const kafkaProducers = indexModule.kafkaProducers ? indexModule.kafkaProducers() : null;
-
-    if (!kafkaProducers?.messageProducer) {
-      console.warn("⚠️ Kafka producer non disponible pour", eventType);
-      return false;
-    }
-
-    const eventData = {
-      eventType,
-      conversationId: this._id,
-      participants: this.participants,
-      type: this.type,
-      name: this.name,
-      lastMessage: this.lastMessage,
-      timestamp: new Date().toISOString(),
-      ...additionalData,
-    };
-
-    await kafkaProducers.messageProducer.publishMessage(eventData);
-
-    // Enregistrer l'événement
-    this.metadata.kafkaMetadata.events.push({
-      type: eventType,
+    // ✅ AUDIT LOG AVEC ACTION VALIDE
+    this.metadata.auditLog.push({
+      action: "PARTICIPANT_REMOVED",
+      userId: removedBy || userId,
       timestamp: new Date(),
-      success: true,
+      details: {
+        participantId: userId,
+        removedBy: removedBy,
+      },
     });
+
+    this.metadata.stats.totalParticipants = this.participants.length;
+    this.updatedAt = new Date();
+  }
+};
+
+conversationSchema.methods.updateLastMessage = function (messageData) {
+  this.lastMessage = {
+    _id: messageData._id || messageData.id,
+    content: messageData.content.substring(0, 200),
+    type: messageData.type || "TEXT",
+    senderId: messageData.senderId,
+    senderName: messageData.senderName || null,
+    timestamp: messageData.timestamp || new Date(),
+  };
+
+  this.lastMessageAt = this.lastMessage.timestamp;
+  this.metadata.stats.lastActivity = new Date();
+  this.metadata.stats.totalMessages += 1;
+  this.updatedAt = new Date();
+};
+
+conversationSchema.methods.getUserMetadata = function (userId) {
+  return (
+    this.userMetadata.find((meta) => meta.userId === userId) || {
+      userId: userId,
+      unreadCount: 0,
+      lastReadAt: null,
+      isMuted: false,
+      isPinned: false,
+    }
+  );
+};
+
+conversationSchema.methods.updateUserMetadata = function (userId, updates) {
+  let userMeta = this.userMetadata.find((meta) => meta.userId === userId);
+
+  if (!userMeta) {
+    userMeta = {
+      userId: userId,
+      unreadCount: 0,
+      lastReadAt: null,
+      isMuted: false,
+      isPinned: false,
+    };
+    this.userMetadata.push(userMeta);
+  }
+
+  Object.assign(userMeta, updates);
+  this.updatedAt = new Date();
+};
+
+// ✅ MÉTHODES STATIQUES
+conversationSchema.statics.findByParticipant = function (userId, options = {}) {
+  const {
+    includeArchived = false,
+    type = null,
+    limit = 50,
+    page = 1,
+  } = options;
+
+  const filter = {
+    participants: userId,
+    isActive: true,
+  };
+
+  if (!includeArchived) {
+    filter.isArchived = { $ne: true };
+  }
+
+  if (type) {
+    filter.type = type;
+  }
+
+  const skip = (page - 1) * limit;
+
+  return this.find(filter)
+    .sort({ lastMessageAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+};
+
+conversationSchema.statics.findPrivateConversation = function (
+  participant1,
+  participant2
+) {
+  return this.findOne({
+    type: "PRIVATE",
+    participants: {
+      $all: [participant1, participant2],
+      $size: 2,
+    },
+    isActive: true,
+  });
+};
+
+// ✅ HOOKS PRE/POST
+conversationSchema.pre("save", function (next) {
+  try {
+    // ✅ INITIALISER LES COMPTEURS NON-LUS SI NÉCESSAIRE
+    if (typeof this.initializeUnreadCounts === "function") {
+      this.initializeUnreadCounts();
+    } else {
+      // ✅ Fallback manuel si la méthode n'existe pas
+      if (!this.unreadCounts) {
+        this.unreadCounts = {};
+      }
+      if (this.participants && Array.isArray(this.participants)) {
+        this.participants.forEach((participantId) => {
+          if (!(participantId in this.unreadCounts)) {
+            this.unreadCounts[participantId] = 0;
+          }
+        });
+        this.markModified("unreadCounts");
+      }
+    }
+
+    // ✅ VALIDER ET NETTOYER LES COMPTEURS - UTILISER 'this' AU LIEU DE 'doc'
+    if (typeof this.validateAndCleanUnreadCounts === "function") {
+      this.validateAndCleanUnreadCounts();
+    } else {
+      // ✅ Fallback manuel pour la validation
+      if (!this.unreadCounts || typeof this.unreadCounts !== "object") {
+        this.unreadCounts = {};
+      }
+
+      // Nettoyer les valeurs invalides
+      for (const [userId, count] of Object.entries(this.unreadCounts)) {
+        if (typeof count !== "number" || count < 0 || isNaN(count)) {
+          this.unreadCounts[userId] = 0;
+        }
+      }
+
+      this.markModified("unreadCounts");
+    }
+
+    // ✅ METTRE À JOUR LES STATISTIQUES
+    if (this.isNew) {
+      if (!this.metadata) {
+        this.metadata = { stats: {} };
+      }
+      if (!this.metadata.stats) {
+        this.metadata.stats = {};
+      }
+      this.metadata.stats.totalParticipants = this.participants?.length || 0;
+      this.metadata.stats.lastActivity = new Date();
+    }
+
+    // ✅ VALIDER LE NOMBRE DE PARTICIPANTS SELON LE TYPE
+    if (this.type === "PRIVATE" && this.participants.length > 2) {
+      return next(
+        new Error(
+          "Une conversation privée ne peut avoir que 2 participants maximum"
+        )
+      );
+    }
+
+    if (this.participants.length > (this.settings?.maxParticipants || 200)) {
+      return next(new Error(`Nombre maximum de participants dépassé`));
+    }
+
+    // ✅ VALIDATION DES CHAMPS REQUIS
+    if (!this.name || this.name.trim() === "") {
+      return next(new Error("Le nom de la conversation est requis"));
+    }
+
+    if (!this.participants || this.participants.length === 0) {
+      return next(new Error("Au moins un participant est requis"));
+    }
+
+    if (!this.createdBy) {
+      return next(new Error("Le créateur de la conversation est requis"));
+    }
 
     console.log(
-      `📤 Événement Kafka publié: ${eventType} pour conversation ${this._id}`
+      `📝 Validation pre-save réussie pour conversation: ${this._id}`
     );
-    return true;
+    next();
   } catch (error) {
-    console.error(`❌ Erreur publication Kafka ${eventType}:`, error.message);
-
-    this.metadata.kafkaMetadata.events.push({
-      type: eventType,
-      timestamp: new Date(),
-      success: false,
+    console.error(`❌ Erreur pre-save conversation ${this._id}:`, {
       error: error.message,
+      stack: error.stack,
     });
-
-    return false;
+    next(error);
   }
-};
-
-// Invalider cache Redis
-conversationSchema.methods.invalidateCache = async function () {
-  try {
-    const redisClient = require("../../../index").redisClient;
-
-    if (!redisClient) return false;
-
-    const cachePatterns = [
-      this.generateCacheKey(),
-      ...this.participants.map((userId) => `conversations:${userId}`),
-      `messages:${this._id}:*`,
-    ];
-
-    for (const pattern of cachePatterns) {
-      if (pattern.includes("*")) {
-        const keys = await redisClient.keys(pattern);
-        if (keys.length > 0) {
-          await redisClient.del(keys);
-        }
-      } else {
-        await redisClient.del(pattern);
-      }
-    }
-
-    console.log(`🗑️ Cache invalidé pour conversation ${this._id}`);
-    return true;
-  } catch (error) {
-    console.warn("⚠️ Erreur invalidation cache:", error.message);
-    return false;
-  }
-};
-
-// ===============================
-// MÉTHODES STATIQUES
-// ===============================
-
-// Recherche avec cache
-conversationSchema.statics.findWithCache = async function (
-  query,
-  options = {}
-) {
-  const redisClient = require("../../../index").redisClient;
-  const cacheKey = `conv_query:${JSON.stringify(query)}`;
-
-  if (redisClient) {
-    try {
-      const cached = await redisClient.get(cacheKey);
-      if (cached) {
-        return JSON.parse(cached);
-      }
-    } catch (error) {
-      console.warn("⚠️ Erreur lecture cache conversation:", error.message);
-    }
-  }
-
-  const results = await this.find(query, null, options).lean();
-
-  if (redisClient && results.length > 0) {
-    try {
-      await redisClient.setex(cacheKey, 900, JSON.stringify(results)); // 15 minutes
-    } catch (error) {
-      console.warn("⚠️ Erreur mise en cache conversation:", error.message);
-    }
-  }
-
-  return results;
-};
-
-// Créer une conversation privée
-conversationSchema.statics.createPrivateConversation = async function (
-  userId1,
-  userId2
-) {
-  const conversation = new this({
-    participants: [userId1, userId2],
-    type: "PRIVATE",
-    unreadCounts: new Map([
-      [userId1, 0],
-      [userId2, 0],
-    ]),
-  });
-
-  return conversation.save();
-};
-
-// ===============================
-// MIDDLEWARE (HOOKS)
-// ===============================
-
-// Avant sauvegarde
-conversationSchema.pre("save", function (next) {
-  if (this.isNew) {
-    this.metadata.redisMetadata.cacheKey = this.generateCacheKey();
-  }
-
-  this.updatedAt = new Date();
-  next();
 });
 
-// Après sauvegarde
-conversationSchema.post("save", async function (doc, next) {
+conversationSchema.post("save", function (doc) {
   try {
-    if (doc.isNew) {
-      await doc.publishKafkaEvent("CONVERSATION_CREATED");
-    } else {
-      await doc.publishKafkaEvent("CONVERSATION_UPDATED");
-    }
+    // Log de création/modification avec plus de détails
+    const stats =
+      typeof doc.getUnreadCountsStats === "function"
+        ? doc.getUnreadCountsStats()
+        : {
+            totalUsers: 0,
+            usersWithUnread: 0,
+            totalUnreadMessages: 0,
+            averageUnreadPerUser: 0,
+          };
 
-    await doc.invalidateCache();
+    console.log(`📝 Conversation sauvegardée: ${doc._id} (${doc.type})`, {
+      participants: doc.participants?.length || 0,
+      unreadStats: stats,
+      hasMetadata: !!doc.metadata,
+      isNew: !!doc.isNew,
+    });
   } catch (error) {
     console.warn("⚠️ Erreur post-save conversation:", error.message);
   }
-
-  next();
 });
 
-// ===============================
-// MÉTHODES VIRTUELLES
-// ===============================
-
-// Nombre total de messages non lus
-conversationSchema.virtual("totalUnreadCount").get(function () {
-  let total = 0;
-  for (const count of this.unreadCounts.values()) {
-    total += count;
-  }
-  return total;
-});
-
-// Indicateur d'activité récente
-conversationSchema.virtual("isActive").get(function () {
-  if (!this.lastMessageAt) return false;
-  const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  return this.lastMessageAt > oneDayAgo;
-});
-
-// Configuration JSON
-conversationSchema.set("toJSON", {
-  virtuals: true,
-  transform: function (doc, ret) {
-    delete ret.__v;
-    // Convertir Map en objet pour JSON
-    if (ret.unreadCounts instanceof Map) {
-      ret.unreadCounts = Object.fromEntries(ret.unreadCounts);
+// ✅ HOOK POST-INIT CORRIGÉ
+conversationSchema.post("init", function (doc) {
+  try {
+    // Valider et nettoyer les données chargées depuis la DB
+    if (doc && typeof doc.validateAndCleanUnreadCounts === "function") {
+      doc.validateAndCleanUnreadCounts();
     }
-    return ret;
-  },
+  } catch (error) {
+    console.warn("⚠️ Erreur post-init conversation:", error.message);
+  }
 });
 
 const Conversation = mongoose.model("Conversation", conversationSchema);
