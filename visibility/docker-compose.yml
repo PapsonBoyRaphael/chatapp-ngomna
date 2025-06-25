@@ -1,0 +1,30 @@
+version: '3.8'
+services:
+  visibility-service:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+    depends_on:
+      - neo4j
+    volumes:
+      - .:/app
+    networks:
+      - app-network
+  neo4j:
+    image: neo4j:5.23
+    environment:
+      - NEO4J_AUTH=neo4j/secret
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    networks:
+      - app-network
+volumes:
+  neo4j_data:
+networks:
+  app-network:
+    driver: bridge

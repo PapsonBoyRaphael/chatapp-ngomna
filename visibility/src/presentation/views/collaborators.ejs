@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Collaborators</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 py-8">
+  <div class="max-w-4xl mx-auto bg-white p-8 rounded-lg shadow-md">
+    <h1 class="text-2xl font-bold text-center text-green-600 mb-6">Your Collaborators</h1>
+    <form action="/search-agents" method="POST" class="mb-6">
+      <div class="flex space-x-2">
+        <input
+          type="text"
+          name="query"
+          value="<%= searchQuery || '' %>"
+          class="flex-1 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500"
+          placeholder="Search for agents (name or prenom)"
+        />
+        <button
+          type="submit"
+          class="bg-green-500 text-white py-2 px-4 rounded-md hover:bg-green-600"
+        >
+          Search
+        </button>
+      </div>
+    </form>
+    <div class="space-y-4">
+      <% if (collaborators.length === 0) { %>
+        <p class="text-center text-gray-700">No collaborators found.</p>
+      <% } else { %>
+        <% collaborators.forEach(collaborator => { %>
+          <div class="border-b pb-2">
+            <p class="font-bold"><%= collaborator.agent.nom %> <%= collaborator.agent.prenom %></p>
+            <p class="text-gray-500 text-sm"><%= collaborator.agent.rang %> | <%= collaborator.unitName %></p>
+          </div>
+        <% }) %>
+      <% } %>
+    </div>
+    <a
+      href="/visibility"
+      class="mt-6 block w-full bg-green-500 text-white py-2 px-4 rounded-md hover:bg-green-600 text-center"
+    >
+      Change Unit
+    </a>
+  </div>
+</body>
+</html>

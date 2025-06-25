@@ -1,0 +1,31 @@
+version: '3.8'
+services:
+  auth-service:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+    depends_on:
+      - postgres
+    volumes:
+      - .:/app
+    networks:
+      - app-network
+  postgres:
+    image: postgres:14
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: auth_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app-network
+volumes:
+  postgres_data:
+networks:
+  app-network:
+    driver: bridge
