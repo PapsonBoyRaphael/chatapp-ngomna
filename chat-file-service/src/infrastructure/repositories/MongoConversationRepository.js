@@ -1037,6 +1037,32 @@ class MongoConversationRepository {
 
     return fixed;
   }
+
+  async _invalidateConversationCaches(conversationId) {
+    if (!this.redisClient) return;
+
+    const patterns = [
+      `${this.cachePrefix}${conversationId}`,
+      `${this.cachePrefix}conv:${conversationId}:*`,
+      `${this.cachePrefix}stats:${conversationId}`,
+      `messages:${conversationId}:*`,
+      `unread:*:${conversationId}`,
+    ];
+
+    for (const pattern of patterns) {
+      try {
+        const keys = await this.redisClient.keys(pattern);
+        if (keys.length > 0) {
+          await this.redisClient.del(keys);
+        }
+      } catch (error) {
+        console.warn(
+          `⚠️ Erreur invalidation conversation ${pattern}:`,
+          error.message
+        );
+      }
+    }
+  }
 }
 
 module.exports = MongoConversationRepository;

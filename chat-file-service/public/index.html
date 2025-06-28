@@ -32,6 +32,20 @@
               value="559296X"
             />
             <input type="text" id="token" placeholder="Token JWT (optionnel)" />
+            <!-- ✅ Ajout receiverId -->
+            <input
+              type="text"
+              id="receiverIdAuth"
+              placeholder="ID Destinataire (optionnel)"
+              value=""
+            />
+            <!-- ✅ Ajout statut -->
+            <select id="statusAuth">
+              <option value="">-- Statut (optionnel) --</option>
+              <option value="DELIVERED">DELIVERED</option>
+              <option value="SENT">SENT</option>
+              <option value="READ">READ</option>
+            </select>
             <button onclick="authenticate()" class="btn-primary">
               🔑 S'authentifier
             </button>
@@ -144,7 +158,54 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
           </div>
         </div>
 
-        <!-- ✅ AJOUTER CETTE SECTION APRÈS LA SECTION TESTS AVANCÉS -->
+        <!-- ✅ AJOUTER CETTE SECTION APRÈS LA SECTION CONVERSATIONS -->
+        <div class="section message-status-section">
+          <h2>📊 Statuts de Messages</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="messageIdStatus"
+              placeholder="ID du Message (laisser vide pour utiliser le dernier envoyé)"
+              value=""
+            />
+            <div class="button-grid">
+              <button onclick="getLastMessageId()" class="btn-info">
+                🔍 Récupérer Dernier ID
+              </button>
+              <button onclick="markMessageDelivered()" class="btn-success">
+                📬 Marquer Livré
+              </button>
+              <button onclick="markMessageRead()" class="btn-success">
+                📖 Marquer Lu
+              </button>
+              <button onclick="markConversationRead()" class="btn-primary">
+                📚 Marquer Conversation Lue
+              </button>
+              <button onclick="getMessageStatus()" class="btn-secondary">
+                📊 Obtenir Statut
+              </button>
+            </div>
+            <div class="form-help">
+              <small>
+                🔍 Utilisez "Récupérer Dernier ID" pour auto-remplir avec le
+                dernier message envoyé
+              </small>
+              <br />
+              <small>
+                📬 Livré = Le message est arrivé sur l'appareil du destinataire
+              </small>
+              <br />
+              <small> 📖 Lu = Le destinataire a ouvert et lu le message </small>
+              <br />
+              <small>
+                📚 Conversation Lue = Tous les messages non lus de la
+                conversation sont marqués comme lus
+              </small>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section Messages & Événements Reçus -->
         <div class="section messages-display-section">
           <h2>📨 Messages & Événements Reçus</h2>
           <div class="messages-container">

@@ -329,31 +329,83 @@ class MongoMessageRepository {
     const startTime = Date.now();
 
     try {
-      const filter = {
+      console.log(`📝 Mise à jour statut messages:`, {
         conversationId,
         receiverId,
+        status,
+        messageIdsCount: messageIds.length,
+      });
+
+      // ✅ NOUVELLE VALIDATION : receiverId et status sont obligatoires
+      if (!receiverId || !status) {
+        throw new Error("receiverId et status sont requis");
+      }
+
+      const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED"];
+      if (!validStatuses.includes(status)) {
+        throw new Error(
+          `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`
+        );
+      }
+
+      // ✅ CONSTRUIRE LE FILTRE
+      const filter = {
         status: { $ne: status }, // Ne pas mettre à jour si déjà au bon statut
+        receiverId: receiverId,
       };
 
-      // Si des IDs spécifiques sont fournis
-      if (messageIds.length > 0) {
+      // Si conversationId est fourni, on filtre dessus
+      if (conversationId) {
+        filter.conversationId = conversationId;
+      }
+
+      // ✅ POUR DELIVERED ET READ, ON VEUT METTRE À JOUR LES MESSAGES QUI NE SONT PAS DE CET UTILISATEUR
+      if (status === "DELIVERED" || status === "READ") {
+        filter.senderId = { $ne: receiverId }; // Exclure les messages de l'utilisateur lui-même
+      }
+
+      // ✅ SI DES IDS SPÉCIFIQUES SONT FOURNIS
+      if (messageIds && messageIds.length > 0) {
         filter._id = { $in: messageIds };
       }
 
+      // ✅ EFFECTUER LA MISE À JOUR EN MASSE
       const updateResult = await Message.updateMany(filter, {
         $set: {
-          status,
+          status: status,
           updatedAt: new Date(),
+          // ✅ AJOUTER LES MÉTADONNÉES DE LIVRAISON
+          ...(status === "DELIVERED" && {
+            "metadata.deliveryMetadata.deliveredAt": new Date().toISOString(),
+            "metadata.deliveryMetadata.deliveredBy": receiverId,
+          }),
+          ...(status === "READ" && {
+            "metadata.deliveryMetadata.readAt": new Date().toISOString(),
+            "metadata.deliveryMetadata.readBy": receiverId,
+          }),
         },
       });
 
       const processingTime = Date.now() - startTime;
 
-      // 🗑️ INVALIDER LES CACHES LIÉS
+      console.log(`✅ Mise à jour statut terminée:`, {
+        conversationId,
+        status,
+        modifiedCount: updateResult.modifiedCount,
+        matchedCount: updateResult.matchedCount,
+        processingTime: `${processingTime}ms`,
+      });
+
+      // ✅ INVALIDER LES CACHES LIÉS SI DES MESSAGES ONT ÉTÉ MODIFIÉS
       if (this.redisClient && updateResult.modifiedCount > 0) {
         try {
-          await this._invalidateConversationCaches(conversationId);
+          if (conversationId) {
+            await this._invalidateConversationCaches(conversationId);
+          }
           await this._invalidateUserCaches(receiverId);
+          console.log(
+            `🗑️ Caches invalidés pour conversation ${conversationId || "[all]"}`
+          );
         } catch (cacheError) {
           console.warn(
             "⚠️ Erreur invalidation cache statut:",
@@ -362,7 +414,7 @@ class MongoMessageRepository {
         }
       }
 
-      // 🚀 PUBLIER ÉVÉNEMENT KAFKA
+      // ✅ PUBLIER ÉVÉNEMENT KAFKA
       if (this.kafkaProducer && updateResult.modifiedCount > 0) {
         try {
           await this._publishMessageEvent("MESSAGE_STATUS_UPDATED", null, {
@@ -372,14 +424,14 @@ class MongoMessageRepository {
             modifiedCount: updateResult.modifiedCount,
             processingTime,
           });
+          console.log(
+            `📤 Événement Kafka publié: ${updateResult.modifiedCount} messages mis à jour`
+          );
         } catch (kafkaError) {
           console.warn("⚠️ Erreur publication statut:", kafkaError.message);
         }
       }
 
-      console.log(
-        `📝 Statut mis à jour: ${updateResult.modifiedCount} messages (${processingTime}ms)`
-      );
       return updateResult;
     } catch (error) {
       console.error("❌ Erreur mise à jour statut:", error);
@@ -412,7 +464,7 @@ class MongoMessageRepository {
       // 🗑️ INVALIDER LES CACHES
       if (this.redisClient) {
         try {
-          await this._invalidateMessageCache(messageId);
+          await this._invalidateMessageCaches(messageId);
           await this._invalidateConversationCaches(message.conversationId);
         } catch (cacheError) {
           console.warn(
@@ -1030,6 +1082,286 @@ class MongoMessageRepository {
 
     console.log("🔍 API Redis disponible:", methods);
     return methods;
+  }
+
+  /**
+   * Mettre à jour le statut d'un message spécifique
+   */
+  async updateSingleMessageStatus(messageId, receiverId, status) {
+    const startTime = Date.now();
+
+    try {
+      console.log(`📝 Mise à jour statut message unique:`, {
+        messageId,
+        receiverId,
+        status,
+      });
+
+      // ✅ VALIDATION DES PARAMÈTRES
+      if (!messageId || !receiverId || !status) {
+        throw new Error("messageId, receiverId et status sont requis");
+      }
+
+      // ✅ VALIDATION DU STATUT
+      const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED"];
+      if (!validStatuses.includes(status)) {
+        throw new Error(
+          `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`
+        );
+      }
+
+      // ✅ CONSTRUIRE LE FILTRE POUR LE MESSAGE SPÉCIFIQUE
+      const filter = {
+        _id: messageId,
+        status: { $ne: status }, // Ne pas mettre à jour si déjà au bon statut
+      };
+
+      // ✅ POUR LES STATUTS DELIVERED ET READ, VÉRIFIER QUE L'UTILISATEUR EST LE DESTINATAIRE
+      if (status === "DELIVERED" || status === "READ") {
+        // Option 1: Le receiverId doit correspondre à un participant
+        // (on ne vérifie pas forcément que c'est exactement le receiverId du message)
+        // Car pour les conversations de groupe, plusieurs utilisateurs peuvent marquer comme lu
+
+        // Récupérer d'abord le message pour vérifier
+        const existingMessage = await Message.findById(messageId);
+        if (!existingMessage) {
+          throw new Error(`Message ${messageId} introuvable`);
+        }
+
+        console.log(`✅ Message trouvé pour mise à jour statut:`, {
+          messageId: existingMessage._id,
+          senderId: existingMessage.senderId,
+          conversationId: existingMessage.conversationId,
+          currentStatus: existingMessage.status,
+        });
+      }
+
+      // ✅ EFFECTUER LA MISE À JOUR
+      const updateResult = await Message.findOneAndUpdate(
+        filter,
+        {
+          $set: {
+            status: status,
+            updatedAt: new Date(),
+            // ✅ AJOUTER LES MÉTADONNÉES DE LIVRAISON
+            ...(status === "DELIVERED" && {
+              "metadata.deliveryMetadata.deliveredAt": new Date().toISOString(),
+              "metadata.deliveryMetadata.deliveredBy": receiverId,
+            }),
+            ...(status === "READ" && {
+              "metadata.deliveryMetadata.readAt": new Date().toISOString(),
+              "metadata.deliveryMetadata.readBy": receiverId,
+            }),
+          },
+        },
+        {
+          new: true, // Retourner le document mis à jour
+          runValidators: true,
+        }
+      );
+
+      const processingTime = Date.now() - startTime;
+
+      // ✅ VÉRIFIER SI LA MISE À JOUR A RÉUSSI
+      if (!updateResult) {
+        console.log(
+          `ℹ️ Aucune mise à jour nécessaire pour message ${messageId} (déjà ${status})`
+        );
+        return {
+          modifiedCount: 0,
+          matchedCount: 0,
+          message: `Message déjà au statut ${status}`,
+          processingTime,
+        };
+      }
+
+      console.log(`✅ Statut message mis à jour:`, {
+        messageId: updateResult._id,
+        oldStatus: filter.status,
+        newStatus: updateResult.status,
+        updatedAt: updateResult.updatedAt,
+        processingTime: `${processingTime}ms`,
+      });
+
+      // ✅ INVALIDER LES CACHES LIÉS
+      if (this.redisClient) {
+        try {
+          await this._invalidateMessageCaches(messageId);
+          await this._invalidateConversationCaches(updateResult.conversationId);
+          await this._invalidateUserCaches(receiverId);
+          console.log(`🗑️ Caches invalidés pour message ${messageId}`);
+        } catch (cacheError) {
+          console.warn(
+            "⚠️ Erreur invalidation cache statut:",
+            cacheError.message
+          );
+        }
+      }
+
+      // ✅ PUBLIER ÉVÉNEMENT KAFKA
+      if (
+        this.kafkaProducer &&
+        typeof this.kafkaProducer.publishMessage === "function"
+      ) {
+        try {
+          await this._publishMessageEvent(
+            "SINGLE_MESSAGE_STATUS_UPDATED",
+            updateResult,
+            {
+              messageId,
+              receiverId,
+              status,
+              processingTime,
+              previousStatus: existingMessage?.status || "unknown",
+            }
+          );
+          console.log(`📤 Événement Kafka publié pour message ${messageId}`);
+        } catch (kafkaError) {
+          console.warn("⚠️ Erreur publication Kafka:", kafkaError.message);
+        }
+      }
+
+      // ✅ RETOURNER LE RÉSULTAT DANS LE FORMAT ATTENDU
+      return {
+        modifiedCount: 1,
+        matchedCount: 1,
+        message: updateResult,
+        processingTime,
+        status: "success",
+      };
+    } catch (error) {
+      const processingTime = Date.now() - startTime;
+      console.error(`❌ Erreur mise à jour statut message ${messageId}:`, {
+        error: error.message,
+        messageId,
+        receiverId,
+        status,
+        processingTime: `${processingTime}ms`,
+      });
+      throw new Error(
+        `Impossible de mettre à jour le statut: ${error.message}`
+      );
+    }
+  }
+
+  // ✅ AMÉLIORER LA MÉTHODE EXISTANTE updateMessageStatus POUR PLUS DE ROBUSTESSE
+  async updateMessageStatus(
+    conversationId,
+    receiverId,
+    status,
+    messageIds = []
+  ) {
+    const startTime = Date.now();
+
+    try {
+      console.log(`📝 Mise à jour statut messages:`, {
+        conversationId,
+        receiverId,
+        status,
+        messageIdsCount: messageIds.length,
+      });
+
+      // ✅ NOUVELLE VALIDATION : receiverId et status sont obligatoires
+      if (!receiverId || !status) {
+        throw new Error("receiverId et status sont requis");
+      }
+
+      const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED"];
+      if (!validStatuses.includes(status)) {
+        throw new Error(
+          `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`
+        );
+      }
+
+      // ✅ CONSTRUIRE LE FILTRE
+      const filter = {
+        status: { $ne: status }, // Ne pas mettre à jour si déjà au bon statut
+        receiverId: receiverId,
+      };
+
+      // Si conversationId est fourni, on filtre dessus
+      if (conversationId) {
+        filter.conversationId = conversationId;
+      }
+
+      // ✅ POUR DELIVERED ET READ, ON VEUT METTRE À JOUR LES MESSAGES QUI NE SONT PAS DE CET UTILISATEUR
+      if (status === "DELIVERED" || status === "READ") {
+        filter.senderId = { $ne: receiverId }; // Exclure les messages de l'utilisateur lui-même
+      }
+
+      // ✅ SI DES IDS SPÉCIFIQUES SONT FOURNIS
+      if (messageIds && messageIds.length > 0) {
+        filter._id = { $in: messageIds };
+      }
+
+      // ✅ EFFECTUER LA MISE À JOUR EN MASSE
+      const updateResult = await Message.updateMany(filter, {
+        $set: {
+          status: status,
+          updatedAt: new Date(),
+          // ✅ AJOUTER LES MÉTADONNÉES DE LIVRAISON
+          ...(status === "DELIVERED" && {
+            "metadata.deliveryMetadata.deliveredAt": new Date().toISOString(),
+            "metadata.deliveryMetadata.deliveredBy": receiverId,
+          }),
+          ...(status === "READ" && {
+            "metadata.deliveryMetadata.readAt": new Date().toISOString(),
+            "metadata.deliveryMetadata.readBy": receiverId,
+          }),
+        },
+      });
+
+      const processingTime = Date.now() - startTime;
+
+      console.log(`✅ Mise à jour statut terminée:`, {
+        conversationId,
+        status,
+        modifiedCount: updateResult.modifiedCount,
+        matchedCount: updateResult.matchedCount,
+        processingTime: `${processingTime}ms`,
+      });
+
+      // ✅ INVALIDER LES CACHES LIÉS SI DES MESSAGES ONT ÉTÉ MODIFIÉS
+      if (this.redisClient && updateResult.modifiedCount > 0) {
+        try {
+          if (conversationId) {
+            await this._invalidateConversationCaches(conversationId);
+          }
+          await this._invalidateUserCaches(receiverId);
+          console.log(
+            `🗑️ Caches invalidés pour conversation ${conversationId || "[all]"}`
+          );
+        } catch (cacheError) {
+          console.warn(
+            "⚠️ Erreur invalidation cache statut:",
+            cacheError.message
+          );
+        }
+      }
+
+      // ✅ PUBLIER ÉVÉNEMENT KAFKA
+      if (this.kafkaProducer && updateResult.modifiedCount > 0) {
+        try {
+          await this._publishMessageEvent("MESSAGE_STATUS_UPDATED", null, {
+            conversationId,
+            receiverId,
+            status,
+            modifiedCount: updateResult.modifiedCount,
+            processingTime,
+          });
+          console.log(
+            `📤 Événement Kafka publié: ${updateResult.modifiedCount} messages mis à jour`
+          );
+        } catch (kafkaError) {
+          console.warn("⚠️ Erreur publication statut:", kafkaError.message);
+        }
+      }
+
+      return updateResult;
+    } catch (error) {
+      console.error("❌ Erreur mise à jour statut:", error);
+      throw error;
+    }
   }
 }
 

@@ -34,6 +34,8 @@ const GetConversations = require("./application/use-cases/GetConversations");
 const GetFile = require("./application/use-cases/GetFile");
 const UpdateMessageStatus = require("./application/use-cases/UpdateMessageStatus");
 const UploadFile = require("./application/use-cases/UploadFile");
+const GetConversationIds = require("./application/use-cases/GetConversationIds");
+const GetMessageById = require("./application/use-cases/GetMessageById");
 
 // Controllers
 const FileController = require("./application/controllers/FileController");
@@ -295,7 +297,7 @@ const startServer = async () => {
 
     const updateMessageStatusUseCase = new UpdateMessageStatus(
       messageRepository,
-      conversationRepository,
+      redisClient,
       kafkaProducers?.messageProducer || null
     );
 
@@ -311,6 +313,12 @@ const startServer = async () => {
       kafkaProducers?.fileProducer || null,
       redisClient
     );
+
+    const getConversationIdsUseCase = new GetConversationIds(
+      conversationRepository
+    );
+
+    const getMessageByIdUseCase = new GetMessageById(messageRepository);
 
     // ===============================
     // 8. INITIALISATION CONTROLLERS
@@ -362,10 +370,13 @@ const startServer = async () => {
     const chatHandler = new ChatHandler(
       io,
       sendMessageUseCase,
+      updateMessageStatusUseCase,
       kafkaProducers?.messageProducer || null,
       redisClient,
-      onlineUserManager, // ✅ AJOUTER LE GESTIONNAIRE D'UTILISATEURS
-      roomManager // ✅ AJOUTER LE GESTIONNAIRE DE SALLES
+      onlineUserManager,
+      roomManager,
+      getConversationIdsUseCase,
+      getMessageByIdUseCase
     );
 
     // ✅ CONFIGURER LES GESTIONNAIRES D'ÉVÉNEMENTS SOCKET.IO

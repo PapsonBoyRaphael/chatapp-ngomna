@@ -2,21 +2,28 @@
  * Gestionnaire WebSocket pour le chat en temps réel
  * Responsable de la gestion des connexions, messages et événements socket
  */
+const AuthMiddleware = require("../../interfaces/http/middleware/authMiddleware");
 class ChatHandler {
   constructor(
     io,
     sendMessageUseCase = null,
+    updateMessageStatusUseCase = null,
     messageProducer = null,
     redisClient = null,
     onlineUserManager = null,
-    roomManager = null
+    roomManager = null,
+    getConversationIdsUseCase = null,
+    getMessageByIdUseCase = null // <-- Ajouté
   ) {
     this.io = io;
     this.sendMessageUseCase = sendMessageUseCase;
+    this.updateMessageStatusUseCase = updateMessageStatusUseCase;
     this.messageProducer = messageProducer;
     this.redisClient = redisClient;
     this.onlineUserManager = onlineUserManager;
     this.roomManager = roomManager;
+    this.getConversationIdsUseCase = getConversationIdsUseCase;
+    this.getMessageByIdUseCase = getMessageByIdUseCase; // <-- Ajouté
 
     // Collections pour gérer les connexions
     this.connectedUsers = new Map();
@@ -25,6 +32,7 @@ class ChatHandler {
     console.log("🔌 ChatHandler initialisé avec:", {
       hasIO: !!io,
       hasSendMessage: !!sendMessageUseCase,
+      hasUpdateMessageStatus: !!updateMessageStatusUseCase, // ✅ NOUVEAU
       hasMessageProducer: !!messageProducer,
       hasRedis: !!redisClient,
       hasUserManager: !!onlineUserManager,
@@ -78,6 +86,33 @@ class ChatHandler {
 
         socket.on("ping", () => {
           socket.emit("pong");
+        });
+
+        // ✅ NOUVEAUX ÉVÉNEMENTS POUR STATUTS DE MESSAGES
+        socket.on("markMessageDelivered", (data) => {
+          console.log("📬 Marquer message comme livré:", data);
+          this.handleMarkMessageDelivered(socket, data);
+        });
+
+        socket.on("markMessageRead", (data) => {
+          console.log("📖 Marquer message comme lu:", data);
+          this.handleMarkMessageRead(socket, data);
+        });
+
+        socket.on("markConversationRead", (data) => {
+          console.log("📚 Marquer conversation comme lue:", data);
+          this.handleMarkConversationRead(socket, data);
+        });
+
+        socket.on("getMessageStatus", (data) => {
+          console.log("📊 Demande statut message:", data);
+          this.handleGetMessageStatus(socket, data);
+        });
+
+        // ✅ ÉVÉNEMENT POUR ACCUSÉ DE RÉCEPTION AUTOMATIQUE
+        socket.on("messageReceived", (data) => {
+          console.log("✅ Accusé de réception:", data);
+          this.handleMessageReceived(socket, data);
         });
 
         // ✅ ÉVÉNEMENT DE DÉCONNEXION - CORRECTEMENT CONFIGURÉ
@@ -284,56 +319,77 @@ class ChatHandler {
   }
 
   // ✅ MÉTHODE D'AUTHENTIFICATION CORRIGÉE
-  handleAuthentication(socket, data) {
+  async handleAuthentication(socket, data) {
     try {
-      const { userId, matricule, token } = data;
-
-      console.log("🔐 Tentative d'authentification:", {
-        userId: userId,
-        matricule: matricule,
-        hasToken: !!token,
-        socketId: socket.id,
-      });
-
-      if (!userId || !matricule) {
-        console.warn("❌ Données d'authentification manquantes");
-        socket.emit("auth_error", {
-          message: "Données d'authentification manquantes",
-          code: "MISSING_CREDENTIALS",
-        });
-        return;
+      // ✅ 1. Authentification via token JWT si présent
+      let userPayload = null;
+      if (data.token) {
+        try {
+          // Simule une requête pour réutiliser le middleware
+          const fakeReq = {
+            headers: { authorization: `Bearer ${data.token}` },
+          };
+          const fakeRes = {};
+          await new Promise((resolve, reject) => {
+            AuthMiddleware.authenticate(fakeReq, fakeRes, (err) => {
+              if (err) reject(err);
+              else resolve();
+            });
+          });
+          if (fakeReq.user) {
+            userPayload = fakeReq.user;
+          } else {
+            socket.emit("auth_error", {
+              message: "Token JWT invalide ou expiré",
+              code: "INVALID_TOKEN",
+            });
+            return;
+          }
+        } catch (jwtError) {
+          socket.emit("auth_error", {
+            message: "Token JWT invalide ou expiré",
+            code: "INVALID_TOKEN",
+          });
+          return;
+        }
+      } else {
+        // ✅ 2. Authentification fallback par données explicites (userId/matricule)
+        if (!data.userId || !data.matricule) {
+          socket.emit("auth_error", {
+            message: "Données d'authentification manquantes",
+            code: "MISSING_CREDENTIALS",
+          });
+          return;
+        }
+        userPayload = {
+          id: String(data.userId),
+          userId: String(data.userId),
+          matricule: String(data.matricule),
+          nom: data.nom || "",
+          prenom: data.prenom || "",
+          ministere: data.ministere || "",
+        };
       }
 
-      // ✅ VALIDATION ET CONVERSION DES DONNÉES
-      const userIdString = String(userId);
-      const matriculeString = String(matricule);
-
-      if (
-        userIdString === "undefined" ||
-        userIdString === "null" ||
-        userIdString === ""
-      ) {
-        console.warn("❌ ID utilisateur invalide:", userIdString);
-        socket.emit("auth_error", {
-          message: "ID utilisateur invalide",
-          code: "INVALID_USER_ID",
-        });
-        return;
-      }
-
-      // ✅ STOCKER LES DONNÉES D'AUTHENTIFICATION DANS LA SOCKET
-      socket.userId = userIdString;
-      socket.matricule = matriculeString;
-      socket.userToken = token || null;
+      // ✅ 3. Stocker les infos dans la socket
+      socket.userId = userPayload.id || userPayload.userId;
+      socket.matricule = userPayload.matricule;
+      socket.nom = userPayload.nom;
+      socket.prenom = userPayload.prenom;
+      socket.ministere = userPayload.ministere;
+      socket.userToken = data.token || null;
       socket.isAuthenticated = true;
 
       // ✅ DONNÉES UTILISATEUR POUR LES COLLECTIONS
+      const userIdString = socket.userId;
+      const matriculeString = socket.matricule;
+
       const userData = {
         socketId: socket.id,
         matricule: matriculeString,
         connectedAt: new Date(),
         lastActivity: new Date(),
-        token: token,
+        token: data.token,
       };
 
       // ✅ AJOUTER AUX COLLECTIONS LOCALES
@@ -346,13 +402,98 @@ class ChatHandler {
       // ✅ REJOINDRE UNE SALLE UTILISATEUR
       socket.join(`user_${userIdString}`);
 
+      // 1. Rejoindre toutes les rooms de conversations de l'utilisateur
+      if (this.getConversationIdsUseCase) {
+        try {
+          const conversationIds = await this.getConversationIdsUseCase.execute(
+            userIdString
+          );
+          if (Array.isArray(conversationIds)) {
+            for (const convId of conversationIds) {
+              socket.join(`conversation_${convId}`);
+              console.log(
+                `👥 Utilisateur ${userIdString} rejoint room conversation_${convId}`
+              );
+            }
+          }
+        } catch (err) {
+          console.warn(
+            `⚠️ Erreur lors de la récupération/join des rooms conversations pour ${userIdString}:`,
+            err.message
+          );
+        }
+      }
+
+      // 2. Rejoindre la room ministère (si renseigné)
+      if (socket.ministere) {
+        const ministereRoom = `ministere_${socket.ministere
+          .replace(/\s+/g, "_")
+          .toLowerCase()}`;
+        socket.join(ministereRoom);
+        console.log(
+          `🏛️ Utilisateur ${userIdString} rejoint room ministère: ${ministereRoom}`
+        );
+
+        if (
+          this.roomManager &&
+          typeof this.roomManager.createRoom === "function"
+        ) {
+          this.roomManager
+            .createRoom(ministereRoom, {
+              type: "MINISTERE",
+              description: `Room pour le ministère ${socket.ministere}`,
+              isPrivate: false,
+              maxUsers: 1000,
+            })
+            .catch((error) => {
+              console.warn(
+                `⚠️ Erreur création room ministère dans Redis:`,
+                error.message
+              );
+            });
+        }
+      }
+
+      // 2. Rejoindre la room département (si renseigné)
+      if (socket.departement) {
+        const departementRoom = `departement_${socket.departement
+          .replace(/\s+/g, "_")
+          .toLowerCase()}`;
+        socket.join(departementRoom);
+        console.log(
+          `🏢 Utilisateur ${userIdString} rejoint room département: ${departementRoom}`
+        );
+
+        if (
+          this.roomManager &&
+          typeof this.roomManager.createRoom === "function"
+        ) {
+          this.roomManager
+            .createRoom(departementRoom, {
+              type: "DEPARTEMENT",
+              description: `Room pour le département ${socket.departement}`,
+              isPrivate: false,
+              maxUsers: 1000,
+            })
+            .catch((error) => {
+              console.warn(
+                `⚠️ Erreur création room département dans Redis:`,
+                error.message
+              );
+            });
+        }
+      }
+
       // ✅ CONFIRMER L'AUTHENTIFICATION
       socket.emit("authenticated", {
         success: true,
         userId: userIdString,
         matricule: matriculeString,
+        nom: socket.nom,
+        prenom: socket.prenom,
+        ministere: socket.ministere,
         timestamp: new Date().toISOString(),
-        method: token ? "token" : "credentials",
+        method: data.token ? "token" : "credentials",
       });
 
       console.log(
@@ -368,6 +509,58 @@ class ChatHandler {
         matricule: matriculeString,
         timestamp: new Date().toISOString(),
       });
+
+      // Après avoir authentifié l'utilisateur et stocké socket.userId, socket.matricule, etc.
+
+      const userid = socket.userId;
+
+      // 1. Récupérer toutes les conversations de l'utilisateur (optionnel, ou faire la requête sur tous les messages)
+      if (this.updateMessageStatusUseCase) {
+        try {
+          // 2. Mettre à jour tous les messages "SENT" destinés à cet utilisateur en "DELIVERED"
+          const result = await this.updateMessageStatusUseCase.execute({
+            conversationId: null, // null = toutes conversations
+            receiverId: userid,
+            status: "DELIVERED",
+            messageIds: null, // null = tous les messages concernés
+          });
+
+          if (result && result.modifiedCount > 0) {
+            console.log(
+              `✅ ${result.modifiedCount} messages marqués comme DELIVERED pour l'utilisateur ${userId} à la connexion`
+            );
+            // 3. Notifier le client connecté (optionnel)
+            this.io.to(`user_${userid}`).emit("messagesAutoDelivered", {
+              deliveredCount: result.modifiedCount,
+              timestamp: new Date().toISOString(),
+            });
+
+            // ✅ NOUVEAU: NOTIFIER TOUS LES CONVERSATIONS DE L'UTILISATEUR
+            if (
+              this.messageRepository &&
+              typeof this.messageRepository.getUserConversations === "function"
+            ) {
+              const conversationIds =
+                this.messageRepository.getUserConversations(userid);
+              for (const convId of conversationIds) {
+                this.io
+                  .to(`conversation_${convId}`)
+                  .emit("messagesAutoDelivered", {
+                    userId: userid,
+                    deliveredCount: result.modifiedCount,
+                    conversationId: convId,
+                    timestamp: new Date().toISOString(),
+                  });
+              }
+            }
+          }
+        } catch (err) {
+          console.warn(
+            "⚠️ Erreur auto-delivery messages à la connexion:",
+            err.message
+          );
+        }
+      }
     } catch (error) {
       console.error("❌ Erreur authentification WebSocket:", error);
       socket.emit("auth_error", {
@@ -411,11 +604,23 @@ class ChatHandler {
   }
 
   // ✅ MÉTHODES PUBLIQUES POUR INDEX.JS
-  getConnectedUserCount() {
+  async getConnectedUserCount() {
+    if (this.onlineUserManager) {
+      return await this.onlineUserManager.getOnlineUsersCount();
+    }
+    // Fallback local si Redis indisponible
     return this.connectedUsers.size;
   }
 
-  getStats() {
+  async getStats() {
+    if (this.onlineUserManager) {
+      const totalOnline = await this.onlineUserManager.getOnlineUsersCount();
+      return {
+        connectedUsers: totalOnline,
+        activeSockets: this.userSockets.size,
+        timestamp: new Date().toISOString(),
+      };
+    }
     return {
       connectedUsers: this.connectedUsers.size,
       activeSockets: this.userSockets.size,
@@ -423,7 +628,11 @@ class ChatHandler {
     };
   }
 
-  getConnectedUsers() {
+  async getConnectedUsers() {
+    if (this.onlineUserManager) {
+      return await this.onlineUserManager.getOnlineUsers();
+    }
+    // Fallback local
     return Array.from(this.connectedUsers.entries()).map(
       ([userId, userData]) => ({
         userId,
@@ -593,16 +802,25 @@ class ChatHandler {
       }
 
       // ✅ DIFFUSER LE MESSAGE À TOUS LES PARTICIPANTS DE LA CONVERSATION
-      this.io.to(`conversation_${conversationId}`).emit("newMessage", message);
+      this.io.to(`conversation_${conversationId}`).emit("newMessage", {
+        ...message,
+        // ✅ AJOUTER DES MÉTADONNÉES POUR LE TRACKING
+        requiresDeliveryReceipt: true,
+        requiresReadReceipt: true,
+        trackingEnabled: true,
+      });
 
       // ✅ CONFIRMER À L'EXPÉDITEUR
       socket.emit("message_sent", {
         messageId: message.id,
-        status: "delivered",
+        status: "sent", // ✅ STATUT INITIAL
         timestamp: message.timestamp,
+        requiresReceipts: true,
       });
 
-      console.log(`✅ Message diffusé pour conversation ${conversationId}`);
+      console.log(
+        `✅ Message diffusé avec tracking pour conversation ${conversationId}`
+      );
     } catch (error) {
       console.error("❌ Erreur handleSendMessage:", error);
 
@@ -773,6 +991,481 @@ class ChatHandler {
       );
     } catch (error) {
       console.error("❌ Erreur handleGetOnlineUsers:", error);
+    }
+  }
+
+  // ========================================
+  // GESTION DES STATUTS DE MESSAGES
+  // ========================================
+
+  /**
+   * Marquer un message comme livré (DELIVERED)
+   */
+  async handleMarkMessageDelivered(socket, data) {
+    try {
+      const { messageId, conversationId } = data;
+      const userId = socket.userId;
+
+      if (!messageId || !userId) {
+        socket.emit("status_error", {
+          message: "ID message ou utilisateur manquant",
+          code: "MISSING_DATA",
+          type: "delivered",
+        });
+        return;
+      }
+
+      console.log(
+        `📬 Marquage livré: message ${messageId} par utilisateur ${userId}`
+      );
+
+      // ✅ VÉRIFIER QUE LE USE CASE EST DISPONIBLE
+      if (!this.updateMessageStatusUseCase) {
+        console.warn(
+          "⚠️ UpdateMessageStatusUseCase non disponible - mode dégradé"
+        );
+        this._handleDeliveredDegradedMode(socket, {
+          messageId,
+          conversationId,
+          userId,
+        });
+        return;
+      }
+
+      // ✅ VÉRIFIER QUE LA MÉTHODE EXISTE
+      if (
+        typeof this.updateMessageStatusUseCase.markSingleMessage !== "function"
+      ) {
+        console.error(
+          "❌ Méthode markSingleMessage non disponible dans UpdateMessageStatusUseCase"
+        );
+        socket.emit("status_error", {
+          message: "Service de mise à jour de statut non disponible",
+          code: "SERVICE_UNAVAILABLE",
+          type: "delivered",
+        });
+        return;
+      }
+
+      try {
+        // ✅ UTILISER LE USE CASE AVEC GESTION D'ERREUR ROBUSTE
+        const result = await this.updateMessageStatusUseCase.markSingleMessage({
+          messageId: messageId,
+          receiverId: userId,
+          status: "DELIVERED",
+        });
+
+        if (result && result.modifiedCount > 0) {
+          console.log(`✅ Message ${messageId} marqué comme livré avec succès`);
+
+          // ✅ NOTIFIER L'EXPÉDITEUR
+          this.io
+            .to(`conversation_${conversationId}`)
+            .emit("messageStatusChanged", {
+              messageId: messageId,
+              status: "DELIVERED",
+              userId: userId,
+              timestamp: new Date().toISOString(),
+            });
+
+          // ✅ CONFIRMER AU DESTINATAIRE
+          socket.emit("messageDelivered", {
+            messageId: messageId,
+            status: "DELIVERED",
+            timestamp: new Date().toISOString(),
+          });
+        } else {
+          console.log(
+            `ℹ️ Message ${messageId} déjà marqué comme livré ou non trouvé`
+          );
+
+          // ✅ ENVOYER QUAND MÊME UNE CONFIRMATION
+          socket.emit("messageDelivered", {
+            messageId: messageId,
+            status: "DELIVERED",
+            timestamp: new Date().toISOString(),
+            note: "Déjà marqué comme livré",
+          });
+        }
+      } catch (useCaseError) {
+        console.error(`❌ Erreur Use Case delivered:`, {
+          error: useCaseError.message,
+          messageId,
+          userId,
+          stack: useCaseError.stack,
+        });
+
+        // ✅ FALLBACK EN MODE DÉGRADÉ
+        console.log("🔄 Basculement en mode dégradé pour la livraison");
+        this._handleDeliveredDegradedMode(socket, {
+          messageId,
+          conversationId,
+          userId,
+        });
+      }
+    } catch (error) {
+      console.error("❌ Erreur handleMarkMessageDelivered:", error);
+      socket.emit("status_error", {
+        message: "Erreur marquage livré",
+        code: "DELIVERED_ERROR",
+        error:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    }
+  }
+
+  // ✅ AJOUTER UNE MÉTHODE DE MODE DÉGRADÉ
+  _handleDeliveredDegradedMode(socket, { messageId, conversationId, userId }) {
+    console.log("⚠️ Mode dégradé: notification socket uniquement");
+
+    // ✅ NOTIFIER VIA SOCKET SEULEMENT
+    if (conversationId) {
+      this.io
+        .to(`conversation_${conversationId}`)
+        .emit("messageStatusChanged", {
+          messageId: messageId,
+          status: "DELIVERED",
+          userId: userId,
+          timestamp: new Date().toISOString(),
+          degraded: true,
+        });
+    }
+
+    socket.emit("messageDelivered", {
+      messageId: messageId,
+      status: "DELIVERED",
+      timestamp: new Date().toISOString(),
+      degraded: true,
+      note: "Mode dégradé - notification uniquement",
+    });
+  }
+
+  /**
+   * Marquer un message comme lu (READ)
+   */
+  async handleMarkMessageRead(socket, data) {
+    try {
+      const { messageId, conversationId } = data;
+      const userId = socket.userId;
+
+      if (!messageId || !userId) {
+        socket.emit("status_error", {
+          message: "ID message ou utilisateur manquant",
+          code: "MISSING_DATA",
+          type: "read",
+        });
+        return;
+      }
+
+      console.log(
+        `📖 Marquage lu: message ${messageId} par utilisateur ${userId}`
+      );
+
+      // ✅ VÉRIFIER QUE LE USE CASE EST DISPONIBLE
+      if (
+        !this.updateMessageStatusUseCase ||
+        typeof this.updateMessageStatusUseCase.markSingleMessage !== "function"
+      ) {
+        console.warn(
+          "⚠️ UpdateMessageStatusUseCase non disponible - mode dégradé"
+        );
+        this._handleReadDegradedMode(socket, {
+          messageId,
+          conversationId,
+          userId,
+        });
+        return;
+      }
+
+      try {
+        const result = await this.updateMessageStatusUseCase.markSingleMessage({
+          messageId: messageId,
+          receiverId: userId,
+          status: "READ",
+        });
+
+        if (result && result.modifiedCount > 0) {
+          console.log(`✅ Message ${messageId} marqué comme lu avec succès`);
+
+          // ✅ NOTIFIER L'EXPÉDITEUR (ACCUSÉ DE LECTURE)
+          this.io
+            .to(`conversation_${conversationId}`)
+            .emit("messageStatusChanged", {
+              messageId: messageId,
+              status: "READ",
+              userId: userId,
+              timestamp: new Date().toISOString(),
+            });
+
+          // ✅ CONFIRMER AU LECTEUR
+          socket.emit("messageRead", {
+            messageId: messageId,
+            status: "READ",
+            timestamp: new Date().toISOString(),
+          });
+
+          // ✅ PUBLIER ÉVÉNEMENT KAFKA
+          if (
+            this.messageProducer &&
+            typeof this.messageProducer.publishMessage === "function"
+          ) {
+            try {
+              await this.messageProducer.publishMessage({
+                eventType: "MESSAGE_READ",
+                messageId: messageId,
+                readBy: userId,
+                conversationId: conversationId,
+                timestamp: new Date().toISOString(),
+                source: "chat-handler",
+              });
+              console.log(`📤 Événement MESSAGE_READ publié`);
+            } catch (kafkaError) {
+              console.warn("⚠️ Erreur publication Kafka:", kafkaError.message);
+            }
+          }
+        } else {
+          console.log(
+            `ℹ️ Message ${messageId} déjà marqué comme lu ou non trouvé`
+          );
+
+          socket.emit("messageRead", {
+            messageId: messageId,
+            status: "READ",
+            timestamp: new Date().toISOString(),
+            note: "Déjà marqué comme lu",
+          });
+        }
+      } catch (useCaseError) {
+        console.error(`❌ Erreur Use Case read:`, useCaseError.message);
+        this._handleReadDegradedMode(socket, {
+          messageId,
+          conversationId,
+          userId,
+        });
+      }
+    } catch (error) {
+      console.error("❌ Erreur handleMarkMessageRead:", error);
+      socket.emit("status_error", {
+        message: "Erreur marquage lu",
+        code: "READ_ERROR",
+        error:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    }
+  }
+
+  // ✅ AJOUTER UNE MÉTHODE DE MODE DÉGRADÉ POUR LA LECTURE
+  _handleReadDegradedMode(socket, { messageId, conversationId, userId }) {
+    console.log("⚠️ Mode dégradé lecture: notification socket uniquement");
+
+    if (conversationId) {
+      this.io
+        .to(`conversation_${conversationId}`)
+        .emit("messageStatusChanged", {
+          messageId: messageId,
+          status: "READ",
+          userId: userId,
+          timestamp: new Date().toISOString(),
+          degraded: true,
+        });
+    }
+
+    socket.emit("messageRead", {
+      messageId: messageId,
+      status: "READ",
+      timestamp: new Date().toISOString(),
+      degraded: true,
+      note: "Mode dégradé - notification uniquement",
+    });
+  }
+
+  /**
+   * Marquer toute une conversation comme lue
+   */
+  async handleMarkConversationRead(socket, data) {
+    try {
+      const { conversationId } = data;
+      const userId = socket.userId;
+
+      if (!conversationId || !userId) {
+        socket.emit("status_error", {
+          message: "ID conversation ou utilisateur manquant",
+          code: "MISSING_DATA",
+          type: "conversation_read",
+        });
+        return;
+      }
+
+      console.log(
+        `📚 Marquage conversation lue: ${conversationId} par utilisateur ${userId}`
+      );
+
+      // ✅ UTILISER LE USE CASE UPDATEMESSAGESTATUS
+      if (this.updateMessageStatusUseCase) {
+        try {
+          const result = await this.updateMessageStatusUseCase.execute({
+            conversationId: conversationId,
+            receiverId: userId,
+            status: "READ",
+          });
+
+          if (result && result.modifiedCount > 0) {
+            console.log(
+              `✅ ${result.modifiedCount} messages marqués comme lus dans conversation ${conversationId}`
+            );
+
+            // ✅ NOTIFIER TOUS LES PARTICIPANTS
+            this.io
+              .to(`conversation_${conversationId}`)
+              .emit("conversationRead", {
+                conversationId: conversationId,
+                readBy: userId,
+                readCount: result.modifiedCount,
+                timestamp: new Date().toISOString(),
+              });
+
+            // ✅ CONFIRMER AU LECTEUR
+            socket.emit("conversationMarkedRead", {
+              conversationId: conversationId,
+              readCount: result.modifiedCount,
+              timestamp: new Date().toISOString(),
+            });
+          } else {
+            console.log(
+              `ℹ️ Aucun nouveau message à marquer comme lu dans ${conversationId}`
+            );
+            socket.emit("conversationMarkedRead", {
+              conversationId: conversationId,
+              readCount: 0,
+              message: "Tous les messages étaient déjà lus",
+              timestamp: new Date().toISOString(),
+            });
+          }
+        } catch (useCaseError) {
+          console.error(
+            `❌ Erreur Use Case conversation read:`,
+            useCaseError.message
+          );
+          socket.emit("status_error", {
+            message: "Erreur marquage conversation",
+            code: "CONVERSATION_READ_ERROR",
+            type: "conversation_read",
+          });
+        }
+      } else {
+        console.log("⚠️ Mode dégradé: Use Case non disponible");
+        socket.emit("conversationMarkedRead", {
+          conversationId: conversationId,
+          readCount: 0,
+          degraded: true,
+          timestamp: new Date().toISOString(),
+        });
+      }
+    } catch (error) {
+      console.error("❌ Erreur handleMarkConversationRead:", error);
+      socket.emit("status_error", {
+        message: "Erreur marquage conversation",
+        code: "CONVERSATION_READ_ERROR",
+        error:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    }
+  }
+
+  /**
+   * Obtenir le statut d'un message
+   */
+  async handleGetMessageStatus(socket, data) {
+    try {
+      const { messageId } = data;
+
+      if (!messageId) {
+        socket.emit("status_error", {
+          message: "ID message manquant",
+          code: "MISSING_MESSAGE_ID",
+          type: "get_status",
+        });
+        return;
+      }
+
+      console.log(`📊 Demande statut pour message: ${messageId}`);
+
+      // ✅ UTILISER LE REPOSITORY POUR RÉCUPÉRER LE STATUT
+      if (this.messageRepository) {
+        try {
+          const message = await this.messageRepository.findById(messageId);
+
+          if (message) {
+            const statusInfo = {
+              messageId: messageId,
+              status: message.status,
+              deliveredAt: message.metadata?.deliveryMetadata?.deliveredAt,
+              readAt: message.metadata?.deliveryMetadata?.readAt,
+              timestamp: new Date().toISOString(),
+            };
+
+            socket.emit("messageStatus", statusInfo);
+            console.log(
+              `✅ Statut envoyé pour message ${messageId}: ${message.status}`
+            );
+          } else {
+            socket.emit("status_error", {
+              message: "Message introuvable",
+              code: "MESSAGE_NOT_FOUND",
+              messageId: messageId,
+              type: "get_status",
+            });
+          }
+        } catch (repoError) {
+          console.error(`❌ Erreur repository get status:`, repoError.message);
+          socket.emit("status_error", {
+            message: "Erreur récupération statut",
+            code: "REPO_ERROR",
+            type: "get_status",
+          });
+        }
+      } else {
+        socket.emit("status_error", {
+          message: "Repository non disponible",
+          code: "NO_REPOSITORY",
+          type: "get_status",
+        });
+      }
+    } catch (error) {
+      console.error("❌ Erreur handleGetMessageStatus:", error);
+      socket.emit("status_error", {
+        message: "Erreur récupération statut",
+        code: "GET_STATUS_ERROR",
+        error:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    }
+  }
+
+  /**
+   * Accusé de réception automatique d'un message
+   */
+  async handleMessageReceived(socket, data) {
+    try {
+      const { messageId, conversationId } = data;
+      const userId = socket.userId;
+
+      if (!messageId || !userId) {
+        return; // Pas d'erreur pour cet événement automatique
+      }
+
+      console.log(
+        `✅ Accusé de réception: message ${messageId} reçu par ${userId}`
+      );
+
+      // ✅ MARQUER AUTOMATIQUEMENT COMME LIVRÉ
+      await this.handleMarkMessageDelivered(socket, {
+        messageId: messageId,
+        conversationId: conversationId,
+      });
+    } catch (error) {
+      console.warn("⚠️ Erreur handleMessageReceived:", error.message);
+      // Ne pas émettre d'erreur pour éviter de polluer l'interface
     }
   }
 }

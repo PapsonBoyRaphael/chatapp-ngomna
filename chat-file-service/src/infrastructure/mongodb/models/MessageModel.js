@@ -138,13 +138,10 @@ const messageSchema = new mongoose.Schema(
             image: String,
           },
         ],
-        fileMetadata: {
-          fileId: String,
-          fileName: String,
-          fileSize: Number,
-          mimeType: String,
-          fileUrl: String,
-          thumbnail: String,
+        file: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "File",
+          default: null,
         },
       },
     },

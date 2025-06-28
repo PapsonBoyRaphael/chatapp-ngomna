@@ -325,6 +325,102 @@ function setupSocketEvents() {
       callback(...args);
     });
   };
+
+  // ✅ ÉVÉNEMENTS DE STATUTS DE MESSAGES
+  socket.on("messageDelivered", (data) => {
+    log("📬 Message marqué comme livré", "success", data);
+    addReceivedMessage("message", "📬 Message Livré", data, {
+      messageId: data.messageId,
+      status: data.status,
+      time: new Date(data.timestamp).toLocaleTimeString(),
+    });
+  });
+
+  socket.on("messageRead", (data) => {
+    log("📖 Message marqué comme lu", "success", data);
+    addReceivedMessage("message", "📖 Message Lu", data, {
+      messageId: data.messageId,
+      status: data.status,
+      time: new Date(data.timestamp).toLocaleTimeString(),
+    });
+  });
+
+  socket.on("messageStatusChanged", (data) => {
+    log("🔄 Statut de message changé", "info", data);
+    addReceivedMessage("message", "🔄 Statut Changé", data, {
+      messageId: data.messageId,
+      status: data.status,
+      userId: data.userId,
+      time: new Date(data.timestamp).toLocaleTimeString(),
+    });
+  });
+
+  socket.on("conversationRead", (data) => {
+    log("📚 Conversation marquée comme lue", "success", data);
+    addReceivedMessage("message", "📚 Conversation Lue", data, {
+      conversationId: data.conversationId,
+      readBy: data.readBy,
+      readCount: data.readCount,
+      time: new Date(data.timestamp).toLocaleTimeString(),
+    });
+  });
+
+  socket.on("conversationMarkedRead", (data) => {
+    log("✅ Confirmation conversation lue", "success", data);
+    addReceivedMessage("message", "✅ Conversation Lue", data, {
+      conversationId: data.conversationId,
+      readCount: data.readCount,
+      message: data.message || "Messages marqués comme lus",
+      time: new Date(data.timestamp).toLocaleTimeString(),
+    });
+  });
+
+  socket.on("messageStatus", (data) => {
+    log("📊 Statut du message", "info", data);
+    addReceivedMessage("message", "📊 Statut Message", data, {
+      messageId: data.messageId,
+      status: data.status,
+      deliveredAt: data.deliveredAt
+        ? new Date(data.deliveredAt).toLocaleString()
+        : "Non livré",
+      readAt: data.readAt ? new Date(data.readAt).toLocaleString() : "Non lu",
+    });
+  });
+
+  socket.on("status_error", (data) => {
+    log("❌ Erreur de statut", "error", data);
+    addReceivedMessage("error", "❌ Erreur Statut", data, {
+      type: data.type,
+      message: data.message,
+      code: data.code,
+    });
+  });
+
+  // ✅ ACCUSÉ DE RÉCEPTION AUTOMATIQUE POUR LES NOUVEAUX MESSAGES
+  socket.on("newMessage", (data) => {
+    // ... traitement existant ...
+
+    // ✅ ENVOYER ACCUSÉ DE RÉCEPTION AUTOMATIQUE SI REQUIS
+    if (data.requiresDeliveryReceipt && data.senderId !== currentUser?.userId) {
+      setTimeout(() => {
+        socket.emit("messageReceived", {
+          messageId: data.id,
+          conversationId: data.conversationId,
+        });
+        log("✅ Accusé de réception envoyé automatiquement", "info", {
+          messageId: data.id,
+        });
+      }, 200); // Petit délai pour éviter les conflits
+    }
+
+    // Traitement existant...
+    addReceivedMessage("message", "💬 Nouveau Message", data, {
+      sender: data.senderName || data.senderId,
+      content: data.content,
+      conversation: data.conversationId,
+      requiresReceipt: data.requiresDeliveryReceipt,
+    });
+  });
 }
 
 // ========================================
@@ -340,6 +436,9 @@ function authenticate() {
   const userId = document.getElementById("userId").value.trim();
   const matricule = document.getElementById("matricule").value.trim();
   const token = document.getElementById("token").value.trim();
+  // ✅ Récupérer receiverId et status
+  const receiverId = document.getElementById("receiverIdAuth")?.value.trim();
+  const status = document.getElementById("statusAuth")?.value.trim();
 
   if (!userId || !matricule) {
     log("❌ ID utilisateur et matricule requis", "error");
@@ -351,6 +450,8 @@ function authenticate() {
     userId,
     matricule,
     ...(token && { token }),
+    ...(receiverId && { receiverId }), // Ajouté si présent
+    ...(status && { status }), // Ajouté si présent
   };
 
   log("🔐 Tentative d'authentification...", "info", authData);
@@ -1173,22 +1274,82 @@ function escapeHtml(text) {
 }
 
 // ========================================
-// AMÉLIORER LA FONCTION getOnlineUsers EXISTANTE
-// ========================================
+// AJOUTER UNE FONCTION POUR RÉCUPÉRER UN MESSAGE ID RÉEL DANS app.js
+function getLastMessageId() {
+  // Récupérer le dernier message envoyé pour avoir un ID réel
+  const lastMessage = receivedMessages.find(
+    (msg) =>
+      msg.type === "message" &&
+      msg.title === "✅ Message Envoyé" &&
+      msg.originalData &&
+      msg.originalData.messageId
+  );
 
-function getOnlineUsers() {
-  if (!socket || !socket.connected) {
-    log("❌ Socket non connecté", "error");
+  if (lastMessage) {
+    const messageId = lastMessage.originalData.messageId;
+    document.getElementById("messageIdStatus").value = messageId;
+    log(`🔍 Message ID récupéré: ${messageId}`, "info");
+    return messageId;
+  } else {
+    log("❌ Aucun message ID trouvé dans l'historique", "warning");
+    return null;
+  }
+}
+
+// ✅ AMÉLIORER LA FONCTION markMessageDelivered
+function markMessageDelivered() {
+  if (!socket || !socket.connected || !isAuthenticated) {
+    log("❌ Socket non connecté ou non authentifié", "error");
     return;
   }
 
-  if (!isAuthenticated) {
-    log("❌ Authentification requise", "error");
+  let messageId = document.getElementById("messageIdStatus")?.value.trim();
+  const conversationId = document.getElementById("conversationId").value.trim();
+
+  // ✅ SI PAS D'ID, ESSAYER DE RÉCUPÉRER LE DERNIER
+  if (!messageId) {
+    messageId = getLastMessageId();
+    if (!messageId) {
+      log("❌ ID du message requis", "error");
+      return;
+    }
+  }
+
+  const data = {
+    messageId: messageId,
+    conversationId: conversationId,
+  };
+
+  log("📬 Marquage message comme livré...", "info", data);
+  socket.emit("markMessageDelivered", data);
+}
+
+// ✅ AMÉLIORER LA FONCTION markMessageRead
+function markMessageRead() {
+  if (!socket || !socket.connected || !isAuthenticated) {
+    log("❌ Socket non connecté ou non authentifié", "error");
     return;
   }
 
-  log("👥 Demande des utilisateurs en ligne...", "info");
-  socket.emit("getOnlineUsers");
+  let messageId = document.getElementById("messageIdStatus")?.value.trim();
+  const conversationId = document.getElementById("conversationId").value.trim();
+
+  // ✅ SI PAS D'ID, ESSAYER DE RÉCUPÉRER LE DERNIER
+  if (!messageId) {
+    messageId = getLastMessageId();
+    if (!messageId) {
+      log("❌ ID du message requis", "error");
+      return;
+    }
+  }
+
+  const data = {
+    messageId: messageId,
+    conversationId: conversationId,
+  };
+
+  log("📖 Marquage message comme lu...", "info", data);
+  socket.emit("markMessageRead", data);
 }
 
 // ========================================

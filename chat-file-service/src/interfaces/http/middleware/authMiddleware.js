@@ -1,6 +1,6 @@
 const jwt = require("jsonwebtoken");
 
-const JWT_SECRET = process.env.JWT_SECRET || "votre-secret-jwt-dev";
+const JWT_SECRET = process.env.JWT_SECRET;
 
 class AuthMiddleware {
   // Middleware pour valider le token JWT
@@ -17,12 +17,19 @@ class AuthMiddleware {
             req.headers["user-id"] ||
             req.headers["x-user-id"] ||
             "dev-user-123",
+          matricule:
+            req.headers["matricule"] ||
+            req.headers["x-matricule"] ||
+            "MATRICULE-DEV",
           nom:
             req.headers["user-name"] ||
             req.headers["x-user-name"] ||
             "Dev User",
-          // email: "dev@example.com",
-          // role: "user",
+          prenom: req.headers["prenom"] || req.headers["x-prenom"] || "Dev",
+          ministere:
+            req.headers["ministere"] ||
+            req.headers["x-ministere"] ||
+            "Développement",
         };
         return next();
       }
@@ -44,9 +51,10 @@ class AuthMiddleware {
         req.user = {
           id: decoded.id,
           userId: decoded.id, // Compatibilité
-          nom: decoded.nom || decoded.name,
-          // email: decoded.email,
-          // role: decoded.role || "user",
+          matricule: decoded.matricule,
+          nom: decoded.nom,
+          prenom: decoded.prenom,
+          ministere: decoded.ministere,
         };
         next();
       } catch (jwtError) {
@@ -108,10 +116,11 @@ class AuthMiddleware {
           const decoded = jwt.verify(token, JWT_SECRET);
           req.user = {
             id: decoded.id,
-            userId: decoded.id,
-            nom: decoded.nom || decoded.name,
-            // email: decoded.email,
-            // role: decoded.role || "user",
+            userId: decoded.id, // Compatibilité
+            matricule: decoded.matricule,
+            nom: decoded.nom,
+            prenom: decoded.prenom,
+            ministere: decoded.ministere,
           };
         } catch (jwtError) {
           // Token invalide mais on continue
