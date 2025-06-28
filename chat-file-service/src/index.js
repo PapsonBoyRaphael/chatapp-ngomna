@@ -320,6 +320,7 @@ const startServer = async () => {
       kafkaProducers?.messageProducer || null
     );
 
+    // ✅ AJOUTER LE CONVERSATION CONTROLLER
     const conversationController = new ConversationController(
       getConversationsUseCase,
       getConversationUseCase,
@@ -330,27 +331,24 @@ const startServer = async () => {
     const healthController = new HealthController(redisClient, kafkaConfig);
 
     // ===============================
-    // 9. CONFIGURATION WEBSOCKET
+    // 9. CONFIGURATION ROUTES HTTP
     // ===============================
-    const chatHandler = new ChatHandler(
-      io,
-      sendMessageUseCase,
-      kafkaProducers?.messageProducer || null,
-      redisClient,
-      onlineUserManager,
-      roomManager
-    );
 
-    // ===============================
-    // 10. CONFIGURATION DES ROUTES HTTP
-    // ===============================
-    app.use("/files", createFileRoutes(fileController));
-    app.use("/messages", createMessageRoutes(messageController));
+    // ✅ IMPORT ET CONFIGURATION DES ROUTES CONVERSATIONS
+    const createConversationRoutes = require("./interfaces/http/routes/conversationRoutes");
+
+    app.use("/api/files", createFileRoutes(fileController));
+    app.use("/api/messages", createMessageRoutes(messageController));
+    // ✅ AJOUTER LA ROUTE CONVERSATIONS
     app.use("/conversations", createConversationRoutes(conversationController));
-    app.use("/health", createHealthRoutes(healthController));
+    app.use(
+      "/api/conversations",
+      createConversationRoutes(conversationController)
+    );
+    app.use("/api/health", createHealthRoutes(healthController));
 
     // ===============================
-    // 11. ROUTES PERSONNALISÉES
+    // 10. ROUTES PERSONNALISÉES
     // ===============================
 
     // Route de health check détaillée

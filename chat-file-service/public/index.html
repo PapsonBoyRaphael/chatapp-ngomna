@@ -74,10 +74,16 @@
             <div class="conversations-sidebar">
               <div class="sidebar-header">
                 <h3>Conversations</h3>
-                <button class="new-chat-btn" id="newChatBtn">
+                <button
+                  class="new-chat-btn"
+                  id="newChatBtn"
+                  title="Nouvelle conversation"
+                >
                   <i class="fas fa-plus"></i>
                 </button>
               </div>
+
+              <!-- ✅ AJOUT FILTRES CONVERSATIONS -->
               <div class="search-bar">
                 <i class="fas fa-search"></i>
                 <input
@@ -86,6 +92,23 @@
                   id="searchConversations"
                 />
               </div>
+
+              <!-- ✅ AJOUT ONGLETS CONVERSATIONS -->
+              <div class="conversation-tabs">
+                <button class="tab-btn active" data-tab="all">
+                  <i class="fas fa-comments"></i>
+                  Toutes
+                </button>
+                <button class="tab-btn" data-tab="unread">
+                  <i class="fas fa-bell"></i>
+                  Non lues <span id="unreadCount" class="badge">0</span>
+                </button>
+                <button class="tab-btn" data-tab="pinned">
+                  <i class="fas fa-thumbtack"></i>
+                  Épinglées
+                </button>
+              </div>
+
               <div class="conversations-list" id="conversationsList">
                 <div class="loading-state">
                   <i class="fas fa-spinner fa-spin"></i>
@@ -106,13 +129,35 @@
                   </div>
                 </div>
                 <div class="chat-actions">
-                  <button class="action-btn" id="callBtn">
+                  <!-- ✅ ACTIONS CHAT AMÉLIORÉES -->
+                  <button
+                    class="action-btn"
+                    id="searchInChatBtn"
+                    title="Rechercher dans le chat"
+                  >
+                    <i class="fas fa-search"></i>
+                  </button>
+                  <button class="action-btn" id="callBtn" title="Appel vocal">
                     <i class="fas fa-phone"></i>
                   </button>
-                  <button class="action-btn" id="videoBtn">
+                  <button class="action-btn" id="videoBtn" title="Appel vidéo">
                     <i class="fas fa-video"></i>
                   </button>
-                  <button class="action-btn" id="infoBtn">
+                  <button
+                    class="action-btn"
+                    id="pinConversationBtn"
+                    title="Épingler la conversation"
+                  >
+                    <i class="fas fa-thumbtack"></i>
+                  </button>
+                  <button
+                    class="action-btn"
+                    id="muteConversationBtn"
+                    title="Couper les notifications"
+                  >
+                    <i class="fas fa-bell-slash"></i>
+                  </button>
+                  <button class="action-btn" id="infoBtn" title="Informations">
                     <i class="fas fa-info-circle"></i>
                   </button>
                 </div>
@@ -126,28 +171,68 @@
                 </div>
               </div>
 
+              <!-- ✅ ZONE DE FRAPPE AMÉLIORÉE -->
               <div
                 class="message-input-container"
                 id="messageInputContainer"
                 style="display: none"
               >
+                <!-- Indicateur de frappe -->
+                <div
+                  class="typing-indicator"
+                  id="typingIndicator"
+                  style="display: none"
+                >
+                  <span id="typingUsers"></span> est en train d'écrire...
+                  <div class="typing-dots">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                  </div>
+                </div>
+
                 <div class="input-actions">
-                  <button class="action-btn" id="attachBtn">
+                  <button
+                    class="action-btn"
+                    id="attachBtn"
+                    title="Joindre un fichier"
+                  >
                     <i class="fas fa-paperclip"></i>
                   </button>
-                  <button class="action-btn" id="emojiBtn">
+                  <button
+                    class="action-btn"
+                    id="emojiBtn"
+                    title="Insérer un emoji"
+                  >
                     <i class="fas fa-smile"></i>
                   </button>
+                  <button
+                    class="action-btn"
+                    id="voiceBtn"
+                    title="Message vocal"
+                  >
+                    <i class="fas fa-microphone"></i>
+                  </button>
                 </div>
+
                 <div class="input-wrapper">
                   <textarea
                     id="messageInput"
                     placeholder="Tapez votre message..."
                     rows="1"
+                    maxlength="2000"
                   ></textarea>
-                  <button class="send-btn" id="sendBtn">
-                    <i class="fas fa-paper-plane"></i>
-                  </button>
+                  <div class="input-footer">
+                    <span class="char-count" id="charCount">0/2000</span>
+                    <button
+                      class="send-btn"
+                      id="sendBtn"
+                      disabled
+                      title="Envoyer le message"
+                    >
+                      <i class="fas fa-paper-plane"></i>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -289,7 +374,70 @@
             </div>
 
             <div class="api-endpoints" id="apiEndpoints">
-              <!-- Chargé dynamiquement par app.js -->
+              <!-- ✅ DOCUMENTATION API STATIQUE AMÉLIORÉE -->
+              <div class="endpoint-group">
+                <h3><i class="fas fa-comments"></i> Conversations</h3>
+                <div class="endpoint">
+                  <span class="method get">GET</span>
+                  <span class="url">/conversations</span>
+                  <span class="description"
+                    >Récupérer toutes les conversations de l'utilisateur</span
+                  >
+                </div>
+                <div class="endpoint">
+                  <span class="method get">GET</span>
+                  <span class="url">/conversations/:id</span>
+                  <span class="description"
+                    >Récupérer une conversation spécifique</span
+                  >
+                </div>
+                <div class="endpoint">
+                  <span class="method post">POST</span>
+                  <span class="url">/conversations</span>
+                  <span class="description"
+                    >Créer une nouvelle conversation</span
+                  >
+                </div>
+              </div>
+
+              <div class="endpoint-group">
+                <h3><i class="fas fa-envelope"></i> Messages</h3>
+                <div class="endpoint">
+                  <span class="method get">GET</span>
+                  <span class="url">/messages</span>
+                  <span class="description"
+                    >Récupérer les messages d'une conversation</span
+                  >
+                </div>
+                <div class="endpoint">
+                  <span class="method post">POST</span>
+                  <span class="url">/messages</span>
+                  <span class="description">Envoyer un nouveau message</span>
+                </div>
+              </div>
+
+              <div class="endpoint-group">
+                <h3><i class="fas fa-users"></i> Utilisateurs</h3>
+                <div class="endpoint">
+                  <span class="method get">GET</span>
+                  <span class="url">/api/users/all</span>
+                  <span class="description">Récupérer tous les contacts</span>
+                </div>
+              </div>
+
+              <div class="endpoint-group">
+                <h3><i class="fas fa-folder"></i> Fichiers</h3>
+                <div class="endpoint">
+                  <span class="method get">GET</span>
+                  <span class="url">/files</span>
+                  <span class="description">Lister les fichiers</span>
+                </div>
+                <div class="endpoint">
+                  <span class="method post">POST</span>
+                  <span class="url">/files/upload</span>
+                  <span class="description">Téléverser un fichier</span>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -390,6 +538,144 @@
           </div>
         </div>
       </div>
+
+      <!-- ✅ NOUVELLE SECTION API AMÉLIORÉE -->
+      <section id="apiSection" class="content-section">
+        <div class="api-container">
+          <div class="api-header">
+            <h2>Documentation API</h2>
+            <div class="api-status">
+              <span class="status-indicator active"></span>
+              <span>Service actif</span>
+            </div>
+          </div>
+
+          <div class="api-endpoints" id="apiEndpoints">
+            <!-- ✅ DOCUMENTATION API STATIQUE AMÉLIORÉE -->
+            <div class="endpoint-group">
+              <h3><i class="fas fa-comments"></i> Conversations</h3>
+              <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="url">/conversations</span>
+                <span class="description"
+                  >Récupérer toutes les conversations de l'utilisateur</span
+                >
+              </div>
+              <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="url">/conversations/:id</span>
+                <span class="description"
+                  >Récupérer une conversation spécifique</span
+                >
+              </div>
+              <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="url">/conversations</span>
+                <span class="description">Créer une nouvelle conversation</span>
+              </div>
+            </div>
+
+            <div class="endpoint-group">
+              <h3><i class="fas fa-envelope"></i> Messages</h3>
+              <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="url">/messages</span>
+                <span class="description"
+                  >Récupérer les messages d'une conversation</span
+                >
+              </div>
+              <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="url">/messages</span>
+                <span class="description">Envoyer un nouveau message</span>
+              </div>
+            </div>
+
+            <div class="endpoint-group">
+              <h3><i class="fas fa-users"></i> Utilisateurs</h3>
+              <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="url">/api/users/all</span>
+                <span class="description">Récupérer tous les contacts</span>
+              </div>
+            </div>
+
+            <div class="endpoint-group">
+              <h3><i class="fas fa-folder"></i> Fichiers</h3>
+              <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="url">/files</span>
+                <span class="description">Lister les fichiers</span>
+              </div>
+              <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="url">/files/upload</span>
+                <span class="description">Téléverser un fichier</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Modales existantes... -->
+
+      <!-- ✅ NOUVELLE MODALE NOUVELLE CONVERSATION -->
+      <div class="modal" id="newConversationModal">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>Nouvelle Conversation</h3>
+            <button class="close-btn" id="closeNewConversationModal">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
+          <div class="modal-body">
+            <div class="form-group">
+              <label for="conversationName"
+                >Nom de la conversation (optionnel)</label
+              >
+              <input
+                type="text"
+                id="conversationName"
+                placeholder="Ex: Équipe Marketing"
+              />
+            </div>
+
+            <div class="form-group">
+              <label>Sélectionner les participants</label>
+              <div class="participants-search">
+                <input
+                  type="text"
+                  id="participantSearch"
+                  placeholder="Rechercher un contact..."
+                />
+              </div>
+              <div class="participants-list" id="participantsList">
+                <!-- Chargé dynamiquement -->
+              </div>
+            </div>
+
+            <div class="selected-participants" id="selectedParticipants">
+              <!-- Participants sélectionnés -->
+            </div>
+
+            <div class="modal-actions">
+              <button class="btn btn-secondary" id="cancelNewConversation">
+                Annuler
+              </button>
+              <button
+                class="btn btn-primary"
+                id="createNewConversation"
+                disabled
+              >
+                <i class="fas fa-plus"></i>
+                Créer la conversation
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ...existing modals... -->
     </div>
 
     <!-- Toast Notifications -->
@@ -397,18 +683,17 @@
 
     <!-- Scripts -->
     <script>
-      // ✅ CONFIGURATION ALIGNÉE AVEC LE BACKEND
+      // ✅ CONFIGURATION ALIGNÉE AVEC LE BACKEND CORRIGÉ
       window.CHAT_CONFIG = {
         API_BASE_URL: "http://localhost:8003/",
         WS_URL: "http://localhost:8003",
         USER_SERVICE_URL: "http://localhost:8000/api/users",
         FILE_SERVICE_URL: "http://localhost:8003/files",
         CONVERSATION_SERVICE_URL: "http://localhost:8003/conversations",
-        MESSAGE_SERVICE_URL: "http://localhost:8003//messages",
+        MESSAGE_SERVICE_URL: "http://localhost:8003/messages",
         HEALTH_CHECK_URL: "http://localhost:8003/health",
         VERSION: "1.0.0",
         DEBUG: true,
-        // ✅ CONFIGURATION KAFKA/REDIS
         ENABLE_REAL_TIME: true,
         ENABLE_NOTIFICATIONS: true,
         ENABLE_FILE_UPLOAD: true,

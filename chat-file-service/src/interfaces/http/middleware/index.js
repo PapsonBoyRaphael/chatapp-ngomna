@@ -15,7 +15,7 @@ try {
       req.user = {
         id: req.headers["user-id"] || "dev-user-123",
         name: req.headers["user-name"] || "Dev User",
-        email: "dev@example.com",
+        // email: "dev@example.com",
       };
       next();
     },
@@ -23,7 +23,7 @@ try {
       req.user = {
         id: req.headers["user-id"] || "dev-user-123",
         name: req.headers["user-name"] || "Dev User",
-        email: "dev@example.com",
+        // email: "dev@example.com",
       };
       next();
     },

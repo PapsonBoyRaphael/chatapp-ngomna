@@ -21,8 +21,8 @@ class AuthMiddleware {
             req.headers["user-name"] ||
             req.headers["x-user-name"] ||
             "Dev User",
-          email: "dev@example.com",
-          role: "user",
+          // email: "dev@example.com",
+          // role: "user",
         };
         return next();
       }
@@ -45,8 +45,8 @@ class AuthMiddleware {
           id: decoded.id,
           userId: decoded.id, // Compatibilité
           nom: decoded.nom || decoded.name,
-          email: decoded.email,
-          role: decoded.role || "user",
+          // email: decoded.email,
+          // role: decoded.role || "user",
         };
         next();
       } catch (jwtError) {
@@ -110,8 +110,8 @@ class AuthMiddleware {
             id: decoded.id,
             userId: decoded.id,
             nom: decoded.nom || decoded.name,
-            email: decoded.email,
-            role: decoded.role || "user",
+            // email: decoded.email,
+            // role: decoded.role || "user",
           };
         } catch (jwtError) {
           // Token invalide mais on continue
