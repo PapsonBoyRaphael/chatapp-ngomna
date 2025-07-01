@@ -139,6 +139,7 @@ const fileSchema = new mongoose.Schema(
             success: Boolean,
             error: String,
             offset: Number,
+            data: mongoose.Schema.Types.Mixed, // ✅ AJOUTER CE CHAMP MANQUANT
           },
         ],
         lastPublished: Date,
@@ -440,19 +441,41 @@ fileSchema.methods.formatFileSize = function () {
 // Publier événement Kafka - CORRECTION
 fileSchema.methods.publishKafkaEvent = async function (
   eventType,
-  additionalData = {}
+  additionalData = {},
+  saveDocument = false // ✅ NOUVEAU PARAMÈTRE
 ) {
   try {
-    // ✅ PAS DE RÉFÉRENCE EXTERNE - juste logger
-    console.log(`📤 Événement Kafka: ${eventType} pour fichier ${this._id}`);
-
-    // Enregistrer dans les métadonnées seulement
-    this.metadata.kafkaMetadata.events.push({
+    // ✅ CRÉER L'OBJET AVEC LES PROPRIÉTÉS SÉPARÉES
+    const eventEntry = {
       type: eventType,
       timestamp: new Date(),
+      success: true,
+      error: null,
+      offset: null,
       data: additionalData,
-    });
+    };
 
+    // Ajouter à la liste des événements
+    if (!this.metadata.kafkaMetadata.events) {
+      this.metadata.kafkaMetadata.events = [];
+    }
+    this.metadata.kafkaMetadata.events.push(eventEntry);
+
+    // Limiter le nombre d'événements stockés
+    if (this.metadata.kafkaMetadata.events.length > 50) {
+      this.metadata.kafkaMetadata.events =
+        this.metadata.kafkaMetadata.events.slice(-50);
+    }
+
+    // Mettre à jour lastPublished
+    this.metadata.kafkaMetadata.lastPublished = new Date();
+
+    // ✅ SAUVEGARDER SEULEMENT SI EXPLICITEMENT DEMANDÉ
+    if (saveDocument) {
+      await this.save();
+    }
+
+    console.log(`📤 Événement Kafka: ${eventType} pour fichier ${this._id}`);
     return true;
   } catch (error) {
     console.error(`❌ Erreur Kafka ${eventType}:`, error.message);
@@ -505,14 +528,13 @@ fileSchema.pre("save", function (next) {
 fileSchema.post("save", async function (doc, next) {
   try {
     if (doc.isNew) {
-      await doc.publishKafkaEvent("FILE_CREATED");
+      console.log(`💾 Nouveau fichier créé: ${doc._id}`);
     } else {
-      await doc.publishKafkaEvent("FILE_UPDATED");
+      console.log(`🔄 Fichier mis à jour: ${doc._id}`);
     }
   } catch (error) {
     console.warn("⚠️ Erreur post-save fichier:", error.message);
   }
-
   next();
 });
 

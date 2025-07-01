@@ -256,7 +256,12 @@ const startServer = async () => {
       redisClient,
       kafkaProducers?.messageProducer || null
     );
-    const fileRepository = new MongoFileRepository(redisClient);
+
+    // ✅ CORRIGER L'INJECTION DU KAFKA PRODUCER POUR LES FICHIERS
+    const fileRepository = new MongoFileRepository(
+      redisClient,
+      kafkaProducers?.fileProducer || null // ✅ UTILISER fileProducer AU LIEU DE messageProducer
+    );
 
     // ✅ LOG POUR VÉRIFIER LES OBJETS REDIS
     if (redisClient) {
@@ -303,9 +308,7 @@ const startServer = async () => {
 
     const uploadFileUseCase = new UploadFile(
       fileRepository,
-      messageRepository,
-      conversationRepository,
-      kafkaProducers?.fileProducer || null
+      kafkaProducers?.fileProducer || null // ✅ PASSER LE MÊME PRODUCER
     );
 
     const getFileUseCase = new GetFile(
@@ -327,7 +330,7 @@ const startServer = async () => {
       uploadFileUseCase,
       getFileUseCase,
       redisClient,
-      kafkaProducers?.fileProducer || null
+      kafkaProducers?.fileProducer || null // ✅ UTILISER fileProducer
     );
 
     const messageController = new MessageController(

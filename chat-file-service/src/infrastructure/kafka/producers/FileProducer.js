@@ -9,15 +9,88 @@ class FileProducer {
   constructor(producer) {
     this.producer = producer;
     this.isEnabled = !!producer;
-    this.isDevMode = process.env.NODE_ENV === "development";
+    this.topicName = "chat.files";
+    this.isConnected = false;
 
     if (this.isEnabled) {
-      console.log(
-        "✅ FileProducer initialisé pour topics: chat.files, chat.events"
-      );
+      console.log("✅ FileProducer initialisé avec topic:", this.topicName);
     } else {
       console.warn("⚠️ FileProducer initialisé sans producer Kafka");
     }
+  }
+
+  // ✅ AJOUTER LA MÉTHODE publishMessage MANQUANTE
+  async publishMessage(messageData) {
+    if (!this.isEnabled) {
+      console.warn("⚠️ FileProducer: Producer Kafka non activé");
+      return false;
+    }
+
+    if (!this.producer) {
+      console.warn("⚠️ FileProducer: Producer Kafka non disponible");
+      return false;
+    }
+
+    try {
+      // ✅ SANITISER LES DONNÉES
+      const sanitizedData = this.sanitizeDataForKafka(messageData);
+
+      // ✅ CONSTRUIRE LE MESSAGE KAFKA
+      const kafkaMessage = {
+        topic: this.topicName,
+        messages: [
+          {
+            key: sanitizedData.fileId || `file_${Date.now()}`,
+            value: JSON.stringify(sanitizedData),
+            timestamp: Date.now(),
+            headers: {
+              "content-type": "application/json",
+              "event-type": sanitizedData.eventType || "FILE_EVENT",
+              "correlation-id": uuidv4(),
+              producer: "FileProducer",
+            },
+          },
+        ],
+        acks: 1,
+        timeout: 30000,
+      };
+
+      const result = await this.producer.send(kafkaMessage);
+
+      if (result && result.length > 0) {
+        console.log(`📤 FileProducer: ${sanitizedData.eventType} publié`);
+        return true;
+      } else {
+        console.warn("⚠️ FileProducer: Aucun résultat reçu");
+        return false;
+      }
+    } catch (error) {
+      console.error("❌ Erreur FileProducer.publishMessage:", error.message);
+      return false;
+    }
+  }
+
+  // ✅ MÉTHODE UTILITAIRE POUR SANITISER LES DONNÉES
+  sanitizeDataForKafka(data) {
+    const sanitized = {};
+
+    for (const [key, value] of Object.entries(data)) {
+      if (value === null || value === undefined) {
+        sanitized[key] = "";
+      } else if (typeof value === "number") {
+        sanitized[key] = value.toString();
+      } else if (typeof value === "boolean") {
+        sanitized[key] = value.toString();
+      } else if (value instanceof Date) {
+        sanitized[key] = value.toISOString();
+      } else if (typeof value === "object") {
+        sanitized[key] = JSON.stringify(value);
+      } else {
+        sanitized[key] = String(value);
+      }
+    }
+
+    return sanitized;
   }
 
   async publishFileUpload(file, message) {

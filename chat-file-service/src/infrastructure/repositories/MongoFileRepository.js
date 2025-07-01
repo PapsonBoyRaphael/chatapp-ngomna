@@ -7,10 +7,9 @@ class MongoFileRepository {
     this.redisClient = redisClient;
     this.kafkaProducer = kafkaProducer;
     this.cachePrefix = "file:";
-    this.defaultTTL = 7200; // 2 heures
+    this.defaultTTL = 7200;
     this.maxRetries = 3;
 
-    // Métriques de performance
     this.metrics = {
       cacheHits: 0,
       cacheMisses: 0,
@@ -19,6 +18,13 @@ class MongoFileRepository {
       dbQueries: 0,
       errors: 0,
     };
+
+    console.log("✅ MongoFileRepository initialisé avec:", {
+      redisClient: !!redisClient,
+      kafkaProducer: !!kafkaProducer,
+      kafkaProducerType: kafkaProducer?.constructor?.name,
+      hasPublishMessage: typeof kafkaProducer?.publishMessage === "function",
+    });
   }
 
   // ================================
@@ -29,37 +35,50 @@ class MongoFileRepository {
     const startTime = Date.now();
 
     try {
+      // ✅ VALIDER L'OBJET FILE
+      if (!file || typeof file.validate !== "function") {
+        throw new Error("Objet File invalide ou méthode validate manquante");
+      }
+
       file.validate();
       this.metrics.dbQueries++;
 
-      const savedFile = await FileModel.findByIdAndUpdate(
-        file._id,
-        file.toObject(),
-        {
-          new: true,
-          upsert: true,
-          runValidators: true,
-        }
-      );
+      // ✅ CRÉER LE FICHIER EN BASE AVEC CREATE AU LIEU DE FINDBRIDANDUPDATE
+      const savedFile = await FileModel.create(file.toObject());
+
+      if (!savedFile) {
+        throw new Error("Échec de la sauvegarde en base de données");
+      }
 
       const processingTime = Date.now() - startTime;
 
-      // 🚀 CACHE REDIS
+      // ✅ CACHE REDIS AVEC VÉRIFICATION
       if (this.redisClient) {
         try {
           await this._cacheFile(savedFile);
+          console.log(`💾 Fichier mis en cache: ${savedFile._id}`);
         } catch (cacheError) {
           console.warn("⚠️ Erreur cache fichier:", cacheError.message);
         }
+      } else {
+        console.log(`💾 Fichier sauvegardé sans cache: ${savedFile._id}`);
       }
 
-      // 🚀 KAFKA
+      // ✅ KAFKA AVEC VÉRIFICATION DE LA MÉTHODE
       if (this.kafkaProducer) {
         try {
-          await this._publishFileEvent("FILE_SAVED", savedFile, {
-            processingTime,
-            isNew: !file._id,
-          });
+          if (typeof this.kafkaProducer.publishMessage === "function") {
+            await this._publishFileEvent("FILE_SAVED", savedFile, {
+              processingTime,
+              isNew: true,
+            });
+          } else {
+            console.warn("⚠️ KafkaProducer n'a pas la méthode publishMessage");
+            console.warn(
+              "⚠️ Méthodes disponibles:",
+              Object.getOwnPropertyNames(this.kafkaProducer)
+            );
+          }
         } catch (kafkaError) {
           console.warn("⚠️ Erreur publication fichier:", kafkaError.message);
         }
@@ -991,14 +1010,19 @@ class MongoFileRepository {
 
   async _cacheFile(file) {
     try {
+      if (!this.redisClient) {
+        console.warn("⚠️ Aucun client Redis disponible");
+        return false;
+      }
+
       const cacheKey = `${this.cachePrefix}${file._id}`;
       const cacheData = {
-        ...file,
+        ...(file.toObject ? file.toObject() : file),
         cached: true,
         cachedAt: new Date().toISOString(),
       };
 
-      // ✅ Utiliser la même logique que dans les autres méthodes
+      // ✅ UTILISER LA BONNE MÉTHODE REDIS
       if (typeof this.redisClient.setex === "function") {
         await this.redisClient.setex(
           cacheKey,
@@ -1013,11 +1037,10 @@ class MongoFileRepository {
           this.defaultTTL
         );
       } else {
-        console.warn("⚠️ Redis client ne supporte pas setex ou set");
+        console.warn("⚠️ Redis client ne supporte ni setex ni set");
         return false;
       }
 
-      console.log(`💾 Fichier mis en cache: ${file._id}`);
       return true;
     } catch (error) {
       console.warn(`⚠️ Erreur cache fichier ${file._id}:`, error.message);
@@ -1049,37 +1072,46 @@ class MongoFileRepository {
     }
   }
 
+  // ✅ S'ASSURER QUE _publishFileEvent N'INTERFÈRE PAS
   async _publishFileEvent(eventType, file, additionalData = {}) {
     try {
-      const eventData = {
-        eventType,
-        fileId: file?._id,
-        fileName: file?.originalName,
-        fileSize: file?.size,
-        mimeType: file?.mimeType,
-        uploadedBy: file?.uploadedBy,
-        conversationId: file?.conversationId,
-        messageId: file?.messageId,
-        status: file?.status,
-        timestamp: new Date().toISOString(),
-        serverId: process.env.SERVER_ID || "default",
-        ...additionalData,
-      };
-
-      if (
-        this.kafkaProducer &&
-        typeof this.kafkaProducer.publishMessage === "function"
-      ) {
-        // ✅ Passer eventData en paramètre
-        await this.kafkaProducer.publishMessage(eventData);
-      } else {
-        console.warn("⚠️ KafkaProducer ne supporte pas publishMessage");
+      if (!this.kafkaProducer) {
+        console.warn("⚠️ Aucun producer Kafka disponible");
         return false;
       }
 
-      this.metrics.kafkaEvents++;
-      console.log(`📤 Événement Kafka publié: ${eventType}`);
-      return true;
+      if (typeof this.kafkaProducer.publishMessage !== "function") {
+        console.warn(
+          "⚠️ Méthode publishMessage non disponible sur le producer"
+        );
+        return false;
+      }
+
+      const eventData = {
+        eventType,
+        fileId: file._id?.toString(),
+        fileName: file.originalName,
+        fileSize: file.size,
+        mimeType: file.mimeType,
+        uploadedBy: file.uploadedBy,
+        conversationId: file.conversationId?.toString(),
+        status: file.status,
+        timestamp: new Date().toISOString(),
+        serverId: process.env.SERVER_ID || "chat-file-1",
+        ...additionalData,
+      };
+
+      // ✅ PUBLIER SEULEMENT SUR KAFKA EXTERNE, PAS SUR LE MODÈLE
+      const result = await this.kafkaProducer.publishMessage(eventData);
+
+      if (result) {
+        this.metrics.kafkaEvents++;
+        console.log(`📤 Événement Kafka publié: ${eventType}`);
+        return true;
+      } else {
+        console.warn(`⚠️ Échec publication Kafka: ${eventType}`);
+        return false;
+      }
     } catch (error) {
       this.metrics.kafkaErrors++;
       console.error(`❌ Erreur publication Kafka ${eventType}:`, error.message);
