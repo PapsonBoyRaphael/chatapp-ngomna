@@ -161,7 +161,10 @@ const createConsumer = (kafka, topics = []) => {
     });
 
     consumer.on("consumer.crash", (payload) => {
-      console.error("❌ Consumer Kafka crash:", payload.error.message);
+      console.error(
+        "❌ Consumer Kafka crash:",
+        payload?.error?.message || payload?.error || payload
+      );
       trackConsumerConnection(consumerId, false);
     });
 

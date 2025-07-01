@@ -1,5 +1,25 @@
 const path = require("path");
 const fs = require("fs").promises;
+const multer = require("multer");
+const FileStorageService = require("../../infrastructure/services/FileStorageService");
+const UploadFile = require("../../application/use-cases/UploadFile");
+const upload = multer({ dest: "uploads/" });
+
+const config = {
+  env: process.env.NODE_ENV || "development",
+  s3Endpoint: process.env.S3_ENDPOINT || "http://localhost:9000",
+  s3AccessKeyId: process.env.S3_ACCESS_KEY || "minioadmin",
+  s3SecretAccessKey: process.env.S3_SECRET_KEY || "minioadmin",
+  s3Bucket: process.env.S3_BUCKET || "chat-files",
+  sftpConfig: {
+    host: process.env.SFTP_HOST,
+    port: process.env.SFTP_PORT || 22,
+    username: process.env.SFTP_USER,
+    password: process.env.SFTP_PASS,
+    remotePath: process.env.SFTP_REMOTE_PATH || "/uploads",
+  },
+};
+const fileStorageService = new FileStorageService(config);
 
 class FileController {
   constructor(
@@ -42,28 +62,34 @@ class FileController {
         });
       }
 
+      const remoteFileName = `${Date.now()}_${req.file.originalname}`;
+      // Upload sur MinIO ou SFTP
+      const remotePath = await fileStorageService.upload(
+        req.file.path,
+        remoteFileName
+      );
+
       const fileData = {
         originalName: req.file.originalname,
-        filename: req.file.filename,
-        path: req.file.path,
+        fileName: remoteFileName,
+        path: remotePath,
         size: req.file.size,
-        mimetype: req.file.mimetype,
+        mimeType: req.file.mimetype,
         uploadedBy: String(userId),
         conversationId: req.body.conversationId
           ? String(req.body.conversationId)
           : null,
+        url: remotePath, // ou une URL publique si besoin
       };
 
       let result;
       if (this.uploadFileUseCase) {
         result = await this.uploadFileUseCase.execute(fileData);
       } else {
-        // Fallback simple
         result = {
           id: Date.now().toString(),
           ...fileData,
           uploadedAt: new Date().toISOString(),
-          url: `/uploads/${req.file.filename}`,
         };
       }
 
@@ -78,7 +104,7 @@ class FileController {
             userId: String(userId),
             filename: fileData.originalName,
             size: String(fileData.size),
-            mimetype: fileData.mimetype,
+            mimeType: fileData.mimeType,
             conversationId: fileData.conversationId || "",
             processingTime: String(processingTime),
             timestamp: new Date().toISOString(),
@@ -119,6 +145,7 @@ class FileController {
     }
   }
 
+  // Télécharger un fichier depuis MinIO ou SFTP
   async getFile(req, res) {
     const startTime = Date.now();
 
@@ -135,22 +162,12 @@ class FileController {
 
       const processingTime = Date.now() - startTime;
 
-      // Vérifier si le fichier existe physiquement
-      const filePath = path.join(
-        __dirname,
-        "../../../uploads",
-        result.filename
+      // Utilise FileStorageService pour récupérer le fichier distant
+      const remoteFileName = result.fileName || result.filename;
+      const fileStream = await fileStorageService.download(
+        remoteFileName,
+        remoteFileName
       );
-
-      try {
-        await fs.access(filePath);
-      } catch (error) {
-        return res.status(404).json({
-          success: false,
-          message: "Fichier non trouvé sur le disque",
-          code: "FILE_NOT_FOUND_ON_DISK",
-        });
-      }
 
       // Publier événement Kafka
       if (this.kafkaProducer) {
@@ -159,7 +176,7 @@ class FileController {
             eventType: "FILE_DOWNLOADED",
             fileId: String(fileId),
             userId: String(userId),
-            filename: result.originalName || result.filename,
+            filename: result.originalName || result.fileName,
             processingTime: String(processingTime),
             timestamp: new Date().toISOString(),
           });
@@ -172,32 +189,14 @@ class FileController {
       }
 
       // Servir le fichier
-      res.download(
-        filePath,
-        result.originalName || result.filename,
-        (error) => {
-          if (error) {
-            console.error("❌ Erreur envoi fichier:", error);
-            if (!res.headersSent) {
-              res.status(500).json({
-                success: false,
-                message: "Erreur lors de l'envoi du fichier",
-              });
-            }
-          }
-        }
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${result.originalName || result.fileName}"`
       );
+      fileStream.pipe(res);
     } catch (error) {
       const processingTime = Date.now() - startTime;
       console.error("❌ Erreur récupération fichier:", error);
-
-      if (error.message === "Fichier non trouvé") {
-        return res.status(404).json({
-          success: false,
-          message: "Fichier non trouvé",
-          code: "FILE_NOT_FOUND",
-        });
-      }
 
       res.status(500).json({
         success: false,
@@ -266,6 +265,7 @@ class FileController {
     }
   }
 
+  // Supprimer un fichier sur MinIO ou SFTP
   async deleteFile(req, res) {
     const startTime = Date.now();
 
@@ -281,19 +281,29 @@ class FileController {
         });
       }
 
-      // Pour l'instant, simuler la suppression
-      const result = {
-        id: fileId,
-        deleted: true,
-        deletedBy: userId,
-        deletedAt: new Date().toISOString(),
-      };
+      // Récupérer les métadonnées pour obtenir le nom du fichier distant
+      let result;
+      if (this.getFileUseCase) {
+        result = await this.getFileUseCase.execute(fileId, String(userId));
+      } else {
+        throw new Error("Service de récupération de fichiers non disponible");
+      }
+
+      const remoteFileName = result.fileName || result.filename;
+      await fileStorageService.delete(remoteFileName);
+
+      // (Optionnel) Supprimer les métadonnées en base via un use-case
 
       const processingTime = Date.now() - startTime;
 
       res.json({
         success: true,
-        data: result,
+        data: {
+          id: fileId,
+          deleted: true,
+          deletedBy: userId,
+          deletedAt: new Date().toISOString(),
+        },
         message: "Fichier supprimé avec succès",
         metadata: {
           processingTime: `${processingTime}ms`,
@@ -429,6 +439,42 @@ class FileController {
       });
     }
   }
+
+  static uploadFile = [
+    upload.single("file"),
+    async (req, res) => {
+      try {
+        const file = req.file;
+        if (!file)
+          return res
+            .status(400)
+            .json({ success: false, message: "Aucun fichier envoyé" });
+
+        const remoteFileName = `${Date.now()}_${file.originalname}`;
+        const remotePath = await fileStorageService.upload(
+          file.path,
+          remoteFileName
+        );
+
+        // Utilisation du use-case UploadFile pour sauvegarder les métadonnées
+        const uploadFileUseCase = new UploadFile(/* repo, ... */);
+        const fileMeta = await uploadFileUseCase.execute({
+          originalName: file.originalname,
+          fileName: remoteFileName,
+          mimeType: file.mimetype,
+          size: file.size,
+          path: remotePath,
+          url: remotePath, // ou une URL publique si besoin
+          uploadedBy: req.user?.id || req.user?.userId,
+          // ...autres champs nécessaires
+        });
+
+        res.json({ success: true, data: fileMeta });
+      } catch (err) {
+        res.status(500).json({ success: false, message: err.message });
+      }
+    },
+  ];
 }
 
 module.exports = FileController;

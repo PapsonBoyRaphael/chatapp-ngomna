@@ -410,10 +410,50 @@ class ChatHandler {
           );
           if (Array.isArray(conversationIds)) {
             for (const convId of conversationIds) {
-              socket.join(`conversation_${convId}`);
+              const roomName = `conversation_${convId}`;
+              socket.join(roomName);
               console.log(
-                `👥 Utilisateur ${userIdString} rejoint room conversation_${convId}`
+                `👥 Utilisateur ${userIdString} rejoint room ${roomName}`
               );
+
+              // ✅ Gérer la room dans Redis via RoomManager
+              if (
+                this.roomManager &&
+                typeof this.roomManager.createRoom === "function"
+              ) {
+                // Créer la room conversation si elle n'existe pas
+                this.roomManager
+                  .createRoom(roomName, {
+                    type: "CONVERSATION",
+                    description: `Room pour la conversation ${convId}`,
+                    isPrivate: true,
+                    maxUsers: 100,
+                  })
+                  .catch((error) => {
+                    console.warn(
+                      `⚠️ Erreur création room conversation dans Redis:`,
+                      error.message
+                    );
+                  });
+              }
+              if (
+                this.roomManager &&
+                typeof this.roomManager.addUserToRoom === "function"
+              ) {
+                // Ajouter l'utilisateur à la room dans Redis
+                this.roomManager
+                  .addUserToRoom(roomName, userIdString, {
+                    matricule: matriculeString,
+                    joinedAt: new Date(),
+                    conversationId: convId,
+                  })
+                  .catch((error) => {
+                    console.warn(
+                      `⚠️ Erreur ajout utilisateur à la room conversation dans Redis:`,
+                      error.message
+                    );
+                  });
+              }
             }
           }
         } catch (err) {

@@ -1,4 +1,4 @@
-const File = require("../mongodb/models/FileModel");
+const FileModel = require("../mongodb/models/FileModel");
 const fs = require("fs-extra");
 const path = require("path");
 
@@ -32,7 +32,7 @@ class MongoFileRepository {
       file.validate();
       this.metrics.dbQueries++;
 
-      const savedFile = await File.findByIdAndUpdate(
+      const savedFile = await FileModel.findByIdAndUpdate(
         file._id,
         file.toObject(),
         {
@@ -99,7 +99,7 @@ class MongoFileRepository {
       }
 
       this.metrics.dbQueries++;
-      const file = await File.findById(fileId).lean();
+      const file = await FileModel.findById(fileId).lean();
 
       if (!file) {
         throw new Error(`Fichier ${fileId} non trouvé`);
@@ -172,12 +172,12 @@ class MongoFileRepository {
 
       this.metrics.dbQueries += 2; // count + find
       const [files, totalCount] = await Promise.all([
-        File.find(filter)
+        FileModel.find(filter)
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(limit)
           .lean(),
-        File.countDocuments(filter),
+        FileModel.countDocuments(filter),
       ]);
 
       const result = {
@@ -201,11 +201,28 @@ class MongoFileRepository {
       // Mettre en cache
       if (this.redisClient && useCache) {
         try {
-          await this.redisClient.setex(
-            cacheKey,
-            this.defaultTTL,
-            JSON.stringify(result)
-          );
+          if (
+            this.redisClient &&
+            typeof this.redisClient.setex === "function"
+          ) {
+            await this.redisClient.setex(
+              cacheKey,
+              this.defaultTTL,
+              JSON.stringify(result)
+            );
+          } else if (
+            this.redisClient &&
+            typeof this.redisClient.set === "function"
+          ) {
+            await this.redisClient.set(
+              cacheKey,
+              JSON.stringify(result),
+              "EX",
+              3600
+            );
+          } else {
+            console.warn("⚠️ Redis client ne supporte pas setex ou set");
+          }
         } catch (cacheError) {
           console.warn(
             "⚠️ Erreur cache fichiers conversation:",
@@ -275,12 +292,12 @@ class MongoFileRepository {
 
       this.metrics.dbQueries += 2;
       const [files, totalCount] = await Promise.all([
-        File.find(filter)
+        FileModel.find(filter)
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(limit)
           .lean(),
-        File.countDocuments(filter),
+        FileModel.countDocuments(filter),
       ]);
 
       const result = {
@@ -309,11 +326,28 @@ class MongoFileRepository {
       // Mettre en cache
       if (this.redisClient && useCache) {
         try {
-          await this.redisClient.setex(
-            cacheKey,
-            this.defaultTTL,
-            JSON.stringify(result)
-          );
+          if (
+            this.redisClient &&
+            typeof this.redisClient.setex === "function"
+          ) {
+            await this.redisClient.setex(
+              cacheKey,
+              this.defaultTTL,
+              JSON.stringify(result)
+            );
+          } else if (
+            this.redisClient &&
+            typeof this.redisClient.set === "function"
+          ) {
+            await this.redisClient.set(
+              cacheKey,
+              JSON.stringify(result),
+              "EX",
+              3600
+            );
+          } else {
+            console.warn("⚠️ Redis client ne supporte pas setex ou set");
+          }
         } catch (cacheError) {
           console.warn(
             "⚠️ Erreur cache fichiers utilisateur:",
@@ -368,7 +402,7 @@ class MongoFileRepository {
       }
 
       this.metrics.dbQueries++;
-      const file = await File.findByIdAndUpdate(fileId, updateData, {
+      const file = await FileModel.findByIdAndUpdate(fileId, updateData, {
         new: true,
         upsert: false,
       });
@@ -450,7 +484,7 @@ class MongoFileRepository {
       }
 
       this.metrics.dbQueries++;
-      const file = await File.findByIdAndUpdate(
+      const file = await FileModel.findByIdAndUpdate(
         fileId,
         { $set: updateData },
         { new: true }
@@ -510,7 +544,7 @@ class MongoFileRepository {
       };
 
       this.metrics.dbQueries++;
-      const file = await File.findByIdAndUpdate(
+      const file = await FileModel.findByIdAndUpdate(
         fileId,
         {
           $set: updateData,
@@ -575,7 +609,7 @@ class MongoFileRepository {
       if (softDelete) {
         // Soft delete - marquer comme supprimé
         this.metrics.dbQueries++;
-        file = await File.findByIdAndUpdate(
+        file = await FileModel.findByIdAndUpdate(
           fileId,
           {
             $set: {
@@ -589,7 +623,7 @@ class MongoFileRepository {
       } else {
         // Hard delete - supprimer complètement
         this.metrics.dbQueries++;
-        file = await File.findByIdAndDelete(fileId);
+        file = await FileModel.findByIdAndDelete(fileId);
       }
 
       if (!file) {
@@ -699,8 +733,8 @@ class MongoFileRepository {
 
       this.metrics.dbQueries += 2;
       const [files, totalCount] = await Promise.all([
-        File.find(filter).sort(sortObj).skip(skip).limit(limit).lean(),
-        File.countDocuments(filter),
+        FileModel.find(filter).sort(sortObj).skip(skip).limit(limit).lean(),
+        FileModel.countDocuments(filter),
       ]);
 
       const result = {
@@ -726,11 +760,28 @@ class MongoFileRepository {
       // Mettre en cache
       if (this.redisClient && useCache) {
         try {
-          await this.redisClient.setex(
-            cacheKey,
-            900, // 15 minutes pour les recherches
-            JSON.stringify(result)
-          );
+          if (
+            this.redisClient &&
+            typeof this.redisClient.setex === "function"
+          ) {
+            await this.redisClient.setex(
+              cacheKey,
+              3600,
+              JSON.stringify(result)
+            );
+          } else if (
+            this.redisClient &&
+            typeof this.redisClient.set === "function"
+          ) {
+            await this.redisClient.set(
+              cacheKey,
+              JSON.stringify(result),
+              "EX",
+              3600
+            );
+          } else {
+            console.warn("⚠️ Redis client ne supporte pas setex ou set");
+          }
         } catch (cacheError) {
           console.warn("⚠️ Erreur cache recherche:", cacheError.message);
         }
@@ -768,7 +819,7 @@ class MongoFileRepository {
       }
 
       this.metrics.dbQueries++;
-      const stats = await File.aggregate([
+      const stats = await FileModel.aggregate([
         { $match: { status: { $ne: "DELETED" }, ...filter } },
         {
           $group: {
@@ -891,7 +942,7 @@ class MongoFileRepository {
       };
 
       this.metrics.dbQueries++;
-      const result = await File.updateMany(
+      const result = await FileModel.updateMany(
         { _id: { $in: fileIds } },
         { $set: updateData }
       );
@@ -947,11 +998,24 @@ class MongoFileRepository {
         cachedAt: new Date().toISOString(),
       };
 
-      await this.redisClient.setex(
-        cacheKey,
-        this.defaultTTL,
-        JSON.stringify(cacheData)
-      );
+      // ✅ Utiliser la même logique que dans les autres méthodes
+      if (typeof this.redisClient.setex === "function") {
+        await this.redisClient.setex(
+          cacheKey,
+          this.defaultTTL,
+          JSON.stringify(cacheData)
+        );
+      } else if (typeof this.redisClient.set === "function") {
+        await this.redisClient.set(
+          cacheKey,
+          JSON.stringify(cacheData),
+          "EX",
+          this.defaultTTL
+        );
+      } else {
+        console.warn("⚠️ Redis client ne supporte pas setex ou set");
+        return false;
+      }
 
       console.log(`💾 Fichier mis en cache: ${file._id}`);
       return true;
@@ -1002,29 +1066,23 @@ class MongoFileRepository {
         ...additionalData,
       };
 
-      await this.kafkaProducer.publishFileUpload(eventData);
-      this.metrics.kafkaEvents++;
+      if (
+        this.kafkaProducer &&
+        typeof this.kafkaProducer.publishMessage === "function"
+      ) {
+        // ✅ Passer eventData en paramètre
+        await this.kafkaProducer.publishMessage(eventData);
+      } else {
+        console.warn("⚠️ KafkaProducer ne supporte pas publishMessage");
+        return false;
+      }
 
+      this.metrics.kafkaEvents++;
       console.log(`📤 Événement Kafka publié: ${eventType}`);
       return true;
     } catch (error) {
       this.metrics.kafkaErrors++;
       console.error(`❌ Erreur publication Kafka ${eventType}:`, error.message);
-
-      // Retry logic (optionnel)
-      if (error.retriable !== false && this.maxRetries > 0) {
-        setTimeout(async () => {
-          try {
-            await this._publishFileEvent(eventType, file, additionalData);
-          } catch (retryError) {
-            console.error(
-              `❌ Retry Kafka ${eventType} échoué:`,
-              retryError.message
-            );
-          }
-        }, 1000);
-      }
-
       return false;
     }
   }
@@ -1205,7 +1263,7 @@ class MongoFileRepository {
 
     // Test MongoDB
     try {
-      await File.findOne().limit(1);
+      await FileModel.findOne().limit(1);
       health.checks.mongodb = "healthy";
     } catch (error) {
       health.checks.mongodb = "unhealthy";

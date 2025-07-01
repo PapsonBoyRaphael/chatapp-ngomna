@@ -1,0 +1,35 @@
+Pour créer un fichier et ajouter directement son contenu en une seule commande sous Linux, vous pouvez utiliser l'une des méthodes suivantes :
+
+### 1. Avec `echo` et la redirection (`>`)
+```bash
+echo "Contenu du fichier" > nouveau_fichier.txt
+```
+
+### 2. Avec `printf` (pour un meilleur contrôle du formatage)
+```bash
+printf "Ligne 1\nLigne 2\n" > fichier.txt
+```
+
+### 3. Avec `cat` et la redirection (utile pour un contenu multiligne)
+```bash
+cat > fichier.txt <<EOF
+Ceci est la ligne 1.
+Ceci est la ligne 2.
+EOF
+```
+
+### 4. Avec `tee` (utile pour écrire dans un fichier nécessitant des droits élevés)
+```bash
+echo "Contenu" | sudo tee /chemin/vers/fichier.txt >/dev/null
+```
+
+### Explications :
+- `>` : Crée ou écrase le fichier avec le contenu.
+- `>>` : Ajoute le contenu à la fin du fichier (sans écraser).
+- `<<EOF` : Permet de saisir du texte multiligne jusqu'à ce que "EOF" soit rencontré seul sur une ligne.
+
+### Exemple pratique :
+```bash
+echo "Bonjour, ceci est mon fichier." > ~/monfichier.txt
+```
+Cette commande crée un fichier `monfichier.txt` dans votre répertoire personnel avec le texte spécifié.

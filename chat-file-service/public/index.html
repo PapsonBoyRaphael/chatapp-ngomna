@@ -300,6 +300,36 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
             </div>
           </div>
         </div>
+
+        <!-- Section Upload de Fichier -->
+        <div class="section file-upload-section">
+          <h2>📁 Envoyer un Fichier</h2>
+          <form id="fileUploadForm" enctype="multipart/form-data">
+            <div class="form-group">
+              <input type="file" id="fileInput" name="file" required />
+              <input
+                type="text"
+                id="fileConversationId"
+                placeholder="ID Conversation (optionnel)"
+              />
+              <button type="submit" class="btn-primary">
+                ⬆️ Envoyer Fichier
+              </button>
+            </div>
+            <div class="status" id="fileUploadStatus"></div>
+          </form>
+        </div>
+
+        <!-- Section Mes Fichiers -->
+        <div class="section my-files-section">
+          <h2>📁 Mes Fichiers</h2>
+          <div class="button-grid">
+            <button onclick="fetchMyFiles()" class="btn-secondary">
+              📁 Mes Fichiers
+            </button>
+          </div>
+          <div id="myFilesList"></div>
+        </div>
       </div>
 
       <!-- Logs en temps réel -->

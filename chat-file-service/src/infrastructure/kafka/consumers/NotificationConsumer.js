@@ -64,7 +64,10 @@ class NotificationConsumer {
     });
 
     this.consumer.on("consumer.crash", (payload) => {
-      console.error("❌ NotificationConsumer crash:", payload.error.message);
+      console.error(
+        "❌ Consumer Kafka crash:",
+        payload?.error?.message || payload?.error || payload
+      );
       this.isConnected = false;
       this.isRebalancing = false;
 

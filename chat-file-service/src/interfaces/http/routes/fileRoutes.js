@@ -17,25 +17,15 @@ const storage = multer.diskStorage({
   },
 });
 
+// Supprimer toute restriction sur le type de fichier
+const fileFilter = (req, file, cb) => {
+  cb(null, true); // Accepte tous les fichiers
+};
+
 const upload = multer({
   storage: storage,
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB
-  },
-  fileFilter: (req, file, cb) => {
-    // Types de fichiers autorisés
-    const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx|txt|mp4|avi/;
-    const extName = allowedTypes.test(
-      path.extname(file.originalname).toLowerCase()
-    );
-    const mimeType = allowedTypes.test(file.mimetype);
-
-    if (mimeType && extName) {
-      return cb(null, true);
-    } else {
-      cb(new Error("Type de fichier non autorisé"));
-    }
-  },
+  // limits: { fileSize: ... }, // tu peux garder la limite de taille si tu veux
+  fileFilter: fileFilter,
 });
 
 function createFileRoutes(fileController) {

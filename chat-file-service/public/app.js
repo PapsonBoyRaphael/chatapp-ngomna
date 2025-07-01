@@ -29,6 +29,11 @@ document.addEventListener("DOMContentLoaded", () => {
   log("🚀 Initialisation du testeur Socket.IO", "info");
   initializeSocket();
   setupPingInterval();
+
+  const fileForm = document.getElementById("fileUploadForm");
+  if (fileForm) {
+    fileForm.addEventListener("submit", handleFileUpload);
+  }
 });
 
 function initializeSocket() {
@@ -1373,3 +1378,78 @@ setInterval(() => {
     updateTypingDisplay();
   }
 }, 5000); // Vérifier toutes les 5 secondes
+
+async function handleFileUpload(e) {
+  e.preventDefault();
+  const fileInput = document.getElementById("fileInput");
+  const conversationIdInput = document.getElementById("fileConversationId");
+  const statusDiv = document.getElementById("fileUploadStatus");
+
+  if (!fileInput.files.length) {
+    statusDiv.textContent = "❌ Aucun fichier sélectionné";
+    statusDiv.className = "status error";
+    return;
+  }
+
+  const file = fileInput.files[0];
+  const conversationId = conversationIdInput.value.trim();
+
+  const formData = new FormData();
+  formData.append("file", file);
+  if (conversationId) formData.append("conversationId", conversationId);
+
+  statusDiv.textContent = "⏳ Upload en cours...";
+  statusDiv.className = "status info";
+
+  // 🔽 AJOUT : Récupérer le token depuis le cookie
+  function getCookie(name) {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop().split(";").shift();
+  }
+  const token = getCookie("token");
+
+  try {
+    const res = await fetch("/files/upload", {
+      method: "POST",
+      body: formData,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    const data = await res.json();
+    if (data.success) {
+      statusDiv.textContent = "✅ Fichier envoyé avec succès";
+      statusDiv.className = "status success";
+      log("✅ Fichier uploadé", "success", data.data);
+    } else {
+      statusDiv.textContent = "❌ " + (data.message || "Erreur upload");
+      statusDiv.className = "status error";
+      log("❌ Erreur upload fichier", "error", data);
+    }
+  } catch (err) {
+    statusDiv.textContent = "❌ Erreur réseau";
+    statusDiv.className = "status error";
+    log("❌ Erreur réseau upload fichier", "error", err);
+  }
+}
+
+async function fetchMyFiles() {
+  const res = await fetch("/files");
+  const data = await res.json();
+  if (data.success && data.data.files) {
+    const list = data.data.files
+      .map(
+        (f) =>
+          `<li>
+            <a href="${f.url || "/files/" + f.id}" target="_blank">${
+            f.originalName
+          }</a>
+            (${f.size} octets)
+          </li>`
+      )
+      .join("");
+    document.getElementById("myFilesList").innerHTML = `<ul>${list}</ul>`;
+  } else {
+    document.getElementById("myFilesList").textContent =
+      "Aucun fichier trouvé ou erreur.";
+  }
+}
