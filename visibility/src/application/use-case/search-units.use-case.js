@@ -9,3 +9,5 @@ class SearchUnitsUseCase {
 }
 
 module.exports = SearchUnitsUseCase;
+// This use case is responsible for searching units by ministere.
+// It interacts with the visibility repository to fetch the units.
