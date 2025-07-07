@@ -11,20 +11,9 @@ try {
   console.warn("⚠️ authMiddleware non trouvé, utilisation du fallback");
   authMiddleware = {
     authenticate: (req, res, next) => {
-      // Mode développement - utilisateur fictif
-      req.user = {
-        id: req.headers["user-id"] || "dev-user-123",
-        name: req.headers["user-name"] || "Dev User",
-        // email: "dev@example.com",
-      };
       next();
     },
     validateToken: (req, res, next) => {
-      req.user = {
-        id: req.headers["user-id"] || "dev-user-123",
-        name: req.headers["user-name"] || "Dev User",
-        // email: "dev@example.com",
-      };
       next();
     },
   };

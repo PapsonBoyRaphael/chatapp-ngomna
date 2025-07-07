@@ -3,9 +3,14 @@ const fs = require("fs-extra");
 const path = require("path");
 
 class MongoFileRepository {
-  constructor(redisClient = null, kafkaProducer = null) {
+  constructor(
+    redisClient = null,
+    kafkaProducer = null,
+    thumbnailService = null
+  ) {
     this.redisClient = redisClient;
     this.kafkaProducer = kafkaProducer;
+    this.thumbnailService = thumbnailService; // ✅ NOUVEAU
     this.cachePrefix = "file:";
     this.defaultTTL = 7200;
     this.maxRetries = 3;
@@ -51,6 +56,20 @@ class MongoFileRepository {
       }
 
       const processingTime = Date.now() - startTime;
+
+      // ✅ DÉCLENCHER LA GÉNÉRATION DE THUMBNAILS SI C'EST UNE IMAGE
+      if (
+        this.thumbnailService &&
+        this.thumbnailService.isImageFile(savedFile.mimeType)
+      ) {
+        // Traitement asynchrone en arrière-plan
+        this.processThumbnailsAsync(savedFile).catch((error) => {
+          console.error(
+            `❌ Erreur traitement thumbnails ${savedFile._id}:`,
+            error
+          );
+        });
+      }
 
       // ✅ CACHE REDIS AVEC VÉRIFICATION
       if (this.redisClient) {
@@ -1305,6 +1324,98 @@ class MongoFileRepository {
     health.metrics = this.getMetrics();
 
     return health;
+  }
+
+  // ✅ NOUVELLE MÉTHODE POUR TRAITEMENT ASYNCHRONE
+  async processThumbnailsAsync(savedFile) {
+    try {
+      console.log(
+        `🖼️ Début génération thumbnails pour ${savedFile.originalName}`
+      );
+
+      // Télécharger l'image depuis MinIO/SFTP
+      const tempImagePath =
+        await this.thumbnailService.downloadImageForProcessing(savedFile.path);
+
+      // Générer les thumbnails
+      const thumbnails = await this.thumbnailService.generateThumbnails(
+        tempImagePath,
+        savedFile.originalName,
+        savedFile._id
+      );
+
+      // Mettre à jour le fichier en base avec les thumbnails
+      await this.updateThumbnails(savedFile._id, thumbnails);
+
+      // Nettoyer le fichier temporaire
+      await fs.unlink(tempImagePath);
+
+      console.log(`✅ Thumbnails générés et sauvegardés pour ${savedFile._id}`);
+    } catch (error) {
+      // Marquer le traitement comme échoué
+      await this.markThumbnailProcessingFailed(savedFile._id, error);
+      console.error(`❌ Échec génération thumbnails ${savedFile._id}:`, error);
+    }
+  }
+
+  // ✅ NOUVELLE MÉTHODE POUR METTRE À JOUR LES THUMBNAILS
+  async updateThumbnails(fileId, thumbnails) {
+    try {
+      const updateData = {
+        "metadata.processing.thumbnailGenerated": true,
+        "metadata.processing.thumbnails": thumbnails,
+        "metadata.processing.status": "completed",
+        "metadata.processing.processed": true,
+        "metadata.processing.processedAt": new Date(),
+        // URL du thumbnail principal (medium par défaut)
+        "metadata.processing.thumbnailUrl":
+          thumbnails.find((t) => t.size === "medium")?.url ||
+          thumbnails[0]?.url,
+        updatedAt: new Date(),
+      };
+
+      const updatedFile = await FileModel.findByIdAndUpdate(
+        fileId,
+        { $set: updateData },
+        { new: true }
+      );
+
+      // Invalider le cache
+      if (this.redisClient) {
+        await this._invalidateFileCache(fileId);
+      }
+
+      // Publier événement Kafka
+      if (this.kafkaProducer) {
+        await this._publishFileEvent("THUMBNAILS_GENERATED", updatedFile, {
+          thumbnailCount: thumbnails.length,
+          sizes: thumbnails.map((t) => t.size),
+        });
+      }
+
+      return updatedFile;
+    } catch (error) {
+      console.error(`❌ Erreur mise à jour thumbnails ${fileId}:`, error);
+      throw error;
+    }
+  }
+
+  // ✅ NOUVELLE MÉTHODE POUR MARQUER L'ÉCHEC
+  async markThumbnailProcessingFailed(fileId, error) {
+    try {
+      await FileModel.findByIdAndUpdate(fileId, {
+        $set: {
+          "metadata.processing.status": "failed",
+          "metadata.processing.processingErrors": [error.message],
+          updatedAt: new Date(),
+        },
+      });
+    } catch (updateError) {
+      console.error(
+        `❌ Erreur marking thumbnail failed ${fileId}:`,
+        updateError
+      );
+    }
   }
 }
 

@@ -156,6 +156,49 @@ function createFileRoutes(fileController) {
       }
     );
 
+    // ✅ AJOUTER CETTE ROUTE
+    // GET /files/:fileId/thumbnail/:size - Récupérer un thumbnail
+    router.get(
+      "/:fileId/thumbnail/:size?",
+      validationMiddleware.validateMongoId("fileId"),
+      async (req, res) => {
+        try {
+          const { fileId, size = "medium" } = req.params;
+
+          // Récupérer les métadonnées du fichier
+          const file = await fileController.getFileMetadata(req, res);
+
+          if (!file.metadata.processing.thumbnailGenerated) {
+            return res.status(404).json({
+              success: false,
+              message: "Thumbnail non disponible",
+            });
+          }
+
+          // Trouver le thumbnail de la taille demandée
+          const thumbnail = file.metadata.processing.thumbnails?.find(
+            (t) => t.size === size
+          );
+
+          if (!thumbnail) {
+            return res.status(404).json({
+              success: false,
+              message: `Thumbnail taille ${size} non trouvé`,
+            });
+          }
+
+          // Rediriger vers l'URL du thumbnail
+          res.redirect(thumbnail.url);
+        } catch (error) {
+          console.error("❌ Erreur récupération thumbnail:", error);
+          res.status(500).json({
+            success: false,
+            message: "Erreur lors de la récupération du thumbnail",
+          });
+        }
+      }
+    );
+
     console.log("✅ Routes de fichiers configurées");
   } catch (error) {
     console.error("❌ Erreur configuration routes fichiers:", error);

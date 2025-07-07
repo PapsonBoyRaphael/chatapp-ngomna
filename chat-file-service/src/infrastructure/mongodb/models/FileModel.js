@@ -170,8 +170,22 @@ const fileSchema = new mongoose.Schema(
           type: Boolean,
           default: false,
         },
-        thumbnailPath: String,
-        thumbnailUrl: String,
+        thumbnailPath: String, // Chemin du thumbnail principal
+        thumbnailUrl: String, // URL du thumbnail principal
+        // ✅ NOUVEAU : Stocker tous les thumbnails
+        thumbnails: [
+          {
+            size: {
+              type: String,
+              enum: ["small", "medium", "large"],
+            },
+            width: Number,
+            height: Number,
+            path: String,
+            url: String,
+            fileName: String,
+          },
+        ],
         compressed: {
           type: Boolean,
           default: false,

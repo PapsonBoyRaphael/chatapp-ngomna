@@ -733,3 +733,118 @@ button:hover:before {
     transform: scale(1.1);
   }
 }
+
+/* ✅ AJOUTER À LA FIN DU FICHIER CSS */
+
+/* Styles pour la liste des fichiers */
+.files-list {
+  margin-top: 1rem;
+}
+
+.files-header {
+  background: var(--bg-secondary);
+  padding: 0.5rem 1rem;
+  border-radius: 6px 6px 0 0;
+  border-bottom: 1px solid var(--border-color);
+  font-weight: 600;
+}
+
+.files-grid {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--border-color);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+}
+
+.file-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color);
+  transition: background-color 0.2s ease;
+}
+
+.file-item:hover {
+  background-color: var(--bg-secondary);
+}
+
+.file-item:last-child {
+  border-bottom: none;
+}
+
+.file-info {
+  flex: 1;
+}
+
+.file-link {
+  color: var(--primary-color);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.file-link:hover {
+  text-decoration: underline;
+}
+
+.file-meta {
+  margin-top: 0.25rem;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  display: flex;
+  gap: 1rem;
+}
+
+.file-size {
+  font-weight: 500;
+}
+
+.file-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.btn-mini {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border-color);
+  background: white;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-mini:hover {
+  background: var(--bg-secondary);
+}
+
+.btn-mini.btn-danger {
+  color: var(--danger-color);
+  border-color: var(--danger-color);
+}
+
+.btn-mini.btn-danger:hover {
+  background: var(--danger-color);
+  color: white;
+}
+
+.loading {
+  text-align: center;
+  padding: 2rem;
+  color: var(--text-muted);
+}
+
+.error-state {
+  text-align: center;
+  padding: 2rem;
+  color: var(--danger-color);
+}
+
+.error-state i {
+  font-size: 2rem;
+  margin-bottom: 1rem;
+  display: block;
+}

@@ -22,6 +22,9 @@ const connectDB = require("./infrastructure/mongodb/connection");
 const redisConfig = require("./infrastructure/redis/redisConfig");
 const kafkaConfig = require("./infrastructure/kafka/config/kafkaConfig");
 
+const ThumbnailService = require("./infrastructure/services/ThumbnailService");
+const FileStorageService = require("./infrastructure/services/FileStorageService");
+
 // Gestionnaires Redis optionnels
 const OnlineUserManager = require("./infrastructure/redis/OnlineUserManager");
 const RoomManager = require("./infrastructure/redis/RoomManager");
@@ -249,6 +252,31 @@ const startServer = async () => {
     }
 
     // ===============================
+    // 5.5 INITIALISATION SERVICES FICHIERS
+    // ===============================
+
+    // ✅ INITIALISER LE SERVICE DE STOCKAGE DE FICHIERS
+    const fileStorageService = new FileStorageService({
+      env: process.env.NODE_ENV || "development",
+      s3Endpoint: process.env.S3_ENDPOINT || "http://localhost:9000",
+      s3AccessKeyId: process.env.S3_ACCESS_KEY || "minioadmin",
+      s3SecretAccessKey: process.env.S3_SECRET_KEY || "minioadmin",
+      s3Bucket: process.env.S3_BUCKET || "chat-files",
+      sftpConfig: {
+        host: process.env.SFTP_HOST,
+        port: process.env.SFTP_PORT || 22,
+        username: process.env.SFTP_USER,
+        password: process.env.SFTP_PASS,
+        remotePath: process.env.SFTP_REMOTE_PATH || "/uploads",
+      },
+    });
+
+    // ✅ INITIALISER LE SERVICE DE THUMBNAILS
+    const thumbnailService = new ThumbnailService(fileStorageService);
+
+    console.log("✅ Services de fichiers initialisés");
+
+    // ===============================
     // 6. INITIALISATION REPOSITORIES
     // ===============================
     const messageRepository = new MongoMessageRepository(redisClient);
@@ -257,10 +285,11 @@ const startServer = async () => {
       kafkaProducers?.messageProducer || null
     );
 
-    // ✅ CORRIGER L'INJECTION DU KAFKA PRODUCER POUR LES FICHIERS
+    // ✅ CORRIGER L'INJECTION DES SERVICES
     const fileRepository = new MongoFileRepository(
       redisClient,
-      kafkaProducers?.fileProducer || null // ✅ UTILISER fileProducer AU LIEU DE messageProducer
+      kafkaProducers?.fileProducer || null,
+      thumbnailService // ✅ MAINTENANT DÉFINI
     );
 
     // ✅ LOG POUR VÉRIFIER LES OBJETS REDIS
@@ -330,7 +359,8 @@ const startServer = async () => {
       uploadFileUseCase,
       getFileUseCase,
       redisClient,
-      kafkaProducers?.fileProducer || null // ✅ UTILISER fileProducer
+      kafkaProducers?.fileProducer || null,
+      fileStorageService // ✅ PASSER LE SERVICE AU CONTRÔLEUR
     );
 
     const messageController = new MessageController(

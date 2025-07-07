@@ -1,43 +1,29 @@
 const path = require("path");
 const fs = require("fs").promises;
 const multer = require("multer");
-const FileStorageService = require("../../infrastructure/services/FileStorageService");
 const UploadFile = require("../../application/use-cases/UploadFile");
 const upload = multer({ dest: "uploads/" });
-
-const config = {
-  env: process.env.NODE_ENV || "development",
-  s3Endpoint: process.env.S3_ENDPOINT || "http://localhost:9000",
-  s3AccessKeyId: process.env.S3_ACCESS_KEY || "minioadmin",
-  s3SecretAccessKey: process.env.S3_SECRET_KEY || "minioadmin",
-  s3Bucket: process.env.S3_BUCKET || "chat-files",
-  sftpConfig: {
-    host: process.env.SFTP_HOST,
-    port: process.env.SFTP_PORT || 22,
-    username: process.env.SFTP_USER,
-    password: process.env.SFTP_PASS,
-    remotePath: process.env.SFTP_REMOTE_PATH || "/uploads",
-  },
-};
-const fileStorageService = new FileStorageService(config);
 
 class FileController {
   constructor(
     uploadFileUseCase,
     getFileUseCase,
     redisClient = null,
-    kafkaProducer = null
+    kafkaProducer = null,
+    fileStorageService = null // ✅ RECEVOIR LE SERVICE EN PARAMÈTRE
   ) {
     this.uploadFileUseCase = uploadFileUseCase;
     this.getFileUseCase = getFileUseCase;
     this.redisClient = redisClient;
     this.kafkaProducer = kafkaProducer;
+    this.fileStorageService = fileStorageService; // ✅ STOCKER LE SERVICE
 
     console.log("✅ FileController initialisé avec:", {
       uploadFileUseCase: !!this.uploadFileUseCase,
       getFileUseCase: !!this.getFileUseCase,
       redisClient: !!this.redisClient,
       kafkaProducer: !!this.kafkaProducer,
+      fileStorageService: !!this.fileStorageService, // ✅ VÉRIFIER LE SERVICE
     });
   }
 
@@ -53,6 +39,11 @@ class FileController {
         });
       }
 
+      // ✅ VÉRIFIER QUE LE SERVICE EST DISPONIBLE
+      if (!this.fileStorageService) {
+        throw new Error("Service de stockage de fichiers non disponible");
+      }
+
       const userId = req.user?.id || req.user?.userId;
       if (!userId) {
         return res.status(401).json({
@@ -63,8 +54,9 @@ class FileController {
       }
 
       const remoteFileName = `${Date.now()}_${req.file.originalname}`;
-      // Upload sur MinIO ou SFTP
-      const remotePath = await fileStorageService.upload(
+
+      // ✅ UTILISER LE SERVICE INJECTÉ
+      const remotePath = await this.fileStorageService.upload(
         req.file.path,
         remoteFileName
       );
@@ -160,11 +152,16 @@ class FileController {
         throw new Error("Service de récupération de fichiers non disponible");
       }
 
+      // ✅ VÉRIFIER QUE LE SERVICE EST DISPONIBLE
+      if (!this.fileStorageService) {
+        throw new Error("Service de stockage de fichiers non disponible");
+      }
+
       const processingTime = Date.now() - startTime;
 
-      // Utilise FileStorageService pour récupérer le fichier distant
+      // ✅ UTILISER LE SERVICE INJECTÉ
       const remoteFileName = result.fileName || result.filename;
-      const fileStream = await fileStorageService.download(
+      const fileStream = await this.fileStorageService.download(
         remoteFileName,
         remoteFileName
       );
@@ -281,6 +278,11 @@ class FileController {
         });
       }
 
+      // ✅ VÉRIFIER QUE LE SERVICE EST DISPONIBLE
+      if (!this.fileStorageService) {
+        throw new Error("Service de stockage de fichiers non disponible");
+      }
+
       // Récupérer les métadonnées pour obtenir le nom du fichier distant
       let result;
       if (this.getFileUseCase) {
@@ -290,7 +292,9 @@ class FileController {
       }
 
       const remoteFileName = result.fileName || result.filename;
-      await fileStorageService.delete(remoteFileName);
+
+      // ✅ UTILISER LE SERVICE INJECTÉ
+      await this.fileStorageService.delete(remoteFileName);
 
       // (Optionnel) Supprimer les métadonnées en base via un use-case
 
@@ -439,42 +443,6 @@ class FileController {
       });
     }
   }
-
-  static uploadFile = [
-    upload.single("file"),
-    async (req, res) => {
-      try {
-        const file = req.file;
-        if (!file)
-          return res
-            .status(400)
-            .json({ success: false, message: "Aucun fichier envoyé" });
-
-        const remoteFileName = `${Date.now()}_${file.originalname}`;
-        const remotePath = await fileStorageService.upload(
-          file.path,
-          remoteFileName
-        );
-
-        // Utilisation du use-case UploadFile pour sauvegarder les métadonnées
-        const uploadFileUseCase = new UploadFile(/* repo, ... */);
-        const fileMeta = await uploadFileUseCase.execute({
-          originalName: file.originalname,
-          fileName: remoteFileName,
-          mimeType: file.mimetype,
-          size: file.size,
-          path: remotePath,
-          url: remotePath, // ou une URL publique si besoin
-          uploadedBy: req.user?.id || req.user?.userId,
-          // ...autres champs nécessaires
-        });
-
-        res.json({ success: true, data: fileMeta });
-      } catch (err) {
-        res.status(500).json({ success: false, message: err.message });
-      }
-    },
-  ];
 }
 
 module.exports = FileController;

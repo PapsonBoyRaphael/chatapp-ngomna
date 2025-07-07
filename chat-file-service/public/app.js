@@ -13,6 +13,22 @@ let currentUser = null;
 let reconnectAttempts = 0;
 let pingInterval = null;
 
+function getCookie(name) {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
+  const value = `; ${document.cookie}`;
+  const parts = value.split(`; ${name}=`);
+
+  if (parts.length === 2) {
+    const cookieValue = parts.pop().split(";").shift();
+    return cookieValue ? decodeURIComponent(cookieValue) : null;
+  }
+
+  return null;
+}
+
 // ✅ AJOUTER CES VARIABLES GLOBALES AU DÉBUT DE app.js (après les variables existantes)
 let receivedMessages = [];
 let onlineUsers = new Map();
@@ -1379,6 +1395,220 @@ setInterval(() => {
   }
 }, 5000); // Vérifier toutes les 5 secondes
 
+// ========================================
+// FONCTIONS POUR GÉRER LES FICHIERS
+// ========================================
+
+// ✅ CORRIGER LA FONCTION fetchMyFiles (lignes ~1430-1450)
+async function fetchMyFiles() {
+  const statusDiv = document.getElementById("myFilesList");
+
+  try {
+    // ✅ RÉCUPÉRER LE TOKEN DEPUIS LES COOKIES
+    const token = getCookie("token");
+
+    // ✅ AFFICHER LE STATUT DE CHARGEMENT
+    statusDiv.innerHTML =
+      '<div class="loading">⏳ Chargement des fichiers...</div>';
+
+    // ✅ AJOUTER LE TOKEN DANS LES HEADERS
+    const headers = {
+      "Content-Type": "application/json",
+    };
+
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    const res = await fetch("http://localhost:8003/files", {
+      method: "GET",
+      headers: headers,
+    });
+
+    // ✅ VÉRIFIER LE STATUT DE LA RÉPONSE
+    if (res.status === 401) {
+      statusDiv.innerHTML = `
+        <div class="error-state">
+          <i class="fas fa-lock"></i>
+          <p>❌ Non autorisé</p>
+          <small>Veuillez vous authentifier d'abord ou vérifier votre token</small>
+        </div>
+      `;
+      log("❌ Erreur 401: Token manquant ou invalide", "error");
+      return;
+    }
+
+    if (!res.ok) {
+      throw new Error(`Erreur HTTP: ${res.status} ${res.statusText}`);
+    }
+
+    const data = await res.json();
+
+    if (data.success && data.data.files) {
+      // ✅ AFFICHER LES FICHIERS AVEC PLUS D'INFORMATIONS
+      const list = data.data.files
+        .map((f) => {
+          const size = formatFileSize(f.size);
+          const date = f.createdAt
+            ? new Date(f.createdAt).toLocaleDateString()
+            : "Date inconnue";
+
+          return `
+            <li class="file-item">
+              <div class="file-info">
+                <a href="${
+                  f.url || "/files/" + f.id
+                }" target="_blank" class="file-link">
+                  ${f.originalName}
+                </a>
+                <div class="file-meta">
+                  <span class="file-size">${size}</span>
+                  <span class="file-date">${date}</span>
+                  <span class="file-type">${f.mimeType || "Type inconnu"}</span>
+                </div>
+              </div>
+              <div class="file-actions">
+                <button onclick="downloadFile('${
+                  f.id
+                }')" class="btn-mini">📥 Télécharger</button>
+                <button onclick="deleteFile('${
+                  f.id
+                }')" class="btn-mini btn-danger">🗑️ Supprimer</button>
+              </div>
+            </li>
+          `;
+        })
+        .join("");
+
+      statusDiv.innerHTML = `
+        <div class="files-list">
+          <div class="files-header">
+            <span>📁 ${data.data.files.length} fichier(s) trouvé(s)</span>
+          </div>
+          <ul class="files-grid">${list}</ul>
+        </div>
+      `;
+
+      log(
+        `✅ ${data.data.files.length} fichiers récupérés`,
+        "success",
+        data.data.files
+      );
+    } else {
+      statusDiv.innerHTML = `
+        <div class="empty-state">
+          <i class="fas fa-folder-open"></i>
+          <p>Aucun fichier trouvé</p>
+          <small>Uploadez votre premier fichier pour le voir apparaître ici</small>
+        </div>
+      `;
+      log("ℹ️ Aucun fichier trouvé", "info");
+    }
+  } catch (err) {
+    statusDiv.innerHTML = `
+      <div class="error-state">
+        <i class="fas fa-exclamation-triangle"></i>
+        <p>❌ Erreur de chargement</p>
+        <small>${err.message}</small>
+      </div>
+    `;
+    log("❌ Erreur récupération fichiers", "error", err);
+  }
+}
+
+// ✅ AJOUTER CETTE FONCTION UTILITAIRE POUR FORMATER LA TAILLE
+function formatFileSize(bytes) {
+  if (!bytes) return "0 B";
+
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+
+  return Math.round((bytes / Math.pow(1024, i)) * 100) / 100 + " " + sizes[i];
+}
+
+// ✅ AJOUTER CES FONCTIONS POUR LES ACTIONS SUR LES FICHIERS
+async function downloadFile(fileId) {
+  try {
+    const token = getCookie("token");
+
+    const headers = {};
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    const res = await fetch(`/files/${fileId}`, {
+      method: "GET",
+      headers: headers,
+    });
+
+    if (res.status === 401) {
+      log("❌ Non autorisé pour télécharger le fichier", "error");
+      return;
+    }
+
+    if (!res.ok) {
+      throw new Error(`Erreur HTTP: ${res.status}`);
+    }
+
+    // ✅ DÉCLENCHER LE TÉLÉCHARGEMENT
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `file_${fileId}`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+
+    log(`✅ Fichier ${fileId} téléchargé`, "success");
+  } catch (err) {
+    log(`❌ Erreur téléchargement fichier ${fileId}`, "error", err);
+  }
+}
+
+async function deleteFile(fileId) {
+  if (!confirm("Êtes-vous sûr de vouloir supprimer ce fichier ?")) {
+    return;
+  }
+
+  try {
+    const token = getCookie("token");
+
+    const headers = {};
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    const res = await fetch(`/files/${fileId}`, {
+      method: "DELETE",
+      headers: headers,
+    });
+
+    if (res.status === 401) {
+      log("❌ Non autorisé pour supprimer le fichier", "error");
+      return;
+    }
+
+    if (!res.ok) {
+      throw new Error(`Erreur HTTP: ${res.status}`);
+    }
+
+    const data = await res.json();
+
+    if (data.success) {
+      log(`✅ Fichier ${fileId} supprimé`, "success");
+      // ✅ RAFRAÎCHIR LA LISTE
+      fetchMyFiles();
+    } else {
+      throw new Error(data.message || "Erreur suppression");
+    }
+  } catch (err) {
+    log(`❌ Erreur suppression fichier ${fileId}`, "error", err);
+  }
+}
+
+// ✅ AMÉLIORER LA FONCTION handleFileUpload POUR RAFRAÎCHIR AUTOMATIQUEMENT
 async function handleFileUpload(e) {
   e.preventDefault();
   const fileInput = document.getElementById("fileInput");
@@ -1401,12 +1631,6 @@ async function handleFileUpload(e) {
   statusDiv.textContent = "⏳ Upload en cours...";
   statusDiv.className = "status info";
 
-  // 🔽 AJOUT : Récupérer le token depuis le cookie
-  function getCookie(name) {
-    const value = `; ${document.cookie}`;
-    const parts = value.split(`; ${name}=`);
-    if (parts.length === 2) return parts.pop().split(";").shift();
-  }
   const token = getCookie("token");
 
   try {
@@ -1415,11 +1639,22 @@ async function handleFileUpload(e) {
       body: formData,
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
+
     const data = await res.json();
+
     if (data.success) {
       statusDiv.textContent = "✅ Fichier envoyé avec succès";
       statusDiv.className = "status success";
       log("✅ Fichier uploadé", "success", data.data);
+
+      // ✅ RAFRAÎCHIR AUTOMATIQUEMENT LA LISTE DES FICHIERS
+      setTimeout(() => {
+        fetchMyFiles();
+      }, 1000);
+
+      // ✅ RÉINITIALISER LE FORMULAIRE
+      fileInput.value = "";
+      conversationIdInput.value = "";
     } else {
       statusDiv.textContent = "❌ " + (data.message || "Erreur upload");
       statusDiv.className = "status error";
@@ -1429,27 +1664,5 @@ async function handleFileUpload(e) {
     statusDiv.textContent = "❌ Erreur réseau";
     statusDiv.className = "status error";
     log("❌ Erreur réseau upload fichier", "error", err);
-  }
-}
-
-async function fetchMyFiles() {
-  const res = await fetch("/files");
-  const data = await res.json();
-  if (data.success && data.data.files) {
-    const list = data.data.files
-      .map(
-        (f) =>
-          `<li>
-            <a href="${f.url || "/files/" + f.id}" target="_blank">${
-            f.originalName
-          }</a>
-            (${f.size} octets)
-          </li>`
-      )
-      .join("");
-    document.getElementById("myFilesList").innerHTML = `<ul>${list}</ul>`;
-  } else {
-    document.getElementById("myFilesList").textContent =
-      "Aucun fichier trouvé ou erreur.";
   }
 }
