@@ -1,5 +1,0 @@
-Neo4j
-
-sudo systemctl start neo4j
-sudo cypher-shell ou http://localhost:7474/browser/
-

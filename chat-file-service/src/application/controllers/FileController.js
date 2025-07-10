@@ -56,9 +56,10 @@ class FileController {
       const remoteFileName = `${Date.now()}_${req.file.originalname}`;
 
       // ✅ UTILISER LE SERVICE INJECTÉ
-      const remotePath = await this.fileStorageService.upload(
-        req.file.path,
-        remoteFileName
+      const remotePath = await this.fileStorageService.uploadFromBuffer(
+        req.file.buffer,
+        remoteFileName,
+        req.file.mimetype
       );
 
       const fileData = {
