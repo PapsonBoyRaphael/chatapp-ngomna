@@ -4,6 +4,9 @@ class GetFile {
     this.redisClient = redisClient;
   }
 
+  /**
+   * Retourne uniquement le document mongoose File (pas de stream, pas de download)
+   */
   async execute(fileId, userId) {
     try {
       // Vérifier le cache Redis
@@ -16,7 +19,7 @@ class GetFile {
             cachedFile = JSON.parse(cached);
           }
         } catch (redisError) {
-          console.warn('⚠️ Erreur cache Redis:', redisError.message);
+          console.warn("⚠️ Erreur cache Redis:", redisError.message);
         }
       }
 
@@ -26,15 +29,9 @@ class GetFile {
 
       // Récupérer depuis la base
       const file = await this.fileRepository.findById(fileId);
-      
-      if (!file) {
-        throw new Error('Fichier non trouvé');
-      }
 
-      // Vérifier les permissions (basique)
-      if (file.uploadedBy !== userId) {
-        // Pour l'instant, permettre l'accès à tous
-        // TODO: Implémenter une vérification plus fine
+      if (!file) {
+        throw new Error("Fichier non trouvé");
       }
 
       // Mettre en cache
@@ -43,14 +40,13 @@ class GetFile {
           const cacheKey = `file:${fileId}`;
           await this.redisClient.setex(cacheKey, 300, JSON.stringify(file)); // 5 minutes
         } catch (redisError) {
-          console.warn('⚠️ Erreur mise en cache:', redisError.message);
+          console.warn("⚠️ Erreur mise en cache:", redisError.message);
         }
       }
 
       return file;
-
     } catch (error) {
-      console.error('❌ Erreur GetFile use case:', error);
+      console.error("❌ Erreur GetFile use case:", error);
       throw error;
     }
   }

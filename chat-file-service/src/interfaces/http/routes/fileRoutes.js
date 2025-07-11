@@ -187,6 +187,38 @@ function createFileRoutes(fileController) {
       }
     );
 
+    // GET /files/:fileId/download - Télécharger un fichier (nouvelle route)
+    router.get(
+      "/:fileId/download",
+      validationMiddleware.validateMongoId("fileId"),
+      async (req, res) => {
+        try {
+          await fileController.downloadFile(req, res);
+        } catch (error) {
+          console.error("❌ Erreur route GET /files/:fileId/download:", error);
+          res.status(500).json({
+            success: false,
+            message: "Erreur lors du téléchargement du fichier",
+            error: error.message,
+          });
+        }
+      }
+    );
+
+    // (Optionnel) POST /files/download-multiple - Télécharger plusieurs fichiers en ZIP
+    router.post("/download-multiple", async (req, res) => {
+      try {
+        await fileController.downloadMultipleFiles(req, res);
+      } catch (error) {
+        console.error("❌ Erreur route POST /files/download-multiple:", error);
+        res.status(500).json({
+          success: false,
+          message: "Erreur lors du téléchargement multiple",
+          error: error.message,
+        });
+      }
+    });
+
     console.log("✅ Routes de fichiers configurées");
   } catch (error) {
     console.error("❌ Erreur configuration routes fichiers:", error);
