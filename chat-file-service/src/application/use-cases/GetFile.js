@@ -1,7 +1,7 @@
 class GetFile {
-  constructor(fileRepository, redisClient = null) {
+  constructor(fileRepository, cacheService = null) {
     this.fileRepository = fileRepository;
-    this.redisClient = redisClient;
+    this.cacheService = cacheService;
   }
 
   /**
@@ -9,21 +9,20 @@ class GetFile {
    */
   async execute(fileId, userId) {
     try {
-      // Vérifier le cache Redis
+      // Vérifier le cache Redis via CacheService
       let cachedFile = null;
-      if (this.redisClient) {
+      if (this.cacheService) {
         try {
-          const cacheKey = `file:${fileId}`;
-          const cached = await this.redisClient.get(cacheKey);
-          if (cached) {
-            cachedFile = JSON.parse(cached);
-          }
-        } catch (redisError) {
-          console.warn("⚠️ Erreur cache Redis:", redisError.message);
+          cachedFile = await this.cacheService.get(`file:${fileId}`);
+        } catch (cacheError) {
+          console.warn("⚠️ Erreur cache Redis:", cacheError.message);
         }
       }
 
       if (cachedFile) {
+        if (cachedFile.status === "DELETED") {
+          throw new Error("Ce fichier a été supprimé");
+        }
         return cachedFile;
       }
 
@@ -34,13 +33,17 @@ class GetFile {
         throw new Error("Fichier non trouvé");
       }
 
-      // Mettre en cache
-      if (this.redisClient) {
+      // Interdire l'accès si le fichier est supprimé
+      if (file.status === "DELETED") {
+        throw new Error("Ce fichier a été supprimé");
+      }
+
+      // Mettre en cache via CacheService
+      if (this.cacheService) {
         try {
-          const cacheKey = `file:${fileId}`;
-          await this.redisClient.setex(cacheKey, 300, JSON.stringify(file)); // 5 minutes
-        } catch (redisError) {
-          console.warn("⚠️ Erreur mise en cache:", redisError.message);
+          await this.cacheService.set(`file:${fileId}`, file, 300); // 5 minutes
+        } catch (cacheError) {
+          console.warn("⚠️ Erreur mise en cache:", cacheError.message);
         }
       }
 

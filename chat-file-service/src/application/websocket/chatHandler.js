@@ -13,7 +13,8 @@ class ChatHandler {
     onlineUserManager = null,
     roomManager = null,
     getConversationIdsUseCase = null,
-    getMessageByIdUseCase = null // <-- Ajouté
+    getMessageByIdUseCase = null,
+    updateMessageContentUseCase = null // <-- AJOUTER ICI
   ) {
     this.io = io;
     this.sendMessageUseCase = sendMessageUseCase;
@@ -24,6 +25,7 @@ class ChatHandler {
     this.roomManager = roomManager;
     this.getConversationIdsUseCase = getConversationIdsUseCase;
     this.getMessageByIdUseCase = getMessageByIdUseCase; // <-- Ajouté
+    this.updateMessageContentUseCase = updateMessageContentUseCase; // <-- AJOUTÉ
 
     // Collections pour gérer les connexions
     this.connectedUsers = new Map();
@@ -126,6 +128,20 @@ class ChatHandler {
         // ✅ ÉVÉNEMENTS D'ERREUR
         socket.on("error", (error) => {
           console.error(`❌ Erreur Socket ${socket.id}:`, error);
+        });
+
+        // ✅ AJOUTER LES ÉVÉNEMENTS DE SUPPRESSION LOGIQUE
+        socket.on("deleteMessage", (data) => {
+          this.handleDeleteMessage(socket, data);
+        });
+
+        socket.on("deleteFile", (data) => {
+          this.handleDeleteFile(socket, data);
+        });
+
+        // Dans setupSocketHandlers()
+        socket.on("editMessage", (data) => {
+          this.handleEditMessage(socket, data);
         });
       });
 
@@ -1506,6 +1522,179 @@ class ChatHandler {
     } catch (error) {
       console.warn("⚠️ Erreur handleMessageReceived:", error.message);
       // Ne pas émettre d'erreur pour éviter de polluer l'interface
+    }
+  }
+
+  // ✅ GESTIONNAIRE DE SUPPRESSION LOGIQUE DE MESSAGE
+  async handleDeleteMessage(socket, data) {
+    try {
+      const { messageId } = data;
+      const userId = socket.userId;
+
+      if (!messageId || !userId) {
+        socket.emit("status_error", {
+          message: "ID message ou utilisateur manquant",
+          code: "MISSING_DATA",
+          type: "delete_message",
+        });
+        return;
+      }
+
+      if (
+        !this.updateMessageStatusUseCase ||
+        typeof this.updateMessageStatusUseCase.markSingleMessage !== "function"
+      ) {
+        socket.emit("status_error", {
+          message: "Service de suppression non disponible",
+          code: "SERVICE_UNAVAILABLE",
+          type: "delete_message",
+        });
+        return;
+      }
+
+      // Marquer le message comme DELETED
+      const result = await this.updateMessageStatusUseCase.markSingleMessage({
+        messageId,
+        receiverId: userId,
+        status: "DELETED",
+      });
+
+      if (result && result.modifiedCount > 0) {
+        socket.emit("messageDeleted", {
+          messageId,
+          status: "DELETED",
+          timestamp: new Date().toISOString(),
+        });
+        // Notifier la conversation si besoin
+        // this.io.to(`conversation_${conversationId}`).emit("messageDeleted", {...});
+      } else {
+        socket.emit("status_error", {
+          message: "Message déjà supprimé ou introuvable",
+          code: "ALREADY_DELETED",
+          type: "delete_message",
+        });
+      }
+    } catch (error) {
+      console.error("❌ Erreur handleDeleteMessage:", error);
+      socket.emit("status_error", {
+        message: "Erreur lors de la suppression du message",
+        code: "DELETE_MESSAGE_ERROR",
+        error:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    }
+  }
+
+  // ✅ GESTIONNAIRE DE SUPPRESSION LOGIQUE DE FICHIER
+  async handleDeleteFile(socket, data) {
+    try {
+      const { fileId } = data;
+      const userId = socket.userId;
+
+      if (!fileId || !userId) {
+        socket.emit("status_error", {
+          message: "ID fichier ou utilisateur manquant",
+          code: "MISSING_DATA",
+          type: "delete_file",
+        });
+        return;
+      }
+
+      // On suppose que le repository de fichiers est accessible via this.fileRepository
+      if (
+        !this.fileRepository ||
+        typeof this.fileRepository.deleteFile !== "function"
+      ) {
+        socket.emit("status_error", {
+          message: "Service de suppression de fichier non disponible",
+          code: "SERVICE_UNAVAILABLE",
+          type: "delete_file",
+        });
+        return;
+      }
+
+      // Marquer le fichier comme DELETED (soft delete)
+      const deletedFile = await this.fileRepository.deleteFile(fileId, true);
+
+      if (deletedFile && deletedFile.status === "DELETED") {
+        socket.emit("fileDeleted", {
+          fileId,
+          status: "DELETED",
+          timestamp: new Date().toISOString(),
+        });
+        // Notifier la conversation si besoin
+        // this.io.to(`conversation_${deletedFile.conversationId}`).emit("fileDeleted", {...});
+      } else {
+        socket.emit("status_error", {
+          message: "Fichier déjà supprimé ou introuvable",
+          code: "ALREADY_DELETED",
+          type: "delete_file",
+        });
+      }
+    } catch (error) {
+      console.error("❌ Erreur handleDeleteFile:", error);
+      socket.emit("status_error", {
+        message: "Erreur lors de la suppression du fichier",
+        code: "DELETE_FILE_ERROR",
+        error:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    }
+  }
+
+  // ✅ AJOUTER handleEditMessage
+  async handleEditMessage(socket, data) {
+    try {
+      const { messageId, newContent } = data;
+      const userId = socket.userId;
+
+      if (!messageId || !newContent || !userId) {
+        socket.emit("status_error", {
+          message: "ID message, contenu ou utilisateur manquant",
+          code: "MISSING_DATA",
+          type: "edit_message",
+        });
+        return;
+      }
+
+      if (!this.updateMessageContentUseCase) {
+        socket.emit("status_error", {
+          message: "Service d'édition non disponible",
+          code: "SERVICE_UNAVAILABLE",
+          type: "edit_message",
+        });
+        return;
+      }
+
+      const updated = await this.updateMessageContentUseCase.execute({
+        messageId,
+        newContent,
+        userId,
+      });
+
+      socket.emit("messageEdited", {
+        messageId,
+        newContent,
+        editedAt: updated.editedAt,
+        timestamp: new Date().toISOString(),
+      });
+
+      // Notifier la conversation si besoin
+      this.io
+        .to(`conversation_${updated.conversationId}`)
+        .emit("messageEdited", {
+          messageId,
+          newContent,
+          editedAt: updated.editedAt,
+          timestamp: new Date().toISOString(),
+        });
+    } catch (error) {
+      socket.emit("status_error", {
+        message: "Erreur lors de l'édition du message",
+        code: "EDIT_MESSAGE_ERROR",
+        error:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
     }
   }
 }

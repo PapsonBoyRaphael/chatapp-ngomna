@@ -1,8 +1,14 @@
 class UpdateMessageStatus {
-  constructor(messageRepository, conversationRepository, kafkaProducer = null) {
+  constructor(
+    messageRepository,
+    conversationRepository,
+    kafkaProducer = null,
+    cacheService = null // Injection du cacheService
+  ) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
     this.kafkaProducer = kafkaProducer;
+    this.cacheService = cacheService;
   }
 
   async execute({ conversationId, receiverId, status, messageIds = null }) {
@@ -15,33 +21,26 @@ class UpdateMessageStatus {
         type: messageIds ? "specific" : "all",
       });
 
-      // ✅ NOUVELLE VALIDATION : receiverId et status sont obligatoires, le reste est optionnel
+      // Validation
       if (!receiverId || !status) {
         throw new Error("receiverId et status sont requis");
       }
-
-      const validStatuses = ["SENT", "DELIVERED", "READ"];
+      const validStatuses = ["SENT", "DELIVERED", "READ", "DELETED"];
       if (!validStatuses.includes(status)) {
         throw new Error(
           `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`
         );
       }
 
-      // ✅ UTILISER LA MÉTHODE APPROPRIÉE DU REPOSITORY
+      // Utiliser la méthode appropriée du repository
       let result;
-
       if (messageIds && messageIds.length === 1) {
-        // ✅ CAS SPÉCIAL : UN SEUL MESSAGE - UTILISER updateSingleMessageStatus
-        console.log(`🎯 Mise à jour d'un seul message: ${messageIds[0]}`);
         result = await this.messageRepository.updateSingleMessageStatus(
           messageIds[0],
           receiverId,
           status
         );
       } else {
-        // ✅ CAS GÉNÉRAL : PLUSIEURS MESSAGES OU TOUS LES MESSAGES
-        // conversationId ou messageIds peuvent être null, le repository doit gérer ce cas
-        console.log(`📚 Mise à jour multiple de messages`);
         result = await this.messageRepository.updateMessageStatus(
           conversationId,
           receiverId,
@@ -50,21 +49,26 @@ class UpdateMessageStatus {
         );
       }
 
-      // ✅ NORMALISER LE RÉSULTAT
-      const normalizedResult = {
-        conversationId,
-        receiverId,
-        status,
-        modifiedCount: result.modifiedCount || 0,
-        matchedCount: result.matchedCount || 0,
-        timestamp: new Date().toISOString(),
-        success: (result.modifiedCount || 0) > 0,
-      };
+      // Invalidation du cache via CacheService
+      if (this.cacheService && result.modifiedCount > 0) {
+        try {
+          if (conversationId) {
+            await this.cacheService.del(`msg:conv:${conversationId}:*`);
+            await this.cacheService.del(`conv:participant:*`); // Invalider les conversations liées
+          }
+          if (receiverId) {
+            await this.cacheService.del(`msg:uploader:${receiverId}:*`);
+          }
+        } catch (cacheError) {
+          console.warn(
+            "⚠️ Erreur invalidation cache UpdateMessageStatus:",
+            cacheError.message
+          );
+        }
+      }
 
-      console.log(`✅ Mise à jour statut terminée:`, normalizedResult);
-
-      // ✅ PUBLIER DANS KAFKA SI DES MESSAGES ONT ÉTÉ MODIFIÉS
-      if (this.kafkaProducer && normalizedResult.modifiedCount > 0) {
+      // Publication Kafka si besoin (inchangé)
+      if (this.kafkaProducer && result.modifiedCount > 0) {
         try {
           const eventType =
             status === "READ"
@@ -72,20 +76,18 @@ class UpdateMessageStatus {
               : status === "DELIVERED"
               ? "MESSAGES_DELIVERED"
               : "MESSAGES_STATUS_UPDATED";
-
           await this.kafkaProducer.publishMessage({
             eventType,
             conversationId,
             receiverId,
             status,
-            modifiedCount: normalizedResult.modifiedCount,
+            modifiedCount: result.modifiedCount,
             messageIds: messageIds || "ALL",
-            timestamp: normalizedResult.timestamp,
+            timestamp: new Date().toISOString(),
             source: "UpdateMessageStatus-UseCase",
           });
-
           console.log(
-            `📤 Statut publié dans Kafka: ${eventType} - ${normalizedResult.modifiedCount} messages`
+            `📤 Statut publié dans Kafka: ${eventType} - ${result.modifiedCount} messages`
           );
         } catch (kafkaError) {
           console.warn(
@@ -95,32 +97,30 @@ class UpdateMessageStatus {
         }
       }
 
-      // ✅ METTRE À JOUR LES STATISTIQUES DE LA CONVERSATION SI NÉCESSAIRE
+      // Mettre à jour les statistiques de la conversation si nécessaire (inchangé)
       if (
-        normalizedResult.modifiedCount > 0 &&
+        result.modifiedCount > 0 &&
         status === "READ" &&
-        this.conversationRepository
+        this.conversationRepository &&
+        typeof this.conversationRepository.updateUnreadCounts === "function"
       ) {
         try {
-          await this.conversationRepository.updateUnreadCount(
+          await this.conversationRepository.updateUnreadCounts(
             conversationId,
             receiverId
           );
-          console.log(
-            `📊 Compteur non-lus mis à jour pour conversation ${conversationId}`
-          );
-        } catch (error) {
+        } catch (convError) {
           console.warn(
-            "⚠️ Erreur mise à jour compteur non-lus:",
-            error.message
+            "⚠️ Erreur mise à jour unreadCounts conversation:",
+            convError.message
           );
         }
       }
 
-      return normalizedResult;
+      return result;
     } catch (error) {
-      console.error("❌ Erreur UpdateMessageStatus:", error);
-      throw new Error(`Échec mise à jour statut: ${error.message}`);
+      console.error("❌ Erreur UpdateMessageStatus use case:", error);
+      throw error;
     }
   }
 
@@ -133,11 +133,9 @@ class UpdateMessageStatus {
         status,
       });
 
-      // ✅ VALIDATION DES PARAMÈTRES
       if (!messageId || !receiverId || !status) {
         throw new Error("messageId, receiverId et status sont requis");
       }
-
       const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED"];
       if (!validStatuses.includes(status)) {
         throw new Error(
@@ -145,21 +143,25 @@ class UpdateMessageStatus {
         );
       }
 
-      // ✅ UTILISER LA NOUVELLE MÉTHODE DU REPOSITORY
       const result = await this.messageRepository.updateSingleMessageStatus(
         messageId,
         receiverId,
         status
       );
 
-      console.log(`✅ Résultat marquage message unique:`, {
-        messageId,
-        status,
-        modifiedCount: result.modifiedCount,
-        success: result.modifiedCount > 0,
-      });
+      // Invalidation du cache pour ce message
+      if (this.cacheService && result.modifiedCount > 0) {
+        try {
+          await this.cacheService.del(`msg:${messageId}`);
+        } catch (cacheError) {
+          console.warn(
+            "⚠️ Erreur invalidation cache message unique:",
+            cacheError.message
+          );
+        }
+      }
 
-      // ✅ PUBLIER DANS KAFKA SI MODIFICATION RÉUSSIE
+      // Publication Kafka si modification réussie (inchangé)
       if (this.kafkaProducer && result.modifiedCount > 0) {
         try {
           await this.kafkaProducer.publishMessage({
@@ -181,8 +183,8 @@ class UpdateMessageStatus {
 
       return result;
     } catch (error) {
-      console.error("❌ Erreur marquage message unique:", error);
-      throw new Error(`Impossible de marquer le message: ${error.message}`);
+      console.error("❌ Erreur markSingleMessage:", error);
+      throw error;
     }
   }
 }

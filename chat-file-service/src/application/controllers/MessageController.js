@@ -1,16 +1,20 @@
+const CacheService = require("../../infrastructure/redis/CacheService");
+
 class MessageController {
   constructor(
     sendMessageUseCase,
     getMessagesUseCase,
     updateMessageStatusUseCase,
     redisClient = null,
-    kafkaProducer = null
+    kafkaProducer = null,
+    getMessageByIdUseCase = null // Ajout du use-case
   ) {
     this.sendMessageUseCase = sendMessageUseCase;
     this.getMessagesUseCase = getMessagesUseCase;
     this.updateMessageStatusUseCase = updateMessageStatusUseCase;
-    this.redisClient = redisClient;
+    this.cacheService = redisClient ? new CacheService(redisClient) : null;
     this.kafkaProducer = kafkaProducer;
+    this.getMessageByIdUseCase = getMessageByIdUseCase;
   }
 
   async sendMessage(req, res) {
@@ -65,29 +69,18 @@ class MessageController {
 
       const processingTime = Date.now() - startTime;
 
-      // 🚀 INVALIDER LES CACHES LIÉS
-      if (this.redisClient) {
+      // Invalidation du cache lié
+      if (this.cacheService) {
         try {
           const cacheKeysToInvalidate = [
-            `messages:${message.conversationId}:${senderId}:*`,
-            `messages:${message.conversationId}:${receiverId}:*`,
+            `messages:${message.conversationId}:*`,
+            `conversation:${message.conversationId}:*`,
             `conversations:${senderId}`,
             `conversations:${receiverId}`,
-            `conversation:${message.conversationId}:${senderId}`,
-            `conversation:${message.conversationId}:${receiverId}`,
           ];
-
           for (const pattern of cacheKeysToInvalidate) {
-            if (pattern.includes("*")) {
-              const keys = await this.redisClient.keys(pattern);
-              if (keys.length > 0) {
-                await this.redisClient.del(keys);
-              }
-            } else {
-              await this.redisClient.del(pattern);
-            }
+            await this.cacheService.del(pattern);
           }
-
           console.log(`🗑️ Caches invalidés pour le message: ${message._id}`);
         } catch (redisError) {
           console.warn(
@@ -108,7 +101,7 @@ class MessageController {
         metadata: {
           processingTime: `${processingTime}ms`,
           kafkaPublished: !!this.kafkaProducer,
-          cacheInvalidated: !!this.redisClient,
+          cacheInvalidated: !!this.cacheService,
           timestamp: new Date().toISOString(),
         },
       });
@@ -187,7 +180,7 @@ class MessageController {
         metadata: {
           processingTime: `${processingTime}ms`,
           fromCache: result.fromCache || false,
-          redisEnabled: !!this.redisClient,
+          redisEnabled: !!this.cacheService,
           timestamp: new Date().toISOString(),
         },
       });
@@ -235,24 +228,15 @@ class MessageController {
 
       const processingTime = Date.now() - startTime;
 
-      // 🚀 INVALIDER LES CACHES SI DES MESSAGES ONT ÉTÉ MODIFIÉS
-      if (this.redisClient && result.modifiedCount > 0) {
+      if (this.cacheService && result.modifiedCount > 0) {
         try {
           const cachePatterns = [
-            `messages:${conversationId}:${userId}:*`,
+            `messages:${conversationId}:*`,
+            `conversation:${conversationId}:*`,
             `conversations:${userId}`,
-            `conversation:${conversationId}:${userId}`,
           ];
-
           for (const pattern of cachePatterns) {
-            if (pattern.includes("*")) {
-              const keys = await this.redisClient.keys(pattern);
-              if (keys.length > 0) {
-                await this.redisClient.del(keys);
-              }
-            } else {
-              await this.redisClient.del(pattern);
-            }
+            await this.cacheService.del(pattern);
           }
         } catch (redisError) {
           console.warn(
@@ -269,7 +253,7 @@ class MessageController {
         metadata: {
           processingTime: `${processingTime}ms`,
           kafkaPublished: !!this.kafkaProducer,
-          cacheInvalidated: !!this.redisClient && result.modifiedCount > 0,
+          cacheInvalidated: !!this.cacheService && result.modifiedCount > 0,
           timestamp: new Date().toISOString(),
         },
       });
@@ -293,20 +277,38 @@ class MessageController {
     }
   }
 
-  // ✅ AJOUT DES MÉTHODES MANQUANTES
+  // ✅ GET /messages/:messageId
   async getMessage(req, res) {
     try {
       const { messageId } = req.params;
+      if (!messageId) {
+        return res.status(400).json({
+          success: false,
+          message: "messageId requis",
+        });
+      }
 
-      // Logique simple pour l'instant
+      // Utiliser le use-case GetMessageById
+      const message = await this.getMessageByIdUseCase.execute(messageId);
+
+      if (!message) {
+        return res.status(404).json({
+          success: false,
+          message: "Message introuvable",
+        });
+      }
+
+      // Interdire l'accès si le message est supprimé (status DELETED)
+      if (message.status === "DELETED") {
+        return res.status(403).json({
+          success: false,
+          message: "Ce message a été supprimé",
+        });
+      }
+
       res.json({
         success: true,
-        data: {
-          id: messageId,
-          content: "Message test",
-          senderId: "user-123",
-          timestamp: new Date().toISOString(),
-        },
+        data: message,
         message: "Message récupéré avec succès",
       });
     } catch (error) {
@@ -319,15 +321,46 @@ class MessageController {
     }
   }
 
+  // ✅ DELETE /messages/:messageId
   async deleteMessage(req, res) {
     try {
-      res.status(501).json({
-        success: false,
-        message: "Suppression non implémentée",
+      const { messageId } = req.params;
+      if (!messageId) {
+        return res.status(400).json({
+          success: false,
+          message: "messageId requis",
+        });
+      }
+      // Ici, il faut passer le status à DELETED (soft delete)
+      // Utiliser le repository ou use-case approprié
+      const updated = await this.updateMessageStatusUseCase.markSingleMessage({
+        messageId,
+        receiverId: req.user?.id || req.headers["user-id"],
+        status: "DELETED",
+      });
+
+      // Invalider le cache du message et de la conversation
+      if (this.cacheService) {
+        try {
+          await this.cacheService.del(`message:${messageId}`);
+          // Invalider aussi la liste des messages de la conversation si besoin
+        } catch (err) {
+          console.warn(
+            "⚠️ Erreur invalidation cache suppression:",
+            err.message
+          );
+        }
+      }
+
+      res.json({
+        success: true,
+        message: "Message marqué comme supprimé (DELETED)",
+        data: updated,
       });
     } catch (error) {
       res.status(500).json({
         success: false,
+        message: "Erreur lors de la suppression du message",
         error: error.message,
       });
     }

@@ -52,6 +52,14 @@ class CacheService {
       return 0;
     }
   }
+
+  // ✅ Ajout de la méthode keys pour compatibilité avec les repositories
+  async keys(pattern) {
+    if (!this.redis || typeof this.redis.keys !== "function") {
+      throw new Error("Redis ne supporte pas la méthode keys");
+    }
+    return await this.redis.keys(pattern);
+  }
 }
 
 module.exports = CacheService;

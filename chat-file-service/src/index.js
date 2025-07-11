@@ -39,6 +39,7 @@ const UpdateMessageStatus = require("./application/use-cases/UpdateMessageStatus
 const UploadFile = require("./application/use-cases/UploadFile");
 const GetConversationIds = require("./application/use-cases/GetConversationIds");
 const GetMessageById = require("./application/use-cases/GetMessageById");
+const UpdateMessageContent = require("./application/use-cases/UpdateMessageContent");
 
 // Controllers
 const FileController = require("./application/controllers/FileController");
@@ -193,7 +194,6 @@ const startServer = async () => {
     }
 
     app.use(express.static(path.join(__dirname, "../public")));
-    app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
     // ===============================
     // 4. CONFIGURATION SOCKET.IO
@@ -279,17 +279,23 @@ const startServer = async () => {
     // ===============================
     // 6. INITIALISATION REPOSITORIES
     // ===============================
-    const messageRepository = new MongoMessageRepository(redisClient);
-    const conversationRepository = new MongoConversationRepository(
-      redisClient,
+    // ✅ CORRIGER L'INJECTION DES SERVICES
+    const CacheService = require("./infrastructure/redis/CacheService");
+    const cacheService = new CacheService(redisClient, 3600);
+
+    const messageRepository = new MongoMessageRepository(
+      cacheService,
       kafkaProducers?.messageProducer || null
     );
-
-    // ✅ CORRIGER L'INJECTION DES SERVICES
+    const conversationRepository = new MongoConversationRepository(
+      cacheService,
+      kafkaProducers?.messageProducer || null
+    );
     const fileRepository = new MongoFileRepository(
       redisClient,
       kafkaProducers?.fileProducer || null,
-      thumbnailService // ✅ MAINTENANT DÉFINI
+      thumbnailService,
+      cacheService // Ajouté
     );
 
     // ✅ LOG POUR VÉRIFIER LES OBJETS REDIS
@@ -311,40 +317,43 @@ const startServer = async () => {
     const sendMessageUseCase = new SendMessage(
       messageRepository,
       conversationRepository,
-      kafkaProducers?.messageProducer || null
+      kafkaProducers?.messageProducer || null,
+      cacheService
     );
 
-    const getMessagesUseCase = new GetMessages(messageRepository, redisClient);
+    const getMessagesUseCase = new GetMessages(messageRepository, cacheService);
 
     const getConversationUseCase = new GetConversation(
       conversationRepository,
       messageRepository,
-      redisClient
+      cacheService
     );
 
-    // ✅ INITIALISATION USE CASES AVEC VÉRIFICATION
     const getConversationsUseCase = new GetConversations(
       conversationRepository,
       messageRepository,
-      redisClient // ✅ S'ASSURER QUE C'EST LE MÊME CLIENT QUE LE REPOSITORY
+      cacheService
     );
 
     const updateMessageStatusUseCase = new UpdateMessageStatus(
       messageRepository,
-      redisClient,
-      kafkaProducers?.messageProducer || null
+      conversationRepository,
+      kafkaProducers?.messageProducer || null,
+      cacheService
+    );
+
+    const updateMessageContentUseCase = new UpdateMessageContent(
+      messageRepository,
+      kafkaProducers?.messageProducer || null,
+      cacheService
     );
 
     const uploadFileUseCase = new UploadFile(
       fileRepository,
-      kafkaProducers?.fileProducer || null // ✅ PASSER LE MÊME PRODUCER
+      kafkaProducers?.fileProducer || null
     );
 
-    const getFileUseCase = new GetFile(
-      fileRepository,
-      kafkaProducers?.fileProducer || null,
-      redisClient
-    );
+    const getFileUseCase = new GetFile(fileRepository, cacheService);
 
     const getConversationIdsUseCase = new GetConversationIds(
       conversationRepository
@@ -371,7 +380,6 @@ const startServer = async () => {
       kafkaProducers?.messageProducer || null
     );
 
-    // ✅ AJOUTER LE CONVERSATION CONTROLLER
     const conversationController = new ConversationController(
       getConversationsUseCase,
       getConversationUseCase,
@@ -409,7 +417,8 @@ const startServer = async () => {
       onlineUserManager,
       roomManager,
       getConversationIdsUseCase,
-      getMessageByIdUseCase
+      getMessageByIdUseCase,
+      updateMessageContentUseCase // <-- AJOUTER ICI
     );
 
     // ✅ CONFIGURER LES GESTIONNAIRES D'ÉVÉNEMENTS SOCKET.IO

@@ -3,12 +3,14 @@ class ConversationController {
     getConversationsUseCase,
     getConversationUseCase,
     redisClient = null,
-    kafkaProducer = null
+    kafkaProducer = null,
+    cacheService = null // Ajouté si besoin d'accès direct
   ) {
     this.getConversationsUseCase = getConversationsUseCase;
     this.getConversationUseCase = getConversationUseCase;
     this.redisClient = redisClient;
     this.kafkaProducer = kafkaProducer;
+    this.cacheService = cacheService;
   }
 
   // ✅ MÉTHODE PRINCIPALE POUR RÉCUPÉRER LES CONVERSATIONS
@@ -32,11 +34,7 @@ class ConversationController {
       // ✅ APPELER LE USE CASE AVEC GESTION D'ERREURS
       let result;
       try {
-        result = await this.getConversationsUseCase.execute(userId, {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          includeArchived: includeArchived === "true",
-        });
+        result = await this.getConversationsUseCase.execute(userId, true);
       } catch (useCaseError) {
         console.error("❌ Erreur Use Case conversations:", useCaseError);
 

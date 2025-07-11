@@ -1,8 +1,8 @@
 class GetConversation {
-  constructor(conversationRepository, messageRepository, redisClient = null) {
+  constructor(conversationRepository, messageRepository, cacheService = null) {
     this.conversationRepository = conversationRepository;
     this.messageRepository = messageRepository;
-    this.redisClient = redisClient;
+    this.cacheService = cacheService;
     this.cacheTimeout = 300; // 5 minutes
   }
 
@@ -14,15 +14,15 @@ class GetConversation {
 
       const cacheKey = `conversation:${conversationId}:${userId}`;
 
-      // 🚀 CACHE REDIS
-      if (this.redisClient && useCache) {
+      // 🚀 CACHE REDIS via CacheService
+      if (this.cacheService && useCache) {
         try {
-          const cached = await this.redisClient.get(cacheKey);
+          const cached = await this.cacheService.get(cacheKey);
           if (cached) {
             console.log(
               `📦 Conversation récupérée depuis Redis: ${conversationId}`
             );
-            return JSON.parse(cached);
+            return cached;
           }
         } catch (redisError) {
           console.warn("⚠️ Erreur cache conversation:", redisError.message);
@@ -57,14 +57,10 @@ class GetConversation {
         retrievedAt: new Date().toISOString(),
       };
 
-      // Mise en cache
-      if (this.redisClient) {
+      // Mise en cache via CacheService
+      if (this.cacheService) {
         try {
-          await this.redisClient.setex(
-            cacheKey,
-            this.cacheTimeout,
-            JSON.stringify(result)
-          );
+          await this.cacheService.set(cacheKey, result, this.cacheTimeout);
         } catch (redisError) {
           console.warn(
             "⚠️ Erreur mise en cache conversation:",

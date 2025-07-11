@@ -66,7 +66,7 @@ const fileSchema = new mongoose.Schema(
         extension: String,
         fileType: {
           type: String,
-          enum: ["IMAGE", "VIDEO", "AUDIO", "DOCUMENT", "OTHER"],
+          // enum: ["IMAGE", "VIDEO", "AUDIO", "DOCUMENT", "OTHER"],
           index: true,
         },
         category: String,

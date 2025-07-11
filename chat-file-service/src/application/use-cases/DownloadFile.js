@@ -2,10 +2,10 @@ const archiver = require("archiver");
 const stream = require("stream");
 
 class DownloadFile {
-  constructor(fileRepository, fileStorageService, redisClient = null) {
+  constructor(fileRepository, fileStorageService, cacheService = null) {
     this.fileRepository = fileRepository;
     this.fileStorageService = fileStorageService;
-    this.redisClient = redisClient;
+    this.cacheService = cacheService;
     this.downloadQueueKey = "download:queue";
   }
 
@@ -16,6 +16,7 @@ class DownloadFile {
    * @returns {Promise<{file, fileStream}>}
    */
   async executeSingle(fileId, userId) {
+    // Optionnel : lecture du cache si pertinent (ex: file metadata)
     const file = await this.fileRepository.findById(fileId);
     if (!file) throw new Error("Fichier non trouvé");
 
@@ -46,12 +47,17 @@ class DownloadFile {
    * @returns {Promise<{zipStream, files}>}
    */
   async executeMultiple(fileIds, userId) {
-    // Mettre en attente la demande (file queue Redis)
-    if (this.redisClient) {
-      await this.redisClient.lpush(
-        this.downloadQueueKey,
-        JSON.stringify({ userId, fileIds, requestedAt: new Date() })
-      );
+    // Mettre en attente la demande (file queue Redis via CacheService)
+    if (this.cacheService) {
+      try {
+        await this.cacheService.set(
+          this.downloadQueueKey,
+          { userId, fileIds, requestedAt: new Date() },
+          600 // 10 min TTL
+        );
+      } catch (err) {
+        console.warn("⚠️ Erreur file queue cacheService:", err.message);
+      }
     }
 
     // Récupérer les fichiers

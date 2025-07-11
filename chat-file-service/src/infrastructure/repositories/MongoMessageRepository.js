@@ -1,11 +1,18 @@
 const Message = require("../mongodb/models/MessageModel");
 
 class MongoMessageRepository {
-  constructor(redisClient = null, kafkaProducer = null) {
-    this.redisClient = redisClient;
+  constructor(cacheService = null, kafkaProducer = null) {
+    this.cacheService = cacheService;
     this.kafkaProducer = kafkaProducer;
     this.cachePrefix = "msg:";
-    this.defaultTTL = 3600; // 1 heure
+    this.defaultTTL = 3600;
+    this.metrics = {
+      cacheHits: 0,
+      cacheMisses: 0,
+      errors: 0,
+      kafkaEvents: 0,
+      kafkaErrors: 0,
+    };
   }
 
   // ===============================
@@ -117,7 +124,7 @@ class MongoMessageRepository {
       const processingTime = Date.now() - startTime;
 
       // ✅ CACHE ET KAFKA AVEC GESTION D'ERREUR
-      if (this.redisClient) {
+      if (this.cacheService) {
         try {
           await this._cacheMessage(savedMessage);
           await this._invalidateRelatedCaches(savedMessage);
@@ -181,7 +188,7 @@ class MongoMessageRepository {
 
     try {
       // Cache Redis
-      if (this.redisClient && useCache) {
+      if (this.cacheService && useCache) {
         try {
           const cached = await this._getCachedMessage(messageId);
           if (cached) {
@@ -210,7 +217,7 @@ class MongoMessageRepository {
       const processingTime = Date.now() - startTime;
 
       // Mettre en cache
-      if (this.redisClient && useCache) {
+      if (this.cacheService && useCache) {
         try {
           await this._cacheMessage(message);
         } catch (cacheError) {
@@ -231,30 +238,22 @@ class MongoMessageRepository {
     const {
       page = 1,
       limit = 50,
-      useCache = true,
       sortBy = "createdAt",
-      sortOrder = -1,
+      sortOrder = 1,
+      useCache = true,
     } = options;
-
-    const startTime = Date.now();
     const cacheKey = `${this.cachePrefix}conv:${conversationId}:p${page}:l${limit}:s${sortBy}${sortOrder}`;
+    const startTime = Date.now();
 
     try {
-      // 🚀 VÉRIFIER LE CACHE REDIS
-      if (this.redisClient && useCache) {
+      if (this.cacheService && useCache) {
         try {
-          const cached = await this.redisClient.get(cacheKey);
+          const cached = await this.cacheService.get(cacheKey);
           if (cached) {
-            const data = JSON.parse(cached);
-            console.log(
-              `📦 Messages conversation depuis cache: ${conversationId} (${
-                Date.now() - startTime
-              }ms)`
-            );
-            return {
-              ...data,
-              fromCache: true,
-            };
+            this.metrics.cacheHits++;
+            return { ...cached, fromCache: true };
+          } else {
+            this.metrics.cacheMisses++;
           }
         } catch (cacheError) {
           console.warn(
@@ -291,14 +290,9 @@ class MongoMessageRepository {
 
       const processingTime = Date.now() - startTime;
 
-      // Mettre en cache si Redis disponible
-      if (this.redisClient && useCache && messages.length > 0) {
+      if (this.cacheService && useCache) {
         try {
-          await this.redisClient.setex(
-            cacheKey,
-            this.defaultTTL,
-            JSON.stringify(result)
-          );
+          await this.cacheService.set(cacheKey, result, this.defaultTTL);
         } catch (cacheError) {
           console.warn(
             "⚠️ Erreur mise en cache conversation:",
@@ -307,15 +301,10 @@ class MongoMessageRepository {
         }
       }
 
-      console.log(
-        `🔍 Messages conversation: ${conversationId} (${messages.length} msg, ${processingTime}ms)`
-      );
       return result;
     } catch (error) {
-      console.error(
-        `❌ Erreur recherche messages conversation ${conversationId}:`,
-        error
-      );
+      this.metrics.errors++;
+      console.error("❌ Erreur findByConversation:", error);
       throw error;
     }
   }
@@ -397,12 +386,16 @@ class MongoMessageRepository {
       });
 
       // ✅ INVALIDER LES CACHES LIÉS SI DES MESSAGES ONT ÉTÉ MODIFIÉS
-      if (this.redisClient && updateResult.modifiedCount > 0) {
+      if (this.cacheService && updateResult.modifiedCount > 0) {
         try {
           if (conversationId) {
-            await this._invalidateConversationCaches(conversationId);
+            await this.cacheService.del(
+              `${this.cachePrefix}conv:${conversationId}:*`
+            );
           }
-          await this._invalidateUserCaches(receiverId);
+          await this.cacheService.del(
+            `${this.cachePrefix}uploader:${receiverId}:*`
+          );
           console.log(
             `🗑️ Caches invalidés pour conversation ${conversationId || "[all]"}`
           );
@@ -462,7 +455,7 @@ class MongoMessageRepository {
       const processingTime = Date.now() - startTime;
 
       // 🗑️ INVALIDER LES CACHES
-      if (this.redisClient) {
+      if (this.cacheService) {
         try {
           await this._invalidateMessageCaches(messageId);
           await this._invalidateConversationCaches(message.conversationId);
@@ -505,9 +498,9 @@ class MongoMessageRepository {
         : `${this.cachePrefix}unread:${userId}:total`;
 
       // 🚀 VÉRIFIER LE CACHE
-      if (this.redisClient) {
+      if (this.cacheService) {
         try {
-          const cached = await this.redisClient.get(cacheKey);
+          const cached = await this.cacheService.get(cacheKey);
           if (cached !== null) {
             console.log(
               `📦 Compteur non-lus depuis cache: ${userId} (${
@@ -535,9 +528,9 @@ class MongoMessageRepository {
       const processingTime = Date.now() - startTime;
 
       // Mettre en cache
-      if (this.redisClient) {
+      if (this.cacheService) {
         try {
-          await this.redisClient.setex(cacheKey, 300, count.toString()); // 5 minutes
+          await this.cacheService.setex(cacheKey, 300, count.toString()); // 5 minutes
         } catch (cacheError) {
           console.warn("⚠️ Erreur cache compteur:", cacheError.message);
         }
@@ -576,9 +569,9 @@ class MongoMessageRepository {
 
     try {
       // Vérifier le cache
-      if (this.redisClient && useCache) {
+      if (this.cacheService && useCache) {
         try {
-          const cached = await this.redisClient.get(cacheKey);
+          const cached = await this.cacheService.get(cacheKey);
           if (cached) {
             console.log(
               `📦 Recherche depuis cache (${Date.now() - startTime}ms)`
@@ -617,9 +610,9 @@ class MongoMessageRepository {
       };
 
       // Mettre en cache
-      if (this.redisClient && useCache) {
+      if (this.cacheService && useCache) {
         try {
-          await this.redisClient.setex(cacheKey, 600, JSON.stringify(result)); // 10 minutes
+          await this.cacheService.setex(cacheKey, 600, JSON.stringify(result)); // 10 minutes
         } catch (cacheError) {
           console.warn("⚠️ Erreur cache recherche:", cacheError.message);
         }
@@ -641,9 +634,9 @@ class MongoMessageRepository {
 
     try {
       // Vérifier le cache
-      if (this.redisClient) {
+      if (this.cacheService) {
         try {
-          const cached = await this.redisClient.get(cacheKey);
+          const cached = await this.cacheService.get(cacheKey);
           if (cached) {
             console.log(
               `📦 Statistiques depuis cache: ${conversationId} (${
@@ -708,9 +701,9 @@ class MongoMessageRepository {
       result.processingTime = processingTime;
 
       // Mettre en cache
-      if (this.redisClient) {
+      if (this.cacheService) {
         try {
-          await this.redisClient.setex(cacheKey, 1800, JSON.stringify(result)); // 30 minutes
+          await this.cacheService.setex(cacheKey, 1800, JSON.stringify(result)); // 30 minutes
         } catch (cacheError) {
           console.warn("⚠️ Erreur cache statistiques:", cacheError.message);
         }
@@ -731,7 +724,7 @@ class MongoMessageRepository {
   // ===============================
 
   async _cacheMessage(message) {
-    if (!this.redisClient) return false;
+    if (!this.cacheService) return false;
 
     try {
       const cacheKey = `message:${message._id}`;
@@ -748,21 +741,21 @@ class MongoMessageRepository {
       });
 
       // ✅ GÉRER LES DIFFÉRENTES API REDIS
-      if (typeof this.redisClient.setex === "function") {
+      if (typeof this.cacheService.setex === "function") {
         // Redis classique
-        await this.redisClient.setex(cacheKey, this.defaultTTL, messageData);
-      } else if (typeof this.redisClient.setEx === "function") {
+        await this.cacheService.setex(cacheKey, this.defaultTTL, messageData);
+      } else if (typeof this.cacheService.setEx === "function") {
         // Redis v4+ (méthode avec majuscule)
-        await this.redisClient.setEx(cacheKey, this.defaultTTL, messageData);
-      } else if (typeof this.redisClient.set === "function") {
+        await this.cacheService.setEx(cacheKey, this.defaultTTL, messageData);
+      } else if (typeof this.cacheService.set === "function") {
         // ✅ FALLBACK avec set + expire séparé
-        await this.redisClient.set(cacheKey, messageData);
+        await this.cacheService.set(cacheKey, messageData);
 
-        if (typeof this.redisClient.expire === "function") {
-          await this.redisClient.expire(cacheKey, this.defaultTTL);
-        } else if (typeof this.redisClient.expireAt === "function") {
+        if (typeof this.cacheService.expire === "function") {
+          await this.cacheService.expire(cacheKey, this.defaultTTL);
+        } else if (typeof this.cacheService.expireAt === "function") {
           const expireTime = Math.floor(Date.now() / 1000) + this.defaultTTL;
-          await this.redisClient.expireAt(cacheKey, expireTime);
+          await this.cacheService.expireAt(cacheKey, expireTime);
         }
       } else {
         console.warn(
@@ -782,7 +775,7 @@ class MongoMessageRepository {
   async _getCachedMessage(messageId) {
     try {
       const cacheKey = `${this.cachePrefix}${messageId}`;
-      const cached = await this.redisClient.get(cacheKey);
+      const cached = await this.cacheService.get(cacheKey);
 
       if (!cached) {
         return null;
@@ -806,12 +799,12 @@ class MongoMessageRepository {
 
       for (const pattern of patterns) {
         if (pattern.includes("*")) {
-          const keys = await this.redisClient.keys(pattern);
+          const keys = await this.cacheService.keys(pattern);
           if (keys.length > 0) {
-            await this.redisClient.del(keys);
+            await this.cacheService.del(keys);
           }
         } else {
-          await this.redisClient.del(pattern);
+          await this.cacheService.del(pattern);
         }
       }
 
@@ -824,7 +817,7 @@ class MongoMessageRepository {
   }
 
   async _invalidateRelatedCaches(message) {
-    if (!this.redisClient) return false;
+    if (!this.cacheService) return false;
 
     try {
       const keysToInvalidate = [
@@ -840,17 +833,17 @@ class MongoMessageRepository {
           if (keyPattern.includes("*")) {
             // Pattern avec wildcard
             if (
-              typeof this.redisClient.keys === "function" &&
-              typeof this.redisClient.del === "function"
+              typeof this.cacheService.keys === "function" &&
+              typeof this.cacheService.del === "function"
             ) {
-              const keys = await this.redisClient.keys(keyPattern);
+              const keys = await this.cacheService.keys(keyPattern);
               if (keys.length > 0) {
-                await this.redisClient.del(...keys);
+                await this.cacheService.del(...keys);
               }
-            } else if (typeof this.redisClient.scanStream === "function") {
+            } else if (typeof this.cacheService.scanStream === "function") {
               // Scanner et supprimer avec stream
               const keys = [];
-              const stream = this.redisClient.scanStream({
+              const stream = this.cacheService.scanStream({
                 match: keyPattern,
                 count: 100,
               });
@@ -862,18 +855,18 @@ class MongoMessageRepository {
               stream.on("end", async () => {
                 if (
                   keys.length > 0 &&
-                  typeof this.redisClient.del === "function"
+                  typeof this.cacheService.del === "function"
                 ) {
-                  await this.redisClient.del(...keys);
+                  await this.cacheService.del(...keys);
                 }
               });
             }
           } else {
             // Clé simple
-            if (typeof this.redisClient.del === "function") {
-              await this.redisClient.del(keyPattern);
-            } else if (typeof this.redisClient.unlink === "function") {
-              await this.redisClient.unlink(keyPattern);
+            if (typeof this.cacheService.del === "function") {
+              await this.cacheService.del(keyPattern);
+            } else if (typeof this.cacheService.unlink === "function") {
+              await this.cacheService.unlink(keyPattern);
             }
           }
         } catch (keyError) {
@@ -893,7 +886,7 @@ class MongoMessageRepository {
   }
 
   async _invalidateConversationCaches(conversationId) {
-    if (!this.redisClient) return;
+    if (!this.cacheService) return;
 
     const patterns = [
       `${this.cachePrefix}conv:${conversationId}:*`,
@@ -902,9 +895,9 @@ class MongoMessageRepository {
 
     for (const pattern of patterns) {
       try {
-        const keys = await this.redisClient.keys(pattern);
+        const keys = await this.cacheService.keys(pattern);
         if (keys.length > 0) {
-          await this.redisClient.del(keys);
+          await this.cacheService.del(keys);
         }
       } catch (error) {
         console.warn(
@@ -916,15 +909,15 @@ class MongoMessageRepository {
   }
 
   async _invalidateUserCaches(userId) {
-    if (!this.redisClient) return;
+    if (!this.cacheService) return;
 
     const patterns = [`${this.cachePrefix}unread:${userId}:*`];
 
     for (const pattern of patterns) {
       try {
-        const keys = await this.redisClient.keys(pattern);
+        const keys = await this.cacheService.keys(pattern);
         if (keys.length > 0) {
-          await this.redisClient.del(keys);
+          await this.cacheService.del(keys);
         }
       } catch (error) {
         console.warn(
@@ -1003,10 +996,10 @@ class MongoMessageRepository {
       }
 
       // Test Redis
-      if (this.redisClient) {
+      if (this.cacheService) {
         const redisStart = Date.now();
         try {
-          await this.redisClient.ping();
+          await this.cacheService.ping();
           healthData.redis = {
             status: "connected",
             responseTime: Date.now() - redisStart,
@@ -1032,16 +1025,16 @@ class MongoMessageRepository {
   }
 
   async clearCache(pattern = null) {
-    if (!this.redisClient) {
+    if (!this.cacheService) {
       return { cleared: 0, message: "Redis non disponible" };
     }
 
     try {
       const searchPattern = pattern || `${this.cachePrefix}*`;
-      const keys = await this.redisClient.keys(searchPattern);
+      const keys = await this.cacheService.keys(searchPattern);
 
       if (keys.length > 0) {
-        await this.redisClient.del(keys);
+        await this.cacheService.del(keys);
       }
 
       console.log(`🗑️ Cache nettoyé: ${keys.length} clés supprimées`);
@@ -1053,31 +1046,31 @@ class MongoMessageRepository {
   }
 
   _testRedisAPI() {
-    if (!this.redisClient) {
+    if (!this.cacheService) {
       console.log("❌ Pas de client Redis");
       return false;
     }
 
     const methods = {
       // Méthodes de base
-      get: typeof this.redisClient.get === "function",
-      set: typeof this.redisClient.set === "function",
-      del: typeof this.redisClient.del === "function",
+      get: typeof this.cacheService.get === "function",
+      set: typeof this.cacheService.set === "function",
+      del: typeof this.cacheService.del === "function",
 
       // Méthodes avec expiration
-      setex: typeof this.redisClient.setex === "function",
-      setEx: typeof this.redisClient.setEx === "function", // Redis v4+
-      expire: typeof this.redisClient.expire === "function",
-      expireAt: typeof this.redisClient.expireAt === "function",
+      setex: typeof this.cacheService.setex === "function",
+      setEx: typeof this.cacheService.setEx === "function", // Redis v4+
+      expire: typeof this.cacheService.expire === "function",
+      expireAt: typeof this.cacheService.expireAt === "function",
 
       // Méthodes de recherche
-      keys: typeof this.redisClient.keys === "function",
-      scan: typeof this.redisClient.scan === "function",
-      scanStream: typeof this.redisClient.scanStream === "function",
+      keys: typeof this.cacheService.keys === "function",
+      scan: typeof this.cacheService.scan === "function",
+      scanStream: typeof this.cacheService.scanStream === "function",
 
       // Méthodes avancées
-      unlink: typeof this.redisClient.unlink === "function",
-      exists: typeof this.redisClient.exists === "function",
+      unlink: typeof this.cacheService.unlink === "function",
+      exists: typeof this.cacheService.exists === "function",
     };
 
     console.log("🔍 API Redis disponible:", methods);
@@ -1123,7 +1116,7 @@ class MongoMessageRepository {
         // Car pour les conversations de groupe, plusieurs utilisateurs peuvent marquer comme lu
 
         // Récupérer d'abord le message pour vérifier
-        const existingMessage = await Message.findById(messageId);
+        var existingMessage = await Message.findById(messageId);
         if (!existingMessage) {
           throw new Error(`Message ${messageId} introuvable`);
         }
@@ -1184,7 +1177,7 @@ class MongoMessageRepository {
       });
 
       // ✅ INVALIDER LES CACHES LIÉS
-      if (this.redisClient) {
+      if (this.cacheService) {
         try {
           await this._invalidateMessageCaches(messageId);
           await this._invalidateConversationCaches(updateResult.conversationId);
@@ -1212,7 +1205,9 @@ class MongoMessageRepository {
               receiverId,
               status,
               processingTime,
-              previousStatus: existingMessage?.status || "unknown",
+              previousStatus: existingMessage
+                ? existingMessage.status
+                : "unknown",
             }
           );
           console.log(`📤 Événement Kafka publié pour message ${messageId}`);
@@ -1322,12 +1317,16 @@ class MongoMessageRepository {
       });
 
       // ✅ INVALIDER LES CACHES LIÉS SI DES MESSAGES ONT ÉTÉ MODIFIÉS
-      if (this.redisClient && updateResult.modifiedCount > 0) {
+      if (this.cacheService && updateResult.modifiedCount > 0) {
         try {
           if (conversationId) {
-            await this._invalidateConversationCaches(conversationId);
+            await this.cacheService.del(
+              `${this.cachePrefix}conv:${conversationId}:*`
+            );
           }
-          await this._invalidateUserCaches(receiverId);
+          await this.cacheService.del(
+            `${this.cachePrefix}uploader:${receiverId}:*`
+          );
           console.log(
             `🗑️ Caches invalidés pour conversation ${conversationId || "[all]"}`
           );

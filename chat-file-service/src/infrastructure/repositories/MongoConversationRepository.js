@@ -1,15 +1,14 @@
 const Conversation = require("../mongodb/models/ConversationModel");
 
 class MongoConversationRepository {
-  constructor(redisClient = null, kafkaProducer = null) {
-    this.redisClient = redisClient;
+  constructor(cacheService = null, kafkaProducer = null) {
+    this.cacheService = cacheService;
     this.kafkaProducer = kafkaProducer;
-    this.cachePrefix = "conversation:";
-    this.defaultTTL = 600; // 10 minutes
+    this.cachePrefix = "conv:";
+    this.defaultTTL = 3600;
     this.metrics = {
       cacheHits: 0,
       cacheMisses: 0,
-      dbQueries: 0,
       errors: 0,
       kafkaEvents: 0,
       kafkaErrors: 0,
@@ -223,7 +222,7 @@ class MongoConversationRepository {
       const processingTime = Date.now() - startTime;
 
       // ✅ CACHE REDIS AVEC GESTION D'ERREUR
-      if (this.redisClient) {
+      if (this.cacheService) {
         try {
           await this._cacheConversation(savedConversation);
           console.log(
@@ -296,7 +295,7 @@ class MongoConversationRepository {
 
     try {
       // Cache Redis
-      if (this.redisClient && useCache) {
+      if (this.cacheService && useCache) {
         try {
           const cached = await this._getCachedConversation(conversationId);
           if (cached) {
@@ -328,7 +327,7 @@ class MongoConversationRepository {
       const processingTime = Date.now() - startTime;
 
       // Mettre en cache
-      if (this.redisClient && useCache) {
+      if (this.cacheService && useCache) {
         try {
           await this._cacheConversation(conversation);
         } catch (cacheError) {
@@ -354,29 +353,25 @@ class MongoConversationRepository {
   }
 
   async findByParticipant(userId, options = {}) {
-    const { page = 1, limit = 20, useCache = true } = options;
+    const { page = 1, limit = 20, type = null, useCache = true } = options;
     const startTime = Date.now();
-    const cacheKey = `${this.cachePrefix}participant:${userId}:p${page}:l${limit}`;
+    const cacheKey = `${this.cachePrefix}participant:${userId}:p${page}:l${limit}:t${type}`;
 
     try {
-      // Cache Redis
-      if (this.redisClient && useCache) {
+      if (this.cacheService && useCache) {
         try {
-          const cached = await this.redisClient.get(cacheKey);
+          const cached = await this.cacheService.get(cacheKey);
           if (cached) {
             this.metrics.cacheHits++;
-            const data = JSON.parse(cached);
-            console.log(
-              `📦 Conversations depuis cache: ${userId} (${
-                Date.now() - startTime
-              }ms)`
-            );
-            return { ...data, fromCache: true };
+            return { ...cached, fromCache: true };
           } else {
             this.metrics.cacheMisses++;
           }
         } catch (cacheError) {
-          console.warn("⚠️ Erreur cache conversations:", cacheError.message);
+          console.warn(
+            "⚠️ Erreur lecture cache conversations:",
+            cacheError.message
+          );
         }
       }
 
@@ -397,13 +392,9 @@ class MongoConversationRepository {
       ]);
 
       const result = {
-        conversations: conversations.map((conv) => ({
-          ...conv,
-          unreadCount: conv.unreadCounts?.[userId] || 0,
-          isArchived: conv.archivedBy?.includes(userId) || false,
-          isMuted: conv.mutedBy?.includes(userId) || false,
-          isPinned: conv.pinnedBy?.includes(userId) || false,
-        })),
+        conversations: conversations.map((conv) =>
+          this._sanitizeConversationData(conv)
+        ),
         pagination: {
           currentPage: page,
           totalPages: Math.ceil(totalCount / limit),
@@ -416,16 +407,14 @@ class MongoConversationRepository {
 
       const processingTime = Date.now() - startTime;
 
-      // Mettre en cache
-      if (this.redisClient && useCache) {
+      if (this.cacheService && useCache) {
         try {
-          await this.redisClient.setex(
-            cacheKey,
-            this.defaultTTL,
-            JSON.stringify(result)
-          );
+          await this.cacheService.set(cacheKey, result, this.defaultTTL);
         } catch (cacheError) {
-          console.warn("⚠️ Erreur cache conversations:", cacheError.message);
+          console.warn(
+            "⚠️ Erreur mise en cache conversations:",
+            cacheError.message
+          );
         }
       }
 
@@ -470,7 +459,7 @@ class MongoConversationRepository {
       const processingTime = Date.now() - startTime;
 
       // Invalider cache
-      if (this.redisClient) {
+      if (this.cacheService) {
         try {
           await this._invalidateConversationCaches(conversationId);
         } catch (cacheError) {
@@ -510,49 +499,13 @@ class MongoConversationRepository {
   // ===============================
 
   async _cacheConversation(conversation) {
-    if (!this.redisClient) return false;
-
+    if (!this.cacheService) return false;
     try {
-      const cacheKey = `conversation:${conversation._id}`;
-      const conversationData = JSON.stringify({
-        id: conversation._id,
-        name: conversation.name,
-        type: conversation.type,
-        participants: conversation.participants,
-        lastMessage: conversation.lastMessage,
-        lastMessageAt: conversation.lastMessageAt,
-        unreadCounts: conversation.unreadCounts,
-        createdAt: conversation.createdAt,
-        updatedAt: conversation.updatedAt,
-      });
-
-      // ✅ GÉRER LES DIFFÉRENTES API REDIS (MÊME LOGIQUE QUE POUR LES MESSAGES)
-      if (typeof this.redisClient.setex === "function") {
-        await this.redisClient.setex(
-          cacheKey,
-          this.defaultTTL,
-          conversationData
-        );
-      } else if (typeof this.redisClient.setEx === "function") {
-        await this.redisClient.setEx(
-          cacheKey,
-          this.defaultTTL,
-          conversationData
-        );
-      } else if (typeof this.redisClient.set === "function") {
-        await this.redisClient.set(cacheKey, conversationData);
-
-        if (typeof this.redisClient.expire === "function") {
-          await this.redisClient.expire(cacheKey, this.defaultTTL);
-        }
-      } else {
-        console.warn(
-          "⚠️ Aucune méthode Redis compatible pour le cache conversation"
-        );
-        return false;
-      }
-
-      console.log(`💾 Conversation mise en cache: ${conversation._id}`);
+      await this.cacheService.set(
+        `${this.cachePrefix}${conversation._id}`,
+        conversation,
+        this.defaultTTL
+      );
       return true;
     } catch (error) {
       console.warn(
@@ -564,19 +517,43 @@ class MongoConversationRepository {
   }
 
   async _getCachedConversation(conversationId) {
+    if (!this.cacheService) return null;
     try {
-      const cacheKey = `${this.cachePrefix}${conversationId}`;
-      const cached = await this.redisClient.get(cacheKey);
-
-      if (!cached) {
-        return null;
-      }
-
-      const data = JSON.parse(cached);
+      const data = await this.cacheService.get(
+        `${this.cachePrefix}${conversationId}`
+      );
       return data;
     } catch (error) {
       console.warn(`⚠️ Erreur lecture cache ${conversationId}:`, error.message);
       return null;
+    }
+  }
+
+  async _invalidateConversationCache(conversationId) {
+    if (!this.cacheService) return false;
+    try {
+      await this.cacheService.del(`${this.cachePrefix}${conversationId}`);
+      console.log(`🗑️ Cache conversation invalidé: ${conversationId}`);
+      return true;
+    } catch (error) {
+      console.warn(`⚠️ Erreur invalidation ${conversationId}:`, error.message);
+      return false;
+    }
+  }
+
+  async _invalidateParticipantConversationsCache(userId) {
+    if (!this.cacheService) return false;
+    try {
+      const pattern = `${this.cachePrefix}participant:${userId}:*`;
+      await this.cacheService.del(pattern);
+      console.log(`🗑️ Cache participant invalidé: ${userId}`);
+      return true;
+    } catch (error) {
+      console.warn(
+        `⚠️ Erreur invalidation participant ${userId}:`,
+        error.message
+      );
+      return false;
     }
   }
 
@@ -789,7 +766,6 @@ class MongoConversationRepository {
     this.metrics = {
       cacheHits: 0,
       cacheMisses: 0,
-      dbQueries: 0,
       errors: 0,
       kafkaEvents: 0,
       kafkaErrors: 0,
@@ -1039,7 +1015,7 @@ class MongoConversationRepository {
   }
 
   async _invalidateConversationCaches(conversationId) {
-    if (!this.redisClient) return;
+    if (!this.cacheService) return;
 
     const patterns = [
       `${this.cachePrefix}${conversationId}`,
@@ -1051,9 +1027,9 @@ class MongoConversationRepository {
 
     for (const pattern of patterns) {
       try {
-        const keys = await this.redisClient.keys(pattern);
-        if (keys.length > 0) {
-          await this.redisClient.del(keys);
+        const keys = await this.cacheService.keys(pattern);
+        if (keys && keys.length > 0) {
+          await this.cacheService.del(keys);
         }
       } catch (error) {
         console.warn(

@@ -3,12 +3,12 @@ class SendMessage {
     messageRepository,
     conversationRepository,
     kafkaProducer = null,
-    redisClient = null
+    cacheService = null // Ajouté pour centraliser le cache
   ) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
     this.kafkaProducer = kafkaProducer;
-    this.redisClient = redisClient;
+    this.cacheService = cacheService;
   }
 
   // ✅ AMÉLIORER LA LOGIQUE PRINCIPALE DANS execute()
@@ -193,7 +193,7 @@ class SendMessage {
         // ✅ NE PAS FAIRE ÉCHOUER LE MESSAGE SI LA MISE À JOUR ÉCHOUE
       }
 
-      // ✅ PUBLIER SUR KAFKA
+      // Publier l'événement Kafka si besoin (inchangé)
       if (this.kafkaProducer) {
         try {
           await this.kafkaProducer.publishMessage({
@@ -212,8 +212,8 @@ class SendMessage {
         }
       }
 
-      // ✅ INVALIDER LE CACHE REDIS
-      if (this.redisClient) {
+      // ✅ INVALIDER LE CACHE REDIS VIA CacheService
+      if (this.cacheService) {
         try {
           const cacheKeys = [
             `messages:${conversationId}`,
@@ -221,20 +221,14 @@ class SendMessage {
             `conversations:user:${senderId}`,
             `unread:*:${conversationId}`,
           ];
-
           for (const key of cacheKeys) {
-            if (key.includes("*")) {
-              const keys = await this.redisClient.keys(key);
-              if (keys.length > 0) {
-                await this.redisClient.del(keys);
-              }
-            } else {
-              await this.redisClient.del(key);
-            }
+            await this.cacheService.del(key);
           }
-          console.log(`🗑️ Cache invalidé pour conversation: ${conversationId}`);
-        } catch (redisError) {
-          console.warn("⚠️ Erreur cache Redis:", redisError.message);
+        } catch (cacheError) {
+          console.warn(
+            "⚠️ Erreur invalidation cache SendMessage:",
+            cacheError.message
+          );
         }
       }
 

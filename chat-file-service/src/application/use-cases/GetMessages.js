@@ -1,7 +1,8 @@
 class GetMessages {
-  constructor(messageRepository, redisClient = null) {
+  constructor(messageRepository, cacheService = null) {
     this.messageRepository = messageRepository;
-    this.redisClient = redisClient;
+    this.cacheService = cacheService;
+    this.defaultTTL = 300; // 5 minutes
   }
 
   async execute(conversationId, options = {}) {
@@ -9,74 +10,49 @@ class GetMessages {
       const { page = 1, limit = 50, userId } = options;
 
       if (!conversationId) {
-        throw new Error('ID de conversation requis');
+        throw new Error("ID de conversation requis");
       }
 
-      // Vérifier le cache Redis
+      // Vérifier le cache Redis via CacheService
       let cachedMessages = null;
-      if (this.redisClient) {
+      if (this.cacheService) {
         try {
           const cacheKey = `messages:${conversationId}:${page}:${limit}`;
-          const cached = await this.redisClient.get(cacheKey);
-          if (cached) {
-            cachedMessages = JSON.parse(cached);
+          cachedMessages = await this.cacheService.get(cacheKey);
+          if (cachedMessages) {
             return {
               ...cachedMessages,
-              fromCache: true
+              fromCache: true,
             };
           }
         } catch (redisError) {
-          console.warn('⚠️ Erreur cache Redis:', redisError.message);
+          console.warn("⚠️ Erreur cache Redis:", redisError.message);
         }
       }
 
       // Récupérer depuis la base
-      const messages = await this.messageRepository.findByConversationId(
+      const messages = await this.messageRepository.findByConversation(
         conversationId,
         {
           page: parseInt(page),
           limit: parseInt(limit),
-          sort: { timestamp: -1 }
+          userId,
         }
       );
 
-      const totalCount = await this.messageRepository.countByConversationId(conversationId);
-
-      const result = {
-        messages: messages.map(msg => ({
-          id: msg.id,
-          content: msg.content,
-          senderId: msg.senderId,
-          conversationId: msg.conversationId,
-          type: msg.type || 'TEXT',
-          status: msg.status || 'SENT',
-          timestamp: msg.timestamp,
-          createdAt: msg.createdAt,
-          updatedAt: msg.updatedAt
-        })),
-        pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          total: totalCount,
-          pages: Math.ceil(totalCount / limit)
-        },
-        fromCache: false
-      };
-
-      // Mettre en cache
-      if (this.redisClient && messages.length > 0) {
+      // Mettre en cache le résultat
+      if (this.cacheService) {
         try {
           const cacheKey = `messages:${conversationId}:${page}:${limit}`;
-          await this.redisClient.setex(cacheKey, 300, JSON.stringify(result)); // 5 minutes
+          await this.cacheService.set(cacheKey, messages, this.defaultTTL);
         } catch (redisError) {
-          console.warn('⚠️ Erreur mise en cache:', redisError.message);
+          console.warn("⚠️ Erreur mise en cache Redis:", redisError.message);
         }
       }
 
-      return result;
-
+      return messages;
     } catch (error) {
-      console.error('❌ Erreur GetMessages use case:', error);
+      console.error("❌ Erreur GetMessages use case:", error);
       throw error;
     }
   }

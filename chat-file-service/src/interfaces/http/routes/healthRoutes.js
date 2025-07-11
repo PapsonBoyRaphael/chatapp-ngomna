@@ -178,6 +178,98 @@ function createHealthRoutes(healthController) {
     }
   });
 
+  /**
+   * @api {get} /health/redis-keys Voir les clés et valeurs du cache Redis
+   * @apiName RedisKeys
+   * @apiGroup Health
+   */
+  router.get("/redis-keys", async (req, res) => {
+    try {
+      // Récupérer le client Redis depuis app.locals ou le controller
+      const redisClient =
+        req.app?.locals?.redisClient ||
+        (healthController.redisClient ? healthController.redisClient : null);
+
+      if (!redisClient) {
+        return res.status(503).json({
+          success: false,
+          message: "Client Redis non disponible",
+        });
+      }
+
+      // Récupérer toutes les clés (attention: peut être lent si beaucoup de clés)
+      const keys = await redisClient.keys("*");
+      const result = {};
+
+      // Limiter à 100 clés pour éviter les ralentissements
+      const limitedKeys = keys.slice(0, 100);
+
+      for (const key of limitedKeys) {
+        try {
+          const value = await redisClient.get(key);
+          result[key] = value;
+        } catch (err) {
+          result[key] = `⚠️ Erreur lecture: ${err.message}`;
+        }
+      }
+
+      res.json({
+        success: true,
+        totalKeys: keys.length,
+        keys: limitedKeys,
+        values: result,
+        warning:
+          keys.length > 100
+            ? "Limité à 100 clés pour la performance"
+            : undefined,
+      });
+    } catch (error) {
+      console.error("❌ Erreur lecture clés Redis:", error);
+      res.status(500).json({
+        success: false,
+        message: "Erreur lors de la lecture des clés Redis",
+        error: error.message,
+      });
+    }
+  });
+
+  /**
+   * @api {post} /health/redis-flush Réinitialiser tout le cache Redis
+   * @apiName RedisFlush
+   * @apiGroup Health
+   */
+  router.post("/redis-flush", async (req, res) => {
+    try {
+      // Récupérer le client Redis depuis app.locals ou le controller
+      const redisClient =
+        req.app?.locals?.redisClient ||
+        (healthController.redisClient ? healthController.redisClient : null);
+
+      if (!redisClient) {
+        return res.status(503).json({
+          success: false,
+          message: "Client Redis non disponible",
+        });
+      }
+
+      // Suppression complète de toutes les données Redis
+      await redisClient.flushDb();
+
+      res.json({
+        success: true,
+        message: "Cache Redis vidé avec succès (flushDb)",
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error("❌ Erreur flushDb Redis:", error);
+      res.status(500).json({
+        success: false,
+        message: "Erreur lors du flushDb Redis",
+        error: error.message,
+      });
+    }
+  });
+
   return router;
 }
 
