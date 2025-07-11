@@ -40,6 +40,7 @@ const UploadFile = require("./application/use-cases/UploadFile");
 const GetConversationIds = require("./application/use-cases/GetConversationIds");
 const GetMessageById = require("./application/use-cases/GetMessageById");
 const UpdateMessageContent = require("./application/use-cases/UpdateMessageContent");
+const DownloadFile = require("./application/use-cases/DownloadFile");
 
 // Controllers
 const FileController = require("./application/controllers/FileController");
@@ -361,6 +362,12 @@ const startServer = async () => {
 
     const getMessageByIdUseCase = new GetMessageById(messageRepository);
 
+    const downloadFileUseCase = new DownloadFile(
+      fileRepository,
+      fileStorageService,
+      cacheService
+    );
+
     // ===============================
     // 8. INITIALISATION CONTROLLERS
     // ===============================
@@ -369,7 +376,8 @@ const startServer = async () => {
       getFileUseCase,
       redisClient,
       kafkaProducers?.fileProducer || null,
-      fileStorageService // ✅ PASSER LE SERVICE AU CONTRÔLEUR
+      fileStorageService,
+      downloadFileUseCase // <-- AJOUTE CET ARGUMENT
     );
 
     const messageController = new MessageController(
