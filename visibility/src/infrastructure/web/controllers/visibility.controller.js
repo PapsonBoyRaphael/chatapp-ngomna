@@ -13,7 +13,9 @@ class VisibilityController {
   }
 
   async renderUnitSelection(req, res) {
+    console.log('Session in visibility:', req.session);
     if (!req.session.agent) {
+      console.log('No session agent, redirecting to:', process.env.AUTH_SERVICE_URL);
       return res.redirect(process.env.AUTH_SERVICE_URL);
     }
     try {
@@ -23,11 +25,13 @@ class VisibilityController {
       }
       res.render('unit-selection', { units, agent: req.session.agent });
     } catch (error) {
+      console.error('Unit selection error:', error.message);
       res.render('error', { message: error.message });
     }
   }
 
   async validateUnit(req, res) {
+    console.log('Session in validateUnit:', req.session);
     if (!req.session.agent) {
       return res.redirect(process.env.AUTH_SERVICE_URL);
     }
@@ -40,11 +44,13 @@ class VisibilityController {
       );
       res.redirect('/collaborators');
     } catch (error) {
+      console.error('Validate unit error:', error.message);
       res.render('error', { message: error.message });
     }
   }
 
   async renderCollaborators(req, res) {
+    console.log('Session in renderCollaborators:', req.session);
     if (!req.session.agent) {
       return res.redirect(process.env.AUTH_SERVICE_URL);
     }
@@ -56,11 +62,13 @@ class VisibilityController {
       );
       res.render('collaborators', { collaborators: unitResult, agent: req.session.agent });
     } catch (error) {
+      console.error('Collaborators error:', error.message);
       res.render('error', { message: error.message });
     }
   }
 
   async searchAgents(req, res) {
+    console.log('Session in searchAgents:', req.session);
     if (!req.session.agent) {
       return res.redirect(process.env.AUTH_SERVICE_URL);
     }
@@ -70,6 +78,7 @@ class VisibilityController {
       const agents = await this.searchAgentsUseCase.execute(query, minRank);
       res.render('collaborators', { collaborators: agents, agent: req.session.agent, searchQuery: query });
     } catch (error) {
+      console.error('Search agents error:', error.message);
       res.render('error', { message: error.message });
     }
   }

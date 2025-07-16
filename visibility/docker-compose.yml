@@ -12,17 +12,17 @@ services:
       - .:/app
     networks:
       - app-network
-  neo4j:
-    image: neo4j:5.23
-    environment:
-      - NEO4J_AUTH=neo4j/secret
-    ports:
-      - "7474:7474"
-      - "7687:7687"
-    volumes:
-      - neo4j_data:/data
-    networks:
-      - app-network
+  #neo4j:
+   # image: neo4j:5.23
+    #environment:
+     # - NEO4J_AUTH=neo4j/secret
+    #ports:
+     # - "7474:7474"
+      #- "7687:7687"
+    #volumes:
+     # - neo4j_data:/data
+    #networks:
+     # - app-network
 volumes:
   neo4j_data:
 networks:
