@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= title %> - Visibility Service</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+        }
+        .hierarchy-card {
+            transition: all 0.3s ease;
+        }
+        .hierarchy-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-green-700 mb-2">
+                🌐 Organizational Hierarchy
+            </h1>
+            <p class="text-gray-600">Visibility Service - Unit Assignment & Collaboration</p>
+        </header>
+        
+        <main class="max-w-4xl mx-auto">
+            <%- body %>
+        </main>
+        
+        <footer class="text-center mt-8 text-gray-500 text-sm">
+            <p>&copy; 2024 Cameroon Administration - Visibility Service</p>
+        </footer>
+    </div>
+
+    <script>
+        // Auto-hide success/error messages after 5 seconds
+        setTimeout(() => {
+            const alerts = document.querySelectorAll('.alert-auto-hide');
+            alerts.forEach(alert => {
+                alert.style.transition = 'opacity 0.5s ease';
+                alert.style.opacity = '0';
+                setTimeout(() => alert.remove(), 500);
+            });
+        }, 5000);
+    </script>
+</body>
+</html>

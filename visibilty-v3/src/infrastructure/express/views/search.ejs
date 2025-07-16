@@ -1,0 +1,192 @@
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+  <!-- Agent Verification Section -->
+  <div class="bg-white rounded-lg shadow-lg p-6">
+    <h2 class="text-xl font-bold text-gray-800 mb-4">
+      🔍 Step 1: Verify Agent
+    </h2>
+
+    <% if (error) { %>
+    <div
+      class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6 alert-auto-hide"
+    >
+      <div class="flex items-center">
+        <span class="text-red-500 text-xl mr-3">⚠️</span>
+        <div>
+          <h3 class="text-red-800 font-medium">Error</h3>
+          <p class="text-red-700 text-sm"><%= error %></p>
+        </div>
+      </div>
+    </div>
+    <% } %> <% if (success && agent) { %>
+    <div
+      class="bg-green-50 border border-green-200 rounded-lg p-4 mb-6 alert-auto-hide"
+    >
+      <div class="flex items-center">
+        <span class="text-green-500 text-xl mr-3">✅</span>
+        <div>
+          <h3 class="text-green-800 font-medium">Agent Verified</h3>
+          <p class="text-green-700 text-sm">
+            <strong><%= agent.prenom %> <%= agent.nom %></strong> - <%=
+            agent.rang %>
+          </p>
+        </div>
+      </div>
+    </div>
+    <% } %> <% if (!agent) { %>
+    <form method="POST" action="/verify" class="space-y-4">
+      <div>
+        <label
+          for="matricule"
+          class="block text-sm font-medium text-gray-700 mb-2"
+        >
+          Agent Matricule
+        </label>
+        <input
+          type="text"
+          id="matricule"
+          name="matricule"
+          placeholder="e.g., 010204B"
+          pattern="[0-9]{6}[A-Za-z]"
+          maxlength="7"
+          class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 text-lg font-mono"
+          required
+        />
+      </div>
+
+      <button
+        type="submit"
+        class="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 px-4 rounded-lg transition duration-200"
+      >
+        🔍 Verify Agent
+      </button>
+    </form>
+    <% } %>
+  </div>
+
+  <!-- Unit Search Section -->
+  <div class="bg-white rounded-lg shadow-lg p-6">
+    <h2 class="text-xl font-bold text-gray-800 mb-4">
+      🏢 Step 2: Search & Select Unit
+    </h2>
+
+    <% if (agent) { %>
+    <div class="mb-4 p-3 bg-blue-50 rounded-lg">
+      <p class="text-sm text-blue-700">
+        <strong>Ministry Filter:</strong> <%= agent.ministere %>
+      </p>
+    </div>
+
+    <div class="space-y-4">
+      <div>
+        <label
+          for="unitSearch"
+          class="block text-sm font-medium text-gray-700 mb-2"
+        >
+          Search for Your Unit
+        </label>
+        <input
+          type="text"
+          id="unitSearch"
+          placeholder="Type unit name..."
+          class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          onkeyup="searchUnits(this.value)"
+        />
+      </div>
+
+      <div id="unitResults" class="space-y-2 max-h-60 overflow-y-auto">
+        <p class="text-gray-500 text-sm text-center py-4">
+          Start typing to search for units...
+        </p>
+      </div>
+
+      <form
+        method="POST"
+        action="/attach"
+        id="attachForm"
+        style="display: none"
+        class="mt-4"
+      >
+        <input type="hidden" name="matricule" value="<%= agent.matricule %>" />
+        <input type="hidden" name="rank" value="<%= agent.sanitizedRang %>" />
+        <input type="hidden" name="unitId" id="selectedUnitId" />
+
+        <div class="bg-gray-50 p-4 rounded-lg">
+          <h4 class="font-medium text-gray-800 mb-2">Selected Unit:</h4>
+          <p id="selectedUnitName" class="text-sm text-gray-600"></p>
+        </div>
+
+        <button
+          type="submit"
+          class="w-full mt-4 bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition duration-200"
+        >
+          ✅ Attach to Unit
+        </button>
+      </form>
+    </div>
+    <% } else { %>
+    <div class="text-center py-8 text-gray-500">
+      <p>Please verify your agent first to search for units.</p>
+    </div>
+    <% } %>
+  </div>
+</div>
+
+<% if (agent) { %>
+<script>
+  let searchTimeout;
+
+  async function searchUnits(query) {
+    clearTimeout(searchTimeout);
+
+    if (query.length < 2) {
+      document.getElementById("unitResults").innerHTML =
+        '<p class="text-gray-500 text-sm text-center py-4">Type at least 2 characters to search...</p>';
+      return;
+    }
+
+    searchTimeout = setTimeout(async () => {
+      try {
+        const response = await fetch(
+          `/api/visibility/units/suggestions?ministry=<%= encodeURIComponent(agent.ministere) %>&q=${encodeURIComponent(
+            query
+          )}`
+        );
+        const data = await response.json();
+
+        const resultsDiv = document.getElementById("unitResults");
+
+        if (data.success && data.suggestions.length > 0) {
+          resultsDiv.innerHTML = data.suggestions
+            .map(
+              (unit) => `
+                    <div class="p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-blue-50 transition duration-200" 
+                         onclick="selectUnit('${unit.id}', '${unit.label}')">
+                        <h4 class="font-medium text-gray-800">${unit.label}</h4>
+                    </div>
+                `
+            )
+            .join("");
+        } else {
+          resultsDiv.innerHTML =
+            '<p class="text-gray-500 text-sm text-center py-4">No units found matching your search.</p>';
+        }
+      } catch (error) {
+        console.error("Search error:", error);
+        document.getElementById("unitResults").innerHTML =
+          '<p class="text-red-500 text-sm text-center py-4">Error searching units. Please try again.</p>';
+      }
+    }, 300);
+  }
+
+  function selectUnit(unitId, unitName) {
+    document.getElementById("selectedUnitId").value = unitId;
+    document.getElementById("selectedUnitName").textContent = unitName;
+    document.getElementById("attachForm").style.display = "block";
+
+    // Scroll to form
+    document
+      .getElementById("attachForm")
+      .scrollIntoView({ behavior: "smooth" });
+  }
+</script>
+<% } %>
