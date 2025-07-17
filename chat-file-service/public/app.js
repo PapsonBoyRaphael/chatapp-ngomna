@@ -1046,11 +1046,11 @@ function sendGroupMessage() {
     return;
   }
   const groupId = document.getElementById("groupId").value.trim();
+  const groupName = document.getElementById("groupName")?.value.trim();
   const content = document.getElementById("groupMessageContent").value.trim();
   const receiverIdsRaw = document
     .getElementById("groupReceiverIds")
     .value.trim();
-  // Permettre plusieurs utilisateurs
   const receiverIds = receiverIdsRaw
     ? receiverIdsRaw
         .split(",")
@@ -1066,7 +1066,9 @@ function sendGroupMessage() {
     conversationId: groupId,
     content,
     type: "TEXT",
-    receiverId: receiverIds, // tableau d'utilisateurs
+    receiverId: receiverIds,
+    conversationName: groupName || undefined,
+    broadcast: false,
   });
 }
 
@@ -1076,6 +1078,7 @@ function sendBroadcastMessage() {
     return;
   }
   const broadcastId = document.getElementById("broadcastId").value.trim();
+  const broadcastName = document.getElementById("broadcastName")?.value.trim();
   const content = document
     .getElementById("broadcastMessageContent")
     .value.trim();
@@ -1097,7 +1100,9 @@ function sendBroadcastMessage() {
     conversationId: broadcastId,
     content,
     type: "TEXT",
-    receiverId: receiverIds, // tableau d'utilisateurs
+    receiverId: receiverIds,
+    conversationName: broadcastName || undefined,
+    broadcast: true,
   });
 }
 

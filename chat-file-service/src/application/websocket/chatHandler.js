@@ -750,6 +750,8 @@ class ChatHandler {
         conversationId,
         type = "TEXT",
         receiverId = null,
+        conversationName = null,
+        broadcast = false,
       } = data;
       const userId = socket.userId;
       const matricule = socket.matricule;
@@ -798,82 +800,59 @@ class ChatHandler {
         status: "SENT",
       };
 
-      // ✅ UTILISER LE USE CASE AVEC DONNÉES COMPLÈTES
-      if (
-        this.sendMessageUseCase &&
-        typeof this.sendMessageUseCase.execute === "function"
-      ) {
-        try {
-          const result = await this.sendMessageUseCase.execute({
-            content: message.content,
-            senderId: message.senderId,
-            conversationId: message.conversationId,
-            type: message.type,
-            receiverId: receiverId, // ✅ PASSER LE RECEIVER ID
-            conversationName: null, // ✅ PEUT ÊTRE FOURNI PAR LE CLIENT
+      // Création de groupe ou diffusion si receiverId est un tableau
+      let conversation = null;
+      let conversationType = "PRIVATE";
+      if (Array.isArray(receiverId) && receiverId.length > 1) {
+        if (broadcast && this.createBroadcastUseCase) {
+          conversationType = "BROADCAST";
+          conversation = await this.createBroadcastUseCase.execute({
+            broadcastId: conversationId,
+            name: conversationName || "Liste de diffusion",
+            adminIds: [userId],
+            recipientIds: receiverId.filter((id) => id !== userId),
           });
-
-          // ✅ METTRE À JOUR AVEC LE RÉSULTAT
-          if (result && result.success && result.message) {
-            message.id = result.message.id;
-            console.log(
-              "✅ Message sauvegardé via Use Case:",
-              result.message.id
-            );
-          }
-        } catch (useCaseError) {
-          console.warn("⚠️ Erreur Use Case message:", useCaseError.message);
-
-          // ✅ GESTION SPÉCIFIQUE DES ERREURS
-          if (useCaseError.message.includes("Cast to ObjectId failed")) {
-            socket.emit("message_error", {
-              message: "Conversation introuvable ou ID invalide",
-              code: "CONVERSATION_NOT_FOUND",
-              details: `La conversation "${conversationId}" n'existe pas ou l'ID est invalide`,
-            });
-            return;
-          }
-
-          // ✅ AUTRES ERREURS - CONTINUER EN MODE DÉGRADÉ
-          console.log("🔄 Continuons en mode dégradé sans sauvegarde DB");
+        } else if (this.createGroupUseCase) {
+          conversationType = "GROUP";
+          conversation = await this.createGroupUseCase.execute({
+            groupId: conversationId,
+            name: conversationName || "Groupe",
+            adminId: userId,
+            members: receiverId.filter((id) => id !== userId),
+          });
+        } else {
+          socket.emit("message_error", {
+            message: "Service de création de groupe/diffusion non disponible",
+            code: "GROUP_OR_BROADCAST_CREATION_UNAVAILABLE",
+          });
+          return;
         }
       }
 
-      // Récupérer la conversation
-      let conversation = null;
-      if (
-        this.conversationRepository &&
-        typeof this.conversationRepository.findById === "function"
-      ) {
-        // Utiliser le repository MongoConversationRepository
-        conversation = await this.conversationRepository.findById(
-          conversationId
-        );
-      } else if (
-        this.getConversationIdsUseCase &&
-        typeof this.getConversationIdsUseCase.conversationRepository
-          ?.findById === "function"
-      ) {
-        // Utiliser le repository via le use-case GetConversationIds
-        conversation =
-          await this.getConversationIdsUseCase.conversationRepository.findById(
-            conversationId
-          );
-      } else {
-        console.warn("⚠️ Méthode findById non disponible pour Conversation");
-        socket.emit("message_error", {
-          message: "Impossible de récupérer la conversation",
-          code: "CONVERSATION_METHOD_MISSING",
-        });
-        return;
-      }
-
+      // Si conversation n'a pas été créée, fallback sur SendMessage
+      let result;
       if (!conversation) {
-        socket.emit("message_error", {
-          message: "Conversation introuvable",
-          code: "CONVERSATION_NOT_FOUND",
+        result = await this.sendMessageUseCase.execute({
+          content,
+          senderId: userId,
+          conversationId,
+          type,
+          receiverId,
+          conversationName,
+          broadcast,
         });
-        return;
+        conversationType = result?.conversation?.type || conversationType;
+        conversation = result?.conversation;
+      } else {
+        result = await this.sendMessageUseCase.execute({
+          content,
+          senderId: userId,
+          conversationId: conversation._id,
+          type,
+          receiverId: null,
+          conversationName: conversation.name,
+          broadcast,
+        });
       }
 
       // Logique pour chaque type de conversation
@@ -973,11 +952,12 @@ class ChatHandler {
         }
       }
 
-      // ✅ CONFIRMER À L'EXPÉDITEUR
       socket.emit("message_sent", {
-        messageId: message.id,
-        status: "sent", // ✅ STATUT INITIAL
-        timestamp: message.timestamp,
+        messageId: result.message.id,
+        status: "sent",
+        timestamp: result.message.timestamp,
+        conversationType: conversationType,
+        conversationId: result.conversation.id,
         requiresReceipts: true,
       });
 
