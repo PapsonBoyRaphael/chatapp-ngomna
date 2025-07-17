@@ -289,70 +289,35 @@ class SendMessage {
     conversationName = null
   ) {
     try {
-      console.log(`🆕 Début création conversation: ${conversationId}`, {
-        senderId,
-        receiverId,
-        conversationName,
-      });
-
-      // ✅ VALIDATION STRICTE DU RECEIVER ID
-      if (!receiverId || receiverId === senderId) {
-        console.error("❌ ReceiverID manquant ou invalide:", {
-          receiverId,
-          senderId,
-          isEqual: receiverId === senderId,
-        });
-        throw new Error(
-          "receiverId est requis et doit être différent du senderId pour créer une conversation"
-        );
-      }
-
-      // ✅ DÉTERMINER LES PARTICIPANTS - TOUJOURS 2 POUR UNE CONVERSATION PRIVÉE
-      const participants = [senderId, receiverId];
-
-      // Vérifier qu'on a bien 2 participants uniques
-      const uniqueParticipants = [...new Set(participants)];
-      if (uniqueParticipants.length !== 2) {
-        throw new Error(
-          "Une conversation privée doit avoir exactement 2 participants uniques"
-        );
-      }
-
-      // ✅ DÉTERMINER LE NOM ET TYPE
+      // Si receiverId est un tableau de plus d'un utilisateur, créer un groupe ou une diffusion
+      let participants;
+      let type;
       let name = conversationName;
-      let type = "PRIVATE"; // Forcer PRIVATE pour 2 participants
 
-      if (!name) {
-        name = `Conversation privée`; // Nom générique pour conversation privée
+      if (Array.isArray(receiverId) && receiverId.length > 1) {
+        participants = [
+          senderId,
+          ...receiverId.filter((id) => id !== senderId),
+        ];
+        type = "GROUP"; // ou "BROADCAST" selon le contexte métier
+        if (!name) name = "Groupe";
+      } else {
+        // Conversation privée
+        participants = [senderId, receiverId];
+        type = "PRIVATE";
+        if (!name) name = "Conversation privée";
       }
 
-      console.log(`✅ Participants validés:`, {
-        participants: uniqueParticipants,
-        type,
-        name,
-      });
+      // Correction du tableau plat
+      participants = [...new Set(participants.map(String))];
 
-      // ✅ CRÉER LA CONVERSATION AVEC VALIDATION RENFORCÉE
-      const conversationData = {
-        _id: conversationId,
-        name: name,
-        type: type,
-        participants: uniqueParticipants, // Utiliser les participants validés
-        createdBy: senderId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        lastMessage: null,
-        isActive: true,
-
-        // ✅ INITIALISER UNREADCOUNTS POUR LES 2 PARTICIPANTS
-        unreadCounts: {
-          [senderId]: 0,
-          [receiverId]: 0,
-        },
-
-        // ✅ USER METADATA POUR LES 2 PARTICIPANTS
-        userMetadata: uniqueParticipants.map((participantId) => ({
-          userId: participantId,
+      // Initialiser unreadCounts et userMetadata pour chaque participant
+      const unreadCounts = {};
+      const userMetadata = [];
+      participants.forEach((pid) => {
+        unreadCounts[pid] = 0;
+        userMetadata.push({
+          userId: pid,
           unreadCount: 0,
           lastReadAt: null,
           isMuted: false,
@@ -362,14 +327,27 @@ class SendMessage {
             sound: true,
             vibration: true,
           },
-        })),
+        });
+      });
 
+      // Construction du conversationData
+      const conversationData = {
+        _id: conversationId,
+        name,
+        type,
+        participants,
+        createdBy: senderId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        lastMessage: null,
+        isActive: true,
+        unreadCounts,
+        userMetadata,
         metadata: {
           autoCreated: true,
           createdFrom: "SendMessage",
           version: 1,
           tags: [],
-
           auditLog: [
             {
               action: "CREATED",
@@ -380,7 +358,7 @@ class SendMessage {
                 originalConversationId: conversationId,
                 autoCreated: true,
                 method: "auto_conversation_creation",
-                receiverId: receiverId, // ✅ TRACER LE RECEIVER ID
+                receiverId,
               },
               metadata: {
                 source: "SendMessage-UseCase",
@@ -388,94 +366,48 @@ class SendMessage {
               },
             },
           ],
-
           stats: {
             totalMessages: 0,
             totalFiles: 0,
-            totalParticipants: uniqueParticipants.length,
+            totalParticipants: participants.length,
             lastActivity: new Date(),
           },
         },
-
         settings: {
           allowInvites: true,
           isPublic: false,
-          maxParticipants: 2, // ✅ LIMITER À 2 POUR PRIVATE
+          maxParticipants: type === "PRIVATE" ? 2 : 200,
           messageRetention: 0,
           autoDeleteAfter: 0,
         },
       };
 
-      // ✅ VALIDATION AVANT SAUVEGARDE
+      // Validation
       this.validateConversationData(conversationData);
 
-      // ✅ VALIDATION SPÉCIFIQUE POUR CONVERSATION PRIVÉE
-      this.validatePrivateConversation(conversationData);
+      // Sauvegarde
+      const savedConversation = await this.conversationRepository.save(
+        conversationData
+      );
 
-      console.log(`📝 Données conversation validées:`, {
-        id: conversationData._id,
-        name: conversationData.name,
-        type: conversationData.type,
-        participants: conversationData.participants,
-        participantsCount: conversationData.participants.length,
-        unreadCountsKeys: Object.keys(conversationData.unreadCounts),
-      });
-
-      // ✅ SAUVEGARDER VIA LE REPOSITORY
-      let savedConversation;
-      try {
-        savedConversation = await this.conversationRepository.save(
-          conversationData
-        );
-
-        if (!savedConversation || !savedConversation._id) {
-          throw new Error("Repository a retourné une conversation invalide");
-        }
-
-        console.log(`✅ Conversation privée créée avec succès:`, {
-          id: savedConversation._id,
-          name: savedConversation.name,
-          participants: savedConversation.participants,
-          participantsCount: savedConversation.participants?.length,
-        });
-      } catch (saveError) {
-        console.error(`❌ Erreur sauvegarde repository:`, saveError.message);
-        throw new Error(`Erreur repository: ${saveError.message}`);
-      }
-
-      // ✅ PUBLIER L'ÉVÉNEMENT DE CRÉATION
+      // Publier l'événement Kafka
       if (this.kafkaProducer) {
-        try {
-          await this.kafkaProducer.publishMessage({
-            eventType: "PRIVATE_CONVERSATION_CREATED",
-            conversationId: String(savedConversation._id),
-            createdBy: senderId,
-            participants: uniqueParticipants,
-            receiverId: receiverId, // ✅ INCLURE LE RECEIVER ID
-            name: name,
-            type: type,
-            trigger: "message_send",
-            timestamp: new Date().toISOString(),
-            source: "SendMessage-UseCase",
-          });
-          console.log(`📤 Événement PRIVATE_CONVERSATION_CREATED publié`);
-        } catch (kafkaError) {
-          console.warn(
-            "⚠️ Erreur publication création conversation:",
-            kafkaError.message
-          );
-        }
+        await this.kafkaProducer.publishMessage({
+          eventType: `${type}_CONVERSATION_CREATED`,
+          conversationId: String(savedConversation._id),
+          createdBy: senderId,
+          participants,
+          receiverId,
+          name,
+          type,
+          trigger: "message_send",
+          timestamp: new Date().toISOString(),
+          source: "SendMessage-UseCase",
+        });
       }
 
       return savedConversation;
     } catch (error) {
-      console.error(`❌ Erreur création conversation ${conversationId}:`, {
-        error: error.message,
-        stack: error.stack,
-        conversationId,
-        senderId,
-        receiverId,
-      });
       throw new Error(`Impossible de créer la conversation: ${error.message}`);
     }
   }

@@ -442,6 +442,44 @@ function setupSocketEvents() {
       requiresReceipt: data.requiresDeliveryReceipt,
     });
   });
+
+  socket.on("messagesLoaded", (data) => {
+    log("📥 Messages récupérés", "info", data);
+    const list = document.getElementById("allMessagesList");
+    if (Array.isArray(data.messages)) {
+      list.innerHTML = data.messages
+        .map(
+          (msg) =>
+            `<div class="message-item">
+            <strong>${escapeHtml(msg.senderId)}</strong> :
+            ${escapeHtml(msg.content)}
+            <span class="msg-status">${msg.status}</span>
+            <span class="msg-date">${new Date(
+              msg.timestamp
+            ).toLocaleString()}</span>
+          </div>`
+        )
+        .join("");
+    } else {
+      list.innerHTML = "<div>Aucun message reçu</div>";
+    }
+  });
+
+  socket.on("userTyping", (data) => {
+    log("⌨️ Frappe dans la conversation", "info", data);
+    typingUsers.set(data.userId, {
+      userId: data.userId,
+      userName: data.matricule || data.userId,
+      conversationId: data.conversationId,
+      startedAt: new Date(),
+    });
+    updateTypingDisplay();
+  });
+
+  socket.on("userStoppedTyping", (data) => {
+    typingUsers.delete(data.userId);
+    updateTypingDisplay();
+  });
 }
 
 // ========================================
@@ -859,6 +897,22 @@ function validateMessageData() {
   let isValid = true;
   let messages = [];
 
+  // Vérification ObjectId MongoDB
+  if (conversationId && !/^[0-9a-fA-F]{24}$/.test(conversationId)) {
+    messages.push(
+      "❌ L'ID de conversation doit être un ObjectId MongoDB valide (24 caractères hexa)"
+    );
+    isValid = false;
+  }
+
+  // receiverId requis si conversationId est un ObjectId (nouvelle conversation)
+  if (conversationId && conversationId.length === 24 && !receiverId) {
+    messages.push(
+      "❌ Pour une nouvelle conversation, l'ID destinataire est requis"
+    );
+    isValid = false;
+  }
+
   // ✅ VÉRIFICATIONS DE BASE
   if (!content) {
     messages.push("❌ Le contenu du message est requis");
@@ -976,693 +1030,96 @@ function generateMongoObjectId() {
   return (timestamp + randomHex).substring(0, 24);
 }
 
-// ✅ FONCTION POUR GÉNÉRER DES IDS MONGODB VALIDES
-function generateMongoIds() {
-  const userId = document.getElementById("userId");
-  const conversationId = document.getElementById("conversationId");
-  const receiverId = document.getElementById("receiverId");
-
-  const mongoUserId = generateMongoObjectId();
-  const mongoReceiverId = generateMongoObjectId();
-  const mongoConversationId = generateMongoObjectId();
-
-  userId.value = mongoUserId;
-  receiverId.value = mongoReceiverId;
-  conversationId.value = mongoConversationId;
-
-  log("🔧 IDs MongoDB générés", "info", {
-    userId: mongoUserId,
-    receiverId: mongoReceiverId,
-    conversationId: mongoConversationId,
-  });
-
-  setTimeout(() => validateMessageData(), 100);
+function generateGroupId() {
+  document.getElementById("groupId").value = generateMongoObjectId();
+  log("🔧 ID Groupe généré automatiquement", "info");
 }
 
-// ✅ FONCTION POUR AFFICHER L'AIDE
-function showValidationHelp() {
-  const helpMessage = `
-📋 AIDE VALIDATION DES DONNÉES:
-
-🔐 Authentification:
-- ID Utilisateur: Identifiant numérique (ex: 3)
-- Matricule: Code utilisateur (ex: 559296X)
-
-💬 Message:
-- ID Conversation: Identifiant de la conversation
-- ID Destinataire: REQUIS pour nouvelles conversations
-- Contenu: Texte du message (obligatoire)
-- Type: TEXT, IMAGE, ou FILE
-
-✅ Validations automatiques:
-- Vérification des champs obligatoires
-- Validation que sender ≠ receiver
-- Contrôle de la longueur des IDs
-- Vérification de l'authentification
-
-🔧 Outils disponibles:
-- "Générer IDs Test": Crée des IDs de test
-- "Validation": Vérifie les données avant envoi
-  `;
-
-  alert(helpMessage);
-  log("ℹ️ Aide affichée", "info");
+function generateBroadcastId() {
+  document.getElementById("broadcastId").value = generateMongoObjectId();
+  log("🔧 ID Diffusion généré automatiquement", "info");
 }
 
-// ========================================
-// NETTOYAGE
-// ========================================
-
-window.addEventListener("beforeunload", () => {
-  if (pingInterval) {
-    clearInterval(pingInterval);
+function sendGroupMessage() {
+  if (!socket || !socket.connected || !isAuthenticated) {
+    log("❌ Socket non connecté ou non authentifié", "error");
+    return;
   }
-  if (socket) {
-    socket.disconnect();
+  const groupId = document.getElementById("groupId").value.trim();
+  const content = document.getElementById("groupMessageContent").value.trim();
+  const receiverIdsRaw = document
+    .getElementById("groupReceiverIds")
+    .value.trim();
+  // Permettre plusieurs utilisateurs
+  const receiverIds = receiverIdsRaw
+    ? receiverIdsRaw
+        .split(",")
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0)
+    : [];
+
+  if (!groupId || !content || receiverIds.length === 0) {
+    log("❌ ID groupe, contenu et utilisateurs requis", "error");
+    return;
+  }
+  socket.emit("sendMessage", {
+    conversationId: groupId,
+    content,
+    type: "TEXT",
+    receiverId: receiverIds, // tableau d'utilisateurs
+  });
+}
+
+function sendBroadcastMessage() {
+  if (!socket || !socket.connected || !isAuthenticated) {
+    log("❌ Socket non connecté ou non authentifié", "error");
+    return;
+  }
+  const broadcastId = document.getElementById("broadcastId").value.trim();
+  const content = document
+    .getElementById("broadcastMessageContent")
+    .value.trim();
+  const receiverIdsRaw = document
+    .getElementById("groupReceiverIds")
+    .value.trim();
+  const receiverIds = receiverIdsRaw
+    ? receiverIdsRaw
+        .split(",")
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0)
+    : [];
+
+  if (!broadcastId || !content || receiverIds.length === 0) {
+    log("❌ ID diffusion, contenu et utilisateurs requis", "error");
+    return;
+  }
+  socket.emit("sendMessage", {
+    conversationId: broadcastId,
+    content,
+    type: "TEXT",
+    receiverId: receiverIds, // tableau d'utilisateurs
+  });
+}
+
+// Section réception complète des messages
+socket.on("messagesLoaded", (data) => {
+  log("📥 Messages récupérés", "info", data);
+  const list = document.getElementById("allMessagesList");
+  if (Array.isArray(data.messages)) {
+    list.innerHTML = data.messages
+      .map(
+        (msg) =>
+          `<div class="message-item">
+            <strong>${escapeHtml(msg.senderId)}</strong> :
+            ${escapeHtml(msg.content)}
+            <span class="msg-status">${msg.status}</span>
+            <span class="msg-date">${new Date(
+              msg.timestamp
+            ).toLocaleString()}</span>
+          </div>`
+      )
+      .join("");
+  } else {
+    list.innerHTML = "<div>Aucun message reçu</div>";
   }
 });
-
-// ========================================
-// FONCTIONS POUR GÉRER LES MESSAGES REÇUS
-// ========================================
-
-function addReceivedMessage(type, title, originalData, displayData) {
-  const message = {
-    id: Date.now() + Math.random(),
-    type: type, // 'message', 'typing', 'user', 'error'
-    title: title,
-    timestamp: new Date(),
-    originalData: originalData,
-    displayData: displayData,
-  };
-
-  receivedMessages.unshift(message); // Ajouter au début
-
-  // Limiter à 100 messages
-  if (receivedMessages.length > 100) {
-    receivedMessages = receivedMessages.slice(0, 100);
-  }
-
-  messageCount = receivedMessages.length;
-  updateMessageDisplay();
-  updateMessageStats();
-}
-
-function updateMessageDisplay() {
-  const display = document.getElementById("messagesDisplay");
-  const filteredMessages = getFilteredMessages();
-
-  if (filteredMessages.length === 0) {
-    display.innerHTML = `
-      <div class="empty-state">
-        <i class="fas fa-inbox"></i>
-        <p>Aucun message dans cette catégorie</p>
-        <small>Les messages de type "${currentMessageTab}" apparaîtront ici</small>
-      </div>
-    `;
-    return;
-  }
-
-  const messagesHtml = filteredMessages
-    .map((message) => createMessageHTML(message))
-    .join("");
-  display.innerHTML = messagesHtml;
-
-  if (autoScroll) {
-    display.scrollTop = display.scrollHeight;
-  }
-}
-
-function createMessageHTML(message) {
-  const timeStr = message.timestamp.toLocaleTimeString();
-  const dateStr = message.timestamp.toLocaleDateString();
-
-  return `
-    <div class="message-item ${message.type}-type">
-      <div class="message-header">
-        <span class="message-type-badge ${message.type}">${message.title}</span>
-        <span class="message-timestamp">${dateStr} ${timeStr}</span>
-      </div>
-      <div class="message-content">
-        ${formatDisplayData(message.displayData)}
-      </div>
-      ${
-        message.originalData
-          ? `<div class="message-data">${JSON.stringify(
-              message.originalData,
-              null,
-              2
-            )}</div>`
-          : ""
-      }
-    </div>
-  `;
-}
-
-function formatDisplayData(data) {
-  if (!data) return "";
-
-  let html = "";
-  Object.entries(data).forEach(([key, value]) => {
-    if (value !== null && value !== undefined) {
-      html += `<strong>${key}:</strong> ${escapeHtml(String(value))}<br>`;
-    }
-  });
-  return html;
-}
-
-function getFilteredMessages() {
-  if (currentMessageTab === "all") {
-    return receivedMessages;
-  }
-
-  const typeMap = {
-    messages: ["message"],
-    typing: ["typing"],
-    users: ["user"],
-    errors: ["error"],
-  };
-
-  const allowedTypes = typeMap[currentMessageTab] || [];
-  return receivedMessages.filter((msg) => allowedTypes.includes(msg.type));
-}
-
-function switchMessageTab(tab) {
-  currentMessageTab = tab;
-
-  // Mettre à jour l'UI des onglets
-  document.querySelectorAll(".tab-btn").forEach((btn) => {
-    btn.classList.remove("active");
-  });
-  document.getElementById(tab + "Tab").classList.add("active");
-
-  updateMessageDisplay();
-  log(`🔄 Basculement vers l'onglet: ${tab}`, "info");
-}
-
-function clearMessages() {
-  receivedMessages = [];
-  messageCount = 0;
-  updateMessageDisplay();
-  updateMessageStats();
-  log("🗑️ Messages effacés", "info");
-}
-
-function toggleAutoScroll() {
-  autoScroll = !autoScroll;
-  const btn = document.getElementById("autoScrollBtn");
-  btn.textContent = `📜 Auto-scroll: ${autoScroll ? "ON" : "OFF"}`;
-  btn.className = autoScroll ? "btn-success" : "btn-secondary";
-  log(`📜 Auto-scroll ${autoScroll ? "activé" : "désactivé"}`, "info");
-}
-
-function updateMessageStats() {
-  document.getElementById(
-    "messageCount"
-  ).textContent = `${messageCount} messages`;
-}
-
-// ========================================
-// FONCTIONS POUR GÉRER LES UTILISATEURS EN LIGNE
-// ========================================
-
-function updateOnlineUsersDisplay() {
-  const grid = document.getElementById("onlineUsersGrid");
-  const count = document.getElementById("onlineCount");
-
-  count.textContent = `${onlineUsers.size} utilisateurs en ligne`;
-
-  if (onlineUsers.size === 0) {
-    grid.innerHTML = `
-      <div class="empty-state">
-        <i class="fas fa-users"></i>
-        <p>Aucun utilisateur en ligne</p>
-        <small>Les utilisateurs connectés apparaîtront ici</small>
-      </div>
-    `;
-    return;
-  }
-
-  const usersHtml = Array.from(onlineUsers.values())
-    .map(
-      (user) => `
-    <div class="user-card">
-      <div class="user-avatar">
-        ${getUserInitials(user.matricule)}
-        <div class="online-dot"></div>
-      </div>
-      <div class="user-info">
-        <div class="user-name">${escapeHtml(user.matricule)}</div>
-        <div class="user-status">En ligne depuis ${formatRelativeTime(
-          user.connectedAt
-        )}</div>
-      </div>
-    </div>
-  `
-    )
-    .join("");
-
-  grid.innerHTML = usersHtml;
-}
-
-function getUserInitials(name) {
-  if (!name) return "?";
-  const parts = name.split(/[\s\-_]+/);
-  if (parts.length >= 2) {
-    return (parts[0][0] + parts[1][0]).toUpperCase();
-  }
-  return name.substring(0, 2).toUpperCase();
-}
-
-// ========================================
-// FONCTIONS POUR GÉRER LES INDICATEURS DE FRAPPE
-// ========================================
-
-function updateTypingDisplay() {
-  const list = document.getElementById("typingList");
-
-  if (typingUsers.size === 0) {
-    list.innerHTML = `
-      <div class="empty-state">
-        <i class="fas fa-keyboard"></i>
-        <p>Personne n'écrit actuellement</p>
-      </div>
-    `;
-    return;
-  }
-
-  const typingHtml = Array.from(typingUsers.values())
-    .map(
-      (user) => `
-    <div class="typing-item">
-      <div class="typing-indicator">
-        <div class="typing-dot"></div>
-        <div class="typing-dot"></div>
-        <div class="typing-dot"></div>
-      </div>
-      <div>
-        <div class="typing-user">${escapeHtml(user.userName)}</div>
-        <div class="typing-conversation">dans ${user.conversationId}</div>
-      </div>
-    </div>
-  `
-    )
-    .join("");
-
-  list.innerHTML = typingHtml;
-}
-
-// ========================================
-// FONCTIONS UTILITAIRES
-// ========================================
-
-function formatRelativeTime(date) {
-  const now = new Date();
-  const diff = now - date;
-  const minutes = Math.floor(diff / 60000);
-  const hours = Math.floor(diff / 3600000);
-
-  if (minutes < 1) return "quelques secondes";
-  if (minutes < 60) return `${minutes} min`;
-  if (hours < 24) return `${hours}h ${minutes % 60}min`;
-  return date.toLocaleDateString();
-}
-
-function escapeHtml(text) {
-  const div = document.createElement("div");
-  div.textContent = text;
-  return div.innerHTML;
-}
-
-// ========================================
-// AJOUTER UNE FONCTION POUR RÉCUPÉRER UN MESSAGE ID RÉEL DANS app.js
-function getLastMessageId() {
-  // Récupérer le dernier message envoyé pour avoir un ID réel
-  const lastMessage = receivedMessages.find(
-    (msg) =>
-      msg.type === "message" &&
-      msg.title === "✅ Message Envoyé" &&
-      msg.originalData &&
-      msg.originalData.messageId
-  );
-
-  if (lastMessage) {
-    const messageId = lastMessage.originalData.messageId;
-    document.getElementById("messageIdStatus").value = messageId;
-    log(`🔍 Message ID récupéré: ${messageId}`, "info");
-    return messageId;
-  } else {
-    log("❌ Aucun message ID trouvé dans l'historique", "warning");
-    return null;
-  }
-}
-
-// ✅ AMÉLIORER LA FONCTION markMessageDelivered
-function markMessageDelivered() {
-  if (!socket || !socket.connected || !isAuthenticated) {
-    log("❌ Socket non connecté ou non authentifié", "error");
-    return;
-  }
-
-  let messageId = document.getElementById("messageIdStatus")?.value.trim();
-  const conversationId = document.getElementById("conversationId").value.trim();
-
-  // ✅ SI PAS D'ID, ESSAYER DE RÉCUPÉRER LE DERNIER
-  if (!messageId) {
-    messageId = getLastMessageId();
-    if (!messageId) {
-      log("❌ ID du message requis", "error");
-      return;
-    }
-  }
-
-  const data = {
-    messageId: messageId,
-    conversationId: conversationId,
-  };
-
-  log("📬 Marquage message comme livré...", "info", data);
-  socket.emit("markMessageDelivered", data);
-}
-
-// ✅ AMÉLIORER LA FONCTION markMessageRead
-function markMessageRead() {
-  if (!socket || !socket.connected || !isAuthenticated) {
-    log("❌ Socket non connecté ou non authentifié", "error");
-    return;
-  }
-
-  let messageId = document.getElementById("messageIdStatus")?.value.trim();
-  const conversationId = document.getElementById("conversationId").value.trim();
-
-  // ✅ SI PAS D'ID, ESSAYER DE RÉCUPÉRER LE DERNIER
-  if (!messageId) {
-    messageId = getLastMessageId();
-    if (!messageId) {
-      log("❌ ID du message requis", "error");
-      return;
-    }
-  }
-
-  const data = {
-    messageId: messageId,
-    conversationId: conversationId,
-  };
-
-  log("📖 Marquage message comme lu...", "info", data);
-  socket.emit("markMessageRead", data);
-}
-
-// ========================================
-// NETTOYAGE AUTOMATIQUE DES INDICATEURS
-// ========================================
-
-// Nettoyer les indicateurs de frappe après 10 secondes d'inactivité
-setInterval(() => {
-  const now = new Date();
-  let hasChanges = false;
-
-  typingUsers.forEach((user, userId) => {
-    if (now - user.startedAt > 10000) {
-      // 10 secondes
-      typingUsers.delete(userId);
-      hasChanges = true;
-    }
-  });
-
-  if (hasChanges) {
-    updateTypingDisplay();
-  }
-}, 5000); // Vérifier toutes les 5 secondes
-
-// ========================================
-// FONCTIONS POUR GÉRER LES FICHIERS
-// ========================================
-
-// ✅ CORRIGER LA FONCTION fetchMyFiles (lignes ~1430-1450)
-async function fetchMyFiles() {
-  const statusDiv = document.getElementById("myFilesList");
-
-  try {
-    // ✅ RÉCUPÉRER LE TOKEN DEPUIS LES COOKIES
-    const token = getCookie("token");
-
-    // ✅ AFFICHER LE STATUT DE CHARGEMENT
-    statusDiv.innerHTML =
-      '<div class="loading">⏳ Chargement des fichiers...</div>';
-
-    // ✅ AJOUTER LE TOKEN DANS LES HEADERS
-    const headers = {
-      "Content-Type": "application/json",
-    };
-
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-
-    const res = await fetch("http://localhost:8003/files", {
-      method: "GET",
-      headers: headers,
-    });
-
-    // ✅ VÉRIFIER LE STATUT DE LA RÉPONSE
-    if (res.status === 401) {
-      statusDiv.innerHTML = `
-        <div class="error-state">
-          <i class="fas fa-lock"></i>
-          <p>❌ Non autorisé</p>
-          <small>Veuillez vous authentifier d'abord ou vérifier votre token</small>
-        </div>
-      `;
-      log("❌ Erreur 401: Token manquant ou invalide", "error");
-      return;
-    }
-
-    if (!res.ok) {
-      throw new Error(`Erreur HTTP: ${res.status} ${res.statusText}`);
-    }
-
-    const data = await res.json();
-
-    if (data.success && data.data.files) {
-      // ✅ AFFICHER LES FICHIERS AVEC PLUS D'INFORMATIONS
-      const list = data.data.files
-        .map((f) => {
-          const size = formatFileSize(f.size);
-          const date = f.createdAt
-            ? new Date(f.createdAt).toLocaleDateString()
-            : "Date inconnue";
-
-          return `
-            <li class="file-item">
-              <div class="file-info">
-                <a href="${
-                  f.url || "/files/" + f.id
-                }" target="_blank" class="file-link">
-                  ${f.originalName}
-                </a>
-                <div class="file-meta">
-                  <span class="file-size">${size}</span>
-                  <span class="file-date">${date}</span>
-                  <span class="file-type">${f.mimeType || "Type inconnu"}</span>
-                </div>
-              </div>
-              <div class="file-actions">
-                <button onclick="downloadFile('${
-                  f.id
-                }')" class="btn-mini">📥 Télécharger</button>
-                <button onclick="deleteFile('${
-                  f.id
-                }')" class="btn-mini btn-danger">🗑️ Supprimer</button>
-              </div>
-            </li>
-          `;
-        })
-        .join("");
-
-      statusDiv.innerHTML = `
-        <div class="files-list">
-          <div class="files-header">
-            <span>📁 ${data.data.files.length} fichier(s) trouvé(s)</span>
-          </div>
-          <ul class="files-grid">${list}</ul>
-        </div>
-      `;
-
-      log(
-        `✅ ${data.data.files.length} fichiers récupérés`,
-        "success",
-        data.data.files
-      );
-    } else {
-      statusDiv.innerHTML = `
-        <div class="empty-state">
-          <i class="fas fa-folder-open"></i>
-          <p>Aucun fichier trouvé</p>
-          <small>Uploadez votre premier fichier pour le voir apparaître ici</small>
-        </div>
-      `;
-      log("ℹ️ Aucun fichier trouvé", "info");
-    }
-  } catch (err) {
-    statusDiv.innerHTML = `
-      <div class="error-state">
-        <i class="fas fa-exclamation-triangle"></i>
-        <p>❌ Erreur de chargement</p>
-        <small>${err.message}</small>
-      </div>
-    `;
-    log("❌ Erreur récupération fichiers", "error", err);
-  }
-}
-
-// ✅ AJOUTER CETTE FONCTION UTILITAIRE POUR FORMATER LA TAILLE
-function formatFileSize(bytes) {
-  if (!bytes) return "0 B";
-
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(1024));
-
-  return Math.round((bytes / Math.pow(1024, i)) * 100) / 100 + " " + sizes[i];
-}
-
-// ✅ AJOUTER CES FONCTIONS POUR LES ACTIONS SUR LES FICHIERS
-async function downloadFile(fileId) {
-  try {
-    const token = getCookie("token");
-
-    const headers = {};
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-
-    const res = await fetch(`/files/${fileId}`, {
-      method: "GET",
-      headers: headers,
-    });
-
-    if (res.status === 401) {
-      log("❌ Non autorisé pour télécharger le fichier", "error");
-      return;
-    }
-
-    if (!res.ok) {
-      throw new Error(`Erreur HTTP: ${res.status}`);
-    }
-
-    // ✅ DÉCLENCHER LE TÉLÉCHARGEMENT
-    const blob = await res.blob();
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `file_${fileId}`;
-    document.body.appendChild(a);
-    a.click();
-    window.URL.revokeObjectURL(url);
-    document.body.removeChild(a);
-
-    log(`✅ Fichier ${fileId} téléchargé`, "success");
-  } catch (err) {
-    log(`❌ Erreur téléchargement fichier ${fileId}`, "error", err);
-  }
-}
-
-async function deleteFile(fileId) {
-  if (!confirm("Êtes-vous sûr de vouloir supprimer ce fichier ?")) {
-    return;
-  }
-
-  try {
-    const token = getCookie("token");
-
-    const headers = {};
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-
-    const res = await fetch(`/files/${fileId}`, {
-      method: "DELETE",
-      headers: headers,
-    });
-
-    if (res.status === 401) {
-      log("❌ Non autorisé pour supprimer le fichier", "error");
-      return;
-    }
-
-    if (!res.ok) {
-      throw new Error(`Erreur HTTP: ${res.status}`);
-    }
-
-    const data = await res.json();
-
-    if (data.success) {
-      log(`✅ Fichier ${fileId} supprimé`, "success");
-      // ✅ RAFRAÎCHIR LA LISTE
-      fetchMyFiles();
-    } else {
-      throw new Error(data.message || "Erreur suppression");
-    }
-  } catch (err) {
-    log(`❌ Erreur suppression fichier ${fileId}`, "error", err);
-  }
-}
-
-// ✅ AMÉLIORER LA FONCTION handleFileUpload POUR RAFRAÎCHIR AUTOMATIQUEMENT
-async function handleFileUpload(e) {
-  e.preventDefault();
-  const fileInput = document.getElementById("fileInput");
-  const conversationIdInput = document.getElementById("fileConversationId");
-  const statusDiv = document.getElementById("fileUploadStatus");
-
-  if (!fileInput.files.length) {
-    statusDiv.textContent = "❌ Aucun fichier sélectionné";
-    statusDiv.className = "status error";
-    return;
-  }
-
-  const file = fileInput.files[0];
-  const conversationId = conversationIdInput.value.trim();
-
-  const formData = new FormData();
-  formData.append("file", file);
-  if (conversationId) formData.append("conversationId", conversationId);
-
-  statusDiv.textContent = "⏳ Upload en cours...";
-  statusDiv.className = "status info";
-
-  const token = getCookie("token");
-
-  try {
-    const res = await fetch("/files/upload", {
-      method: "POST",
-      body: formData,
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
-
-    const data = await res.json();
-
-    if (data.success) {
-      statusDiv.textContent = "✅ Fichier envoyé avec succès";
-      statusDiv.className = "status success";
-      log("✅ Fichier uploadé", "success", data.data);
-
-      // ✅ RAFRAÎCHIR AUTOMATIQUEMENT LA LISTE DES FICHIERS
-      setTimeout(() => {
-        fetchMyFiles();
-      }, 1000);
-
-      // ✅ RÉINITIALISER LE FORMULAIRE
-      fileInput.value = "";
-      conversationIdInput.value = "";
-    } else {
-      statusDiv.textContent = "❌ " + (data.message || "Erreur upload");
-      statusDiv.className = "status error";
-      log("❌ Erreur upload fichier", "error", data);
-    }
-  } catch (err) {
-    statusDiv.textContent = "❌ Erreur réseau";
-    statusDiv.className = "status error";
-    log("❌ Erreur réseau upload fichier", "error", err);
-  }
-}

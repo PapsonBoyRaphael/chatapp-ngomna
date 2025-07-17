@@ -14,7 +14,9 @@ class ChatHandler {
     roomManager = null,
     getConversationIdsUseCase = null,
     getMessageByIdUseCase = null,
-    updateMessageContentUseCase = null // <-- AJOUTER ICI
+    updateMessageContentUseCase = null,
+    createGroupUseCase = null, // <-- Ajouté
+    createBroadcastUseCase = null // <-- Ajouté
   ) {
     this.io = io;
     this.sendMessageUseCase = sendMessageUseCase;
@@ -24,8 +26,10 @@ class ChatHandler {
     this.onlineUserManager = onlineUserManager;
     this.roomManager = roomManager;
     this.getConversationIdsUseCase = getConversationIdsUseCase;
-    this.getMessageByIdUseCase = getMessageByIdUseCase; // <-- Ajouté
-    this.updateMessageContentUseCase = updateMessageContentUseCase; // <-- AJOUTÉ
+    this.getMessageByIdUseCase = getMessageByIdUseCase;
+    this.updateMessageContentUseCase = updateMessageContentUseCase;
+    this.createGroupUseCase = createGroupUseCase; // <-- Ajouté
+    this.createBroadcastUseCase = createBroadcastUseCase; // <-- Ajouté
 
     // Collections pour gérer les connexions
     this.connectedUsers = new Map();
@@ -791,7 +795,7 @@ class ChatHandler {
         conversationId: conversationId,
         type: type,
         timestamp: new Date().toISOString(),
-        status: "sent",
+        status: "SENT",
       };
 
       // ✅ UTILISER LE USE CASE AVEC DONNÉES COMPLÈTES
@@ -835,6 +839,118 @@ class ChatHandler {
         }
       }
 
+      // Récupérer la conversation
+      let conversation = null;
+      if (
+        this.conversationRepository &&
+        typeof this.conversationRepository.findById === "function"
+      ) {
+        // Utiliser le repository MongoConversationRepository
+        conversation = await this.conversationRepository.findById(
+          conversationId
+        );
+      } else if (
+        this.getConversationIdsUseCase &&
+        typeof this.getConversationIdsUseCase.conversationRepository
+          ?.findById === "function"
+      ) {
+        // Utiliser le repository via le use-case GetConversationIds
+        conversation =
+          await this.getConversationIdsUseCase.conversationRepository.findById(
+            conversationId
+          );
+      } else {
+        console.warn("⚠️ Méthode findById non disponible pour Conversation");
+        socket.emit("message_error", {
+          message: "Impossible de récupérer la conversation",
+          code: "CONVERSATION_METHOD_MISSING",
+        });
+        return;
+      }
+
+      if (!conversation) {
+        socket.emit("message_error", {
+          message: "Conversation introuvable",
+          code: "CONVERSATION_NOT_FOUND",
+        });
+        return;
+      }
+
+      // Logique pour chaque type de conversation
+      if (conversation.type === "BROADCAST") {
+        if (
+          !conversation.settings ||
+          !Array.isArray(conversation.settings.broadcastAdmins) ||
+          !conversation.settings.broadcastAdmins.includes(userId)
+        ) {
+          socket.emit("message_error", {
+            message:
+              "Seuls les admins peuvent envoyer dans une liste de diffusion",
+            code: "NOT_BROADCAST_ADMIN",
+          });
+          return;
+        }
+        if (
+          !conversation.settings ||
+          !Array.isArray(conversation.settings.broadcastRecipients)
+        ) {
+          socket.emit("message_error", {
+            message: "Aucun destinataire dans la liste de diffusion",
+            code: "NO_BROADCAST_RECIPIENTS",
+          });
+          return;
+        }
+        for (const recipientId of conversation.settings.broadcastRecipients) {
+          this.sendToUser(recipientId, "newMessage", message);
+        }
+      } else if (conversation.type === "GROUP") {
+        if (typeof this.broadcastToRoom === "function") {
+          this.broadcastToRoom(conversationId, "newMessage", message);
+        } else {
+          socket.emit("message_error", {
+            message: "Méthode broadcastToRoom non disponible",
+            code: "METHOD_MISSING",
+          });
+        }
+      } else if (conversation.type === "PRIVATE") {
+        // Vérifier que les participants existent et que le destinataire est bien dans la conversation
+        if (
+          !Array.isArray(conversation.participants) ||
+          conversation.participants.length !== 2
+        ) {
+          socket.emit("message_error", {
+            message: "Conversation privée invalide",
+            code: "INVALID_PRIVATE_CONVERSATION",
+          });
+          return;
+        }
+        // Déterminer l'autre participant
+        const otherParticipant = conversation.participants.find(
+          (id) => id !== userId
+        );
+        if (!otherParticipant) {
+          socket.emit("message_error", {
+            message: "Destinataire introuvable dans la conversation",
+            code: "PRIVATE_RECIPIENT_NOT_FOUND",
+          });
+          return;
+        }
+        if (typeof this.sendToUser === "function") {
+          this.sendToUser(otherParticipant, "newMessage", message);
+        } else {
+          socket.emit("message_error", {
+            message: "Méthode sendToUser non disponible",
+            code: "METHOD_MISSING",
+          });
+        }
+      } else {
+        socket.emit("message_error", {
+          message: "Type de conversation non supporté",
+          code: "UNSUPPORTED_CONVERSATION_TYPE",
+        });
+        return;
+      }
+
       // ✅ PUBLIER VIA KAFKA SI DISPONIBLE
       if (
         this.messageProducer &&
@@ -856,15 +972,6 @@ class ChatHandler {
           console.warn("⚠️ Erreur publication Kafka:", kafkaError.message);
         }
       }
-
-      // ✅ DIFFUSER LE MESSAGE À TOUS LES PARTICIPANTS DE LA CONVERSATION
-      this.io.to(`conversation_${conversationId}`).emit("newMessage", {
-        ...message,
-        // ✅ AJOUTER DES MÉTADONNÉES POUR LE TRACKING
-        requiresDeliveryReceipt: true,
-        requiresReadReceipt: true,
-        trackingEnabled: true,
-      });
 
       // ✅ CONFIRMER À L'EXPÉDITEUR
       socket.emit("message_sent", {

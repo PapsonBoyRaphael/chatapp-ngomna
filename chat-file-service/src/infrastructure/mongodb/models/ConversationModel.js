@@ -154,7 +154,7 @@ const conversationSchema = new Schema(
     },
     type: {
       type: String,
-      enum: ["PRIVATE", "GROUP", "CHANNEL", "SUPPORT"],
+      enum: ["PRIVATE", "GROUP", "CHANNEL", "SUPPORT", "BROADCAST"],
       default: "PRIVATE",
       required: true,
     },
@@ -208,6 +208,9 @@ const conversationSchema = new Schema(
       maxParticipants: { type: Number, default: 200 },
       messageRetention: { type: Number, default: 0 }, // 0 = illimité
       autoDeleteAfter: { type: Number, default: 0 }, // 0 = jamais
+      // Pour BROADCAST
+      broadcastAdmins: [{ type: String }], // IDs des admins/envoyeurs
+      broadcastRecipients: [{ type: String }], // IDs des destinataires
     },
 
     // ✅ MÉTADONNÉES ET AUDIT - AVEC ENUM CORRIGÉ

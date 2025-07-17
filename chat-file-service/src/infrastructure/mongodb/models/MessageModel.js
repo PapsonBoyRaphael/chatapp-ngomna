@@ -47,6 +47,18 @@ const messageSchema = new mongoose.Schema(
       index: true,
     },
 
+    // Dates de réception et de lecture (ajout explicite)
+    receivedAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    readAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+
     // Métadonnées enrichies
     metadata: {
       // Métadonnées techniques
@@ -252,6 +264,7 @@ messageSchema.methods.generateChecksum = function () {
 // Marquer comme lu avec événement Kafka
 messageSchema.methods.markAsRead = async function () {
   this.status = "READ";
+  this.readAt = new Date(); // <-- Ajout explicite
   this.metadata.deliveryMetadata.readAt = new Date();
 
   // Publier événement Kafka
@@ -262,7 +275,8 @@ messageSchema.methods.markAsRead = async function () {
 
 // Marquer comme livré
 messageSchema.methods.markAsDelivered = async function () {
-  this.status = "delivered";
+  this.status = "DELIVERED";
+  this.receivedAt = new Date(); // <-- Ajout explicite
   this.metadata.deliveryMetadata.deliveredAt = new Date();
 
   await this.publishKafkaEvent("MESSAGE_DELIVERED");
