@@ -1084,6 +1084,8 @@ class ChatHandler {
       const { conversationId } = data;
       const userId = socket.userId;
 
+      console.log("📝 Traitement de l'indicateur de frappe");
+
       if (!conversationId || !userId) return;
 
       // Diffuser l'indicateur de frappe aux autres participants
@@ -1103,6 +1105,8 @@ class ChatHandler {
     try {
       const { conversationId } = data;
       const userId = socket.userId;
+
+      console.log("✋ Traitement de l'arrêt de frappe");
 
       if (!conversationId || !userId) return;
 
