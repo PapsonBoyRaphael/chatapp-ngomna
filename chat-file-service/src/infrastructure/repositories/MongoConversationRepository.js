@@ -839,12 +839,7 @@ class MongoConversationRepository {
       sanitized.userMetadata = sanitized.userMetadata.map((meta) => ({
         userId: String(meta.userId),
         unreadCount: Math.max(0, parseInt(meta.unreadCount) || 0),
-        lastReadAt:
-          meta.lastReadAt instanceof Date
-            ? meta.lastReadAt
-            : meta.lastReadAt
-            ? new Date(meta.lastReadAt)
-            : null,
+        lastReadAt: meta.lastReadAt ? new Date(meta.lastReadAt) : null,
         isMuted: Boolean(meta.isMuted),
         isPinned: Boolean(meta.isPinned),
         customName: meta.customName ? String(meta.customName) : null,
@@ -853,6 +848,9 @@ class MongoConversationRepository {
           sound: Boolean(meta.notificationSettings?.sound ?? true),
           vibration: Boolean(meta.notificationSettings?.vibration ?? true),
         },
+        // ✅ AJOUTER ICI
+        name: meta.name || null,
+        avatar: meta.avatar || null,
       }));
     } else {
       // ✅ CRÉER USER METADATA POUR TOUS LES PARTICIPANTS
