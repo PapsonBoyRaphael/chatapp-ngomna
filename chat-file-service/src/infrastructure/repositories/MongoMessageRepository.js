@@ -330,7 +330,7 @@ class MongoMessageRepository {
         throw new Error("receiverId et status sont requis");
       }
 
-      const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED"];
+      const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED", "DELETED"];
       if (!validStatuses.includes(status)) {
         throw new Error(
           `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`

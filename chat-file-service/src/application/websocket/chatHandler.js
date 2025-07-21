@@ -14,7 +14,9 @@ class ChatHandler {
     roomManager = null,
     getConversationIdsUseCase = null,
     getMessageByIdUseCase = null,
-    updateMessageContentUseCase = null // <-- AJOUTER ICI
+    updateMessageContentUseCase = null,
+    createGroupUseCase = null, // <-- Ajouté
+    createBroadcastUseCase = null // <-- Ajouté
   ) {
     this.io = io;
     this.sendMessageUseCase = sendMessageUseCase;
@@ -24,8 +26,10 @@ class ChatHandler {
     this.onlineUserManager = onlineUserManager;
     this.roomManager = roomManager;
     this.getConversationIdsUseCase = getConversationIdsUseCase;
-    this.getMessageByIdUseCase = getMessageByIdUseCase; // <-- Ajouté
-    this.updateMessageContentUseCase = updateMessageContentUseCase; // <-- AJOUTÉ
+    this.getMessageByIdUseCase = getMessageByIdUseCase;
+    this.updateMessageContentUseCase = updateMessageContentUseCase;
+    this.createGroupUseCase = createGroupUseCase; // <-- Ajouté
+    this.createBroadcastUseCase = createBroadcastUseCase; // <-- Ajouté
 
     // Collections pour gérer les connexions
     this.connectedUsers = new Map();
@@ -746,6 +750,8 @@ class ChatHandler {
         conversationId,
         type = "TEXT",
         receiverId = null,
+        conversationName = null,
+        broadcast = false,
       } = data;
       const userId = socket.userId;
       const matricule = socket.matricule;
@@ -791,48 +797,137 @@ class ChatHandler {
         conversationId: conversationId,
         type: type,
         timestamp: new Date().toISOString(),
-        status: "sent",
+        status: "SENT",
       };
 
-      // ✅ UTILISER LE USE CASE AVEC DONNÉES COMPLÈTES
-      if (
-        this.sendMessageUseCase &&
-        typeof this.sendMessageUseCase.execute === "function"
-      ) {
-        try {
-          const result = await this.sendMessageUseCase.execute({
-            content: message.content,
-            senderId: message.senderId,
-            conversationId: message.conversationId,
-            type: message.type,
-            receiverId: receiverId, // ✅ PASSER LE RECEIVER ID
-            conversationName: null, // ✅ PEUT ÊTRE FOURNI PAR LE CLIENT
+      // Création de groupe ou diffusion si receiverId est un tableau
+      let conversation = null;
+      let conversationType = "PRIVATE";
+      if (Array.isArray(receiverId) && receiverId.length > 1) {
+        if (broadcast && this.createBroadcastUseCase) {
+          conversationType = "BROADCAST";
+          conversation = await this.createBroadcastUseCase.execute({
+            broadcastId: conversationId,
+            name: conversationName || "Liste de diffusion",
+            adminIds: [userId],
+            recipientIds: receiverId.filter((id) => id !== userId),
           });
-
-          // ✅ METTRE À JOUR AVEC LE RÉSULTAT
-          if (result && result.success && result.message) {
-            message.id = result.message.id;
-            console.log(
-              "✅ Message sauvegardé via Use Case:",
-              result.message.id
-            );
-          }
-        } catch (useCaseError) {
-          console.warn("⚠️ Erreur Use Case message:", useCaseError.message);
-
-          // ✅ GESTION SPÉCIFIQUE DES ERREURS
-          if (useCaseError.message.includes("Cast to ObjectId failed")) {
-            socket.emit("message_error", {
-              message: "Conversation introuvable ou ID invalide",
-              code: "CONVERSATION_NOT_FOUND",
-              details: `La conversation "${conversationId}" n'existe pas ou l'ID est invalide`,
-            });
-            return;
-          }
-
-          // ✅ AUTRES ERREURS - CONTINUER EN MODE DÉGRADÉ
-          console.log("🔄 Continuons en mode dégradé sans sauvegarde DB");
+        } else if (this.createGroupUseCase) {
+          conversationType = "GROUP";
+          conversation = await this.createGroupUseCase.execute({
+            groupId: conversationId,
+            name: conversationName || "Groupe",
+            adminId: userId,
+            members: receiverId.filter((id) => id !== userId),
+          });
+        } else {
+          socket.emit("message_error", {
+            message: "Service de création de groupe/diffusion non disponible",
+            code: "GROUP_OR_BROADCAST_CREATION_UNAVAILABLE",
+          });
+          return;
         }
+      }
+
+      // Si conversation n'a pas été créée, fallback sur SendMessage
+      let result;
+      if (!conversation) {
+        result = await this.sendMessageUseCase.execute({
+          content,
+          senderId: userId,
+          conversationId,
+          type,
+          receiverId,
+          conversationName,
+          broadcast,
+        });
+        conversationType = result?.conversation?.type || conversationType;
+        conversation = result?.conversation;
+      } else {
+        result = await this.sendMessageUseCase.execute({
+          content,
+          senderId: userId,
+          conversationId: conversation._id,
+          type,
+          receiverId: null,
+          conversationName: conversation.name,
+          broadcast,
+        });
+      }
+
+      // Logique pour chaque type de conversation
+      if (conversation.type === "BROADCAST") {
+        if (
+          !conversation.settings ||
+          !Array.isArray(conversation.settings.broadcastAdmins) ||
+          !conversation.settings.broadcastAdmins.includes(userId)
+        ) {
+          socket.emit("message_error", {
+            message:
+              "Seuls les admins peuvent envoyer dans une liste de diffusion",
+            code: "NOT_BROADCAST_ADMIN",
+          });
+          return;
+        }
+        if (
+          !conversation.settings ||
+          !Array.isArray(conversation.settings.broadcastRecipients)
+        ) {
+          socket.emit("message_error", {
+            message: "Aucun destinataire dans la liste de diffusion",
+            code: "NO_BROADCAST_RECIPIENTS",
+          });
+          return;
+        }
+        for (const recipientId of conversation.settings.broadcastRecipients) {
+          this.sendToUser(recipientId, "newMessage", message);
+        }
+      } else if (conversation.type === "GROUP") {
+        if (typeof this.broadcastToRoom === "function") {
+          this.broadcastToRoom(conversationId, "newMessage", message);
+        } else {
+          socket.emit("message_error", {
+            message: "Méthode broadcastToRoom non disponible",
+            code: "METHOD_MISSING",
+          });
+        }
+      } else if (conversation.type === "PRIVATE") {
+        // Vérifier que les participants existent et que le destinataire est bien dans la conversation
+        if (
+          !Array.isArray(conversation.participants) ||
+          conversation.participants.length !== 2
+        ) {
+          socket.emit("message_error", {
+            message: "Conversation privée invalide",
+            code: "INVALID_PRIVATE_CONVERSATION",
+          });
+          return;
+        }
+        // Déterminer l'autre participant
+        const otherParticipant = conversation.participants.find(
+          (id) => id !== userId
+        );
+        if (!otherParticipant) {
+          socket.emit("message_error", {
+            message: "Destinataire introuvable dans la conversation",
+            code: "PRIVATE_RECIPIENT_NOT_FOUND",
+          });
+          return;
+        }
+        if (typeof this.sendToUser === "function") {
+          this.sendToUser(otherParticipant, "newMessage", message);
+        } else {
+          socket.emit("message_error", {
+            message: "Méthode sendToUser non disponible",
+            code: "METHOD_MISSING",
+          });
+        }
+      } else {
+        socket.emit("message_error", {
+          message: "Type de conversation non supporté",
+          code: "UNSUPPORTED_CONVERSATION_TYPE",
+        });
+        return;
       }
 
       // ✅ PUBLIER VIA KAFKA SI DISPONIBLE
@@ -857,20 +952,12 @@ class ChatHandler {
         }
       }
 
-      // ✅ DIFFUSER LE MESSAGE À TOUS LES PARTICIPANTS DE LA CONVERSATION
-      this.io.to(`conversation_${conversationId}`).emit("newMessage", {
-        ...message,
-        // ✅ AJOUTER DES MÉTADONNÉES POUR LE TRACKING
-        requiresDeliveryReceipt: true,
-        requiresReadReceipt: true,
-        trackingEnabled: true,
-      });
-
-      // ✅ CONFIRMER À L'EXPÉDITEUR
       socket.emit("message_sent", {
-        messageId: message.id,
-        status: "sent", // ✅ STATUT INITIAL
-        timestamp: message.timestamp,
+        messageId: result.message.id,
+        status: "sent",
+        timestamp: result.message.timestamp,
+        conversationType: conversationType,
+        conversationId: result.conversation.id,
         requiresReceipts: true,
       });
 
@@ -997,6 +1084,8 @@ class ChatHandler {
       const { conversationId } = data;
       const userId = socket.userId;
 
+      console.log("📝 Traitement de l'indicateur de frappe");
+
       if (!conversationId || !userId) return;
 
       // Diffuser l'indicateur de frappe aux autres participants
@@ -1016,6 +1105,8 @@ class ChatHandler {
     try {
       const { conversationId } = data;
       const userId = socket.userId;
+
+      console.log("✋ Traitement de l'arrêt de frappe");
 
       if (!conversationId || !userId) return;
 

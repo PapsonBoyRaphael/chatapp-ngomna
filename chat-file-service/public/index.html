@@ -330,6 +330,74 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
           </div>
           <div id="myFilesList"></div>
         </div>
+
+        <!-- Section Groupes et Diffusion -->
+        <div class="section group-section">
+          <h2>👥 Test Groupes & Diffusion</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="groupId"
+              placeholder="ID Groupe (ObjectId auto)"
+            />
+            <button onclick="generateGroupId()" class="btn-secondary">
+              🔧 Générer ID Groupe
+            </button>
+            <input
+              type="text"
+              id="broadcastId"
+              placeholder="ID Liste de diffusion (ObjectId auto)"
+            />
+            <button onclick="generateBroadcastId()" class="btn-secondary">
+              🔧 Générer ID Diffusion
+            </button>
+            <input
+              type="text"
+              id="groupReceiverIds"
+              placeholder="IDs utilisateurs (séparés par virgule)"
+            />
+            <textarea
+              id="groupMessageContent"
+              placeholder="Message pour le groupe..."
+              rows="2"
+            ></textarea>
+            <textarea
+              id="broadcastMessageContent"
+              placeholder="Message pour la diffusion..."
+              rows="2"
+            ></textarea>
+            <input
+              type="text"
+              id="groupName"
+              placeholder="Nom du groupe (optionnel)"
+            />
+            <input
+              type="text"
+              id="broadcastName"
+              placeholder="Nom de la diffusion (optionnel)"
+            />
+            <div class="button-grid">
+              <button onclick="sendGroupMessage()" class="btn-success">
+                📤 Envoyer au Groupe
+              </button>
+              <button onclick="sendBroadcastMessage()" class="btn-warning">
+                📤 Envoyer à la Diffusion
+              </button>
+              <button onclick="fetchGroupMessages()" class="btn-secondary">
+                📥 Récupérer Messages Groupe
+              </button>
+              <button onclick="fetchBroadcastMessages()" class="btn-secondary">
+                📥 Récupérer Messages Diffusion
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section réception complète des messages -->
+        <div class="section all-messages-section">
+          <h2>📥 Tous les messages reçus</h2>
+          <div id="allMessagesList"></div>
+        </div>
       </div>
 
       <!-- Logs en temps réel -->

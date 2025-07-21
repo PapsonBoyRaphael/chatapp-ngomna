@@ -41,6 +41,8 @@ const GetConversationIds = require("./application/use-cases/GetConversationIds")
 const GetMessageById = require("./application/use-cases/GetMessageById");
 const UpdateMessageContent = require("./application/use-cases/UpdateMessageContent");
 const DownloadFile = require("./application/use-cases/DownloadFile");
+const CreateGroup = require("./application/use-cases/CreateGroup");
+const CreateBroadcast = require("./application/use-cases/CreateBroadcast");
 
 // Controllers
 const FileController = require("./application/controllers/FileController");
@@ -58,6 +60,8 @@ const createConversationRoutes = require("./interfaces/http/routes/conversationR
 const createMessageRoutes = require("./interfaces/http/routes/messageRoutes");
 const createFileRoutes = require("./interfaces/http/routes/fileRoutes");
 const createHealthRoutes = require("./interfaces/http/routes/healthRoutes");
+const createGroupRoutes = require("./interfaces/http/routes/groupRoutes");
+const createBroadcastRoutes = require("./interfaces/http/routes/broadcastRoutes");
 
 // Kafka Producers - Utilisation des vrais fichiers
 const MessageProducer = require("./infrastructure/kafka/producers/MessageProducer");
@@ -368,6 +372,15 @@ const startServer = async () => {
       cacheService
     );
 
+    const createGroupUseCase = new CreateGroup(
+      conversationRepository,
+      kafkaProducers?.messageProducer || null
+    );
+    const createBroadcastUseCase = new CreateBroadcast(
+      conversationRepository,
+      kafkaProducers?.messageProducer || null
+    );
+
     // ===============================
     // 8. INITIALISATION CONTROLLERS
     // ===============================
@@ -409,6 +422,8 @@ const startServer = async () => {
     // ✅ AJOUTER LA ROUTE CONVERSATIONS
     app.use("/conversations", createConversationRoutes(conversationController));
     app.use("/health", createHealthRoutes(healthController));
+    app.use("/groups", createGroupRoutes(createGroupUseCase));
+    app.use("/broadcasts", createBroadcastRoutes(createBroadcastUseCase));
 
     // ===============================
     // 10. CONFIGURATION WEBSOCKET
@@ -426,7 +441,9 @@ const startServer = async () => {
       roomManager,
       getConversationIdsUseCase,
       getMessageByIdUseCase,
-      updateMessageContentUseCase // <-- AJOUTER ICI
+      updateMessageContentUseCase,
+      createGroupUseCase,
+      createBroadcastUseCase
     );
 
     // ✅ CONFIGURER LES GESTIONNAIRES D'ÉVÉNEMENTS SOCKET.IO
