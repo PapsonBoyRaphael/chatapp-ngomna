@@ -1,3 +1,29 @@
+const axios = require("axios");
+
+async function fetchUsersInfo(userIds) {
+  // Adapter l’URL selon la config réseau/déploiement
+  const baseUrl = process.env.AUTH_USER_SERVICE_URL || "http://localhost:8001";
+  // Si tu as une route batch, préfère /users?ids=1,2,3
+  // Sinon, fais plusieurs requêtes en parallèle
+  const requests = userIds.map((id) =>
+    axios
+      .get(`${baseUrl}/${id}`)
+      .then((res) => ({
+        userId: id,
+        name: res.data.nom
+          ? `${res.data.prenom || ""} ${res.data.nom}`.trim()
+          : res.data.name || res.data.username || "",
+        avatar: res.data.profile_pic || res.data.avatar || null,
+      }))
+      .catch(() => ({
+        userId: id,
+        name: null,
+        avatar: null,
+      }))
+  );
+  return Promise.all(requests);
+}
+
 class SendMessage {
   constructor(
     messageRepository,
@@ -311,11 +337,20 @@ class SendMessage {
       // Correction du tableau plat
       participants = [...new Set(participants.map(String))];
 
+      // Récupérer les infos utilisateurs depuis auth-user-service
+      const usersInfo = await fetchUsersInfo(participants);
+      console.log(`🔍 Récupération infos utilisateurs:`, {
+        participants,
+        usersInfoCount: usersInfo,
+      });
+
       // Initialiser unreadCounts et userMetadata pour chaque participant
       const unreadCounts = {};
       const userMetadata = [];
       participants.forEach((pid) => {
         unreadCounts[pid] = 0;
+        const info = usersInfo.find((u) => u.userId === pid) || {};
+        console.log(`🔍 Infos utilisateur ${pid}:`, info);
         userMetadata.push({
           userId: pid,
           unreadCount: 0,
@@ -327,6 +362,8 @@ class SendMessage {
             sound: true,
             vibration: true,
           },
+          name: info.name || null,
+          avatar: info.avatar || null,
         });
       });
 

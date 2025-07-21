@@ -100,6 +100,15 @@ const userMetadataSchema = new Schema(
       sound: { type: Boolean, default: true },
       vibration: { type: Boolean, default: true },
     },
+    // ✅ AJOUT DES INFOS UTILISATEUR
+    name: {
+      type: String,
+      default: null,
+    },
+    avatar: {
+      type: String,
+      default: null,
+    },
   },
   {
     _id: true,
