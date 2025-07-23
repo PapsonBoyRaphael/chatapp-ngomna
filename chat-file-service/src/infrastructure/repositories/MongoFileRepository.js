@@ -707,6 +707,7 @@ class MongoFileRepository {
       sortBy = "createdAt",
       sortOrder = -1,
       useCache = true,
+      useLike = true, // Ajout d'une option pour activer %like%
     } = options;
 
     const startTime = Date.now();
@@ -729,60 +730,40 @@ class MongoFileRepository {
         }
       }
 
-      const filter = { status: { $ne: "DELETED" } };
-
-      // Construire le filtre de recherche
-      if (query.text) {
-        filter.$text = { $search: query.text };
-      }
-      if (query.type) {
-        filter["metadata.technical.fileType"] = query.type;
-      }
-      if (query.uploadedBy) {
-        filter.uploadedBy = query.uploadedBy;
-      }
-      if (query.conversationId) {
-        filter.conversationId = query.conversationId;
-      }
-      if (query.sizeMin || query.sizeMax) {
-        filter.size = {};
-        if (query.sizeMin) filter.size.$gte = query.sizeMin;
-        if (query.sizeMax) filter.size.$lte = query.sizeMax;
-      }
-      if (query.dateFrom || query.dateTo) {
-        filter.createdAt = {};
-        if (query.dateFrom) filter.createdAt.$gte = new Date(query.dateFrom);
-        if (query.dateTo) filter.createdAt.$lte = new Date(query.dateTo);
+      let filter = { status: { $ne: "DELETED" } };
+      if (query && typeof query === "string") {
+        filter.$text = { $search: query };
       }
 
-      const skip = (page - 1) * limit;
-      const sortObj = { [sortBy]: sortOrder };
+      let files = await File.find(filter)
+        .sort({ score: { $meta: "textScore" }, [sortBy]: sortOrder })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean();
 
-      this.metrics.dbQueries += 2;
-      const [files, totalCount] = await Promise.all([
-        FileModel.find(filter).sort(sortObj).skip(skip).limit(limit).lean(),
-        FileModel.countDocuments(filter),
-      ]);
+      // Si aucun résultat et option %like% activée, faire une recherche regex
+      if (useLike && files.length === 0 && query && query.length >= 2) {
+        filter = { status: { $ne: "DELETED" } };
+        filter.$or = [
+          { originalName: { $regex: query, $options: "i" } },
+          { "metadata.content.title": { $regex: query, $options: "i" } },
+          { "metadata.content.artist": { $regex: query, $options: "i" } },
+          { tags: { $regex: query, $options: "i" } },
+        ];
+
+        files = await File.find(filter)
+          .sort({ [sortBy]: sortOrder })
+          .skip((page - 1) * limit)
+          .limit(limit)
+          .lean();
+      }
 
       const result = {
-        files: files.map((file) => ({
-          ...file,
-          displayUrl: file.metadata?.processing?.thumbnailUrl || file.url,
-          formattedSize: this._formatFileSize(file.size),
-          relevanceScore: query.text ? file.score : null,
-        })),
-        pagination: {
-          currentPage: page,
-          totalPages: Math.ceil(totalCount / limit),
-          totalCount,
-          hasNext: page * limit < totalCount,
-          hasPrevious: page > 1,
-        },
+        files,
+        totalFound: files.length,
         query,
-        fromCache: false,
+        searchTime: Date.now() - startTime,
       };
-
-      const processingTime = Date.now() - startTime;
 
       if (this.cacheService && useCache) {
         try {
@@ -793,7 +774,7 @@ class MongoFileRepository {
       }
 
       console.log(
-        `🔍 Recherche fichiers: ${files.length} résultats (${processingTime}ms)`
+        `🔍 Recherche fichiers: ${files.length} résultats (${result.searchTime}ms)`
       );
       return result;
     } catch (error) {
