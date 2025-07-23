@@ -1037,6 +1037,95 @@ class MongoConversationRepository {
       }
     }
   }
+
+  async searchConversations(query, options = {}) {
+    const {
+      userId,
+      type,
+      includeArchived = false,
+      limit = 20,
+      useCache = true,
+      useLike = true, // Ajout d'une option pour activer %like%
+    } = options;
+
+    const startTime = Date.now();
+    const cacheKey = `${this.cachePrefix}searchConv:${JSON.stringify({
+      query,
+      options,
+    })}`;
+
+    try {
+      if (this.cacheService && useCache) {
+        try {
+          const cached = await this.cacheService.get(cacheKey);
+          if (cached) {
+            return JSON.parse(cached);
+          }
+        } catch (cacheError) {
+          console.warn(
+            "⚠️ Erreur cache recherche conversation:",
+            cacheError.message
+          );
+        }
+      }
+
+      // Filtre principal
+      let filter = {};
+      if (userId) filter.participants = userId;
+      if (type) filter.type = type;
+      if (!includeArchived) filter.isArchived = false;
+
+      if (query && typeof query === "string" && query.length >= 2) {
+        filter.$text = { $search: query };
+      }
+
+      let conversations = await Conversation.find(filter)
+        .sort({ score: { $meta: "textScore" }, lastMessageAt: -1 })
+        .limit(limit)
+        .lean();
+
+      // Si aucun résultat et option %like% activée, faire une recherche regex
+      if (useLike && conversations.length === 0 && query && query.length >= 2) {
+        filter = {};
+        if (userId) filter.participants = userId;
+        if (type) filter.type = type;
+        if (!includeArchived) filter.isArchived = false;
+        filter.$or = [
+          { name: { $regex: query, $options: "i" } },
+          { description: { $regex: query, $options: "i" } },
+          { "metadata.tags": { $regex: query, $options: "i" } },
+        ];
+
+        conversations = await Conversation.find(filter)
+          .sort({ lastMessageAt: -1 })
+          .limit(limit)
+          .lean();
+      }
+
+      const result = {
+        conversations,
+        totalFound: conversations.length,
+        query,
+        searchTime: Date.now() - startTime,
+      };
+
+      if (this.cacheService && useCache) {
+        try {
+          await this.cacheService.setex(cacheKey, 600, JSON.stringify(result));
+        } catch (cacheError) {
+          console.warn(
+            "⚠️ Erreur cache recherche conversation:",
+            cacheError.message
+          );
+        }
+      }
+
+      return result;
+    } catch (error) {
+      console.error("❌ Erreur recherche conversations:", error);
+      throw error;
+    }
+  }
 }
 
 module.exports = MongoConversationRepository;

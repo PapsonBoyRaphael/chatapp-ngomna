@@ -330,7 +330,7 @@ class MongoMessageRepository {
         throw new Error("receiverId et status sont requis");
       }
 
-      const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED", "DELETED"];
+      const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED"];
       if (!validStatuses.includes(status)) {
         throw new Error(
           `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`
@@ -559,6 +559,7 @@ class MongoMessageRepository {
       dateTo,
       limit = 20,
       useCache = true,
+      useLike = true, // Ajout d'une option pour activer %like%
     } = options;
 
     const startTime = Date.now();
@@ -568,7 +569,6 @@ class MongoMessageRepository {
     })}`;
 
     try {
-      // Vérifier le cache
       if (this.cacheService && useCache) {
         try {
           const cached = await this.cacheService.get(cacheKey);
@@ -583,11 +583,10 @@ class MongoMessageRepository {
         }
       }
 
-      // Construire le filtre de recherche
-      const filter = {
+      // Filtre principal
+      let filter = {
         $text: { $search: query },
       };
-
       if (conversationId) filter.conversationId = conversationId;
       if (userId) filter.$or = [{ senderId: userId }, { receiverId: userId }];
       if (type) filter.type = type;
@@ -597,10 +596,44 @@ class MongoMessageRepository {
         if (dateTo) filter.createdAt.$lte = new Date(dateTo);
       }
 
-      const messages = await Message.find(filter)
+      let messages = await Message.find(filter)
         .sort({ score: { $meta: "textScore" }, createdAt: -1 })
         .limit(limit)
         .lean();
+
+      // Si aucun résultat et option %like% activée, faire une recherche regex
+      if (useLike && messages.length === 0 && query.length >= 2) {
+        filter = {};
+        if (conversationId) filter.conversationId = conversationId;
+        if (userId) filter.$or = [{ senderId: userId }, { receiverId: userId }];
+        if (type) filter.type = type;
+        if (dateFrom || dateTo) {
+          filter.createdAt = {};
+          if (dateFrom) filter.createdAt.$gte = new Date(dateFrom);
+          if (dateTo) filter.createdAt.$lte = new Date(dateTo);
+        }
+        // Ajout du filtre regex sur le contenu et les hashtags/mentions
+        filter.$or = [
+          { content: { $regex: query, $options: "i" } },
+          {
+            "metadata.contentMetadata.mentions": {
+              $regex: query,
+              $options: "i",
+            },
+          },
+          {
+            "metadata.contentMetadata.hashtags": {
+              $regex: query,
+              $options: "i",
+            },
+          },
+        ];
+
+        messages = await Message.find(filter)
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .lean();
+      }
 
       const result = {
         messages,
@@ -609,10 +642,9 @@ class MongoMessageRepository {
         searchTime: Date.now() - startTime,
       };
 
-      // Mettre en cache
       if (this.cacheService && useCache) {
         try {
-          await this.cacheService.setex(cacheKey, 600, JSON.stringify(result)); // 10 minutes
+          await this.cacheService.setex(cacheKey, 600, JSON.stringify(result));
         } catch (cacheError) {
           console.warn("⚠️ Erreur cache recherche:", cacheError.message);
         }
