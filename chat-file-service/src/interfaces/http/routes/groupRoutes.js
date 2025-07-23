@@ -17,5 +17,23 @@ module.exports = function createGroupRoutes(createGroupUseCase) {
     }
   });
 
+  /**
+   * @api {get} /groups/search Recherche globale messages/fichiers/conversations/groups/broadcast
+   * @apiName SearchOccurrences
+   * @apiGroup Groups
+   */
+  router.get("/search", async (req, res) => {
+    try {
+      // Ajoute la logique si GroupController possède searchOccurrences
+      await groupController.searchOccurrences(req, res);
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Erreur lors de la recherche globale",
+        error: error.message,
+      });
+    }
+  });
+
   return router;
 };

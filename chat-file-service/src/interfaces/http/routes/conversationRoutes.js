@@ -159,6 +159,30 @@ function createConversationRoutes(conversationController) {
       }
     );
 
+    /**
+     * @api {get} /conversations/search Recherche globale messages/fichiers/conversations/groups/broadcast
+     * @apiName SearchOccurrences
+     * @apiGroup Conversations
+     */
+    router.get(
+      "/search",
+      authMiddleware.authenticate,
+      rateLimitMiddleware.apiLimit,
+      validationMiddleware.sanitizeInput,
+      async (req, res) => {
+        try {
+          await conversationController.searchOccurrences(req, res);
+        } catch (error) {
+          console.error("❌ Erreur route GET /conversations/search:", error);
+          res.status(500).json({
+            success: false,
+            message: "Erreur lors de la recherche globale",
+            error: error.message,
+          });
+        }
+      }
+    );
+
     console.log("✅ Routes conversations configurées");
   } catch (error) {
     console.error("❌ Erreur configuration routes conversations:", error);

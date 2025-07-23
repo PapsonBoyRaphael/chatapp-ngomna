@@ -12,7 +12,8 @@ class FileController {
     redisClient = null,
     kafkaProducer = null,
     fileStorageService = null,
-    downloadFileUseCase = null // Ajouté pour injection
+    downloadFileUseCase = null,
+    searchOccurrencesUseCase = null // Ajout du use-case
   ) {
     this.uploadFileUseCase = uploadFileUseCase;
     this.getFileUseCase = getFileUseCase;
@@ -20,6 +21,7 @@ class FileController {
     this.kafkaProducer = kafkaProducer;
     this.fileStorageService = fileStorageService;
     this.downloadFileUseCase = downloadFileUseCase;
+    this.searchOccurrencesUseCase = searchOccurrencesUseCase;
 
     console.log("✅ FileController initialisé avec:", {
       uploadFileUseCase: !!this.uploadFileUseCase,
@@ -337,6 +339,49 @@ class FileController {
           processingTime: `${processingTime}ms`,
           timestamp: new Date().toISOString(),
         },
+      });
+    }
+  }
+
+  async searchOccurrences(req, res) {
+    const startTime = Date.now();
+    try {
+      const {
+        query,
+        page = 1,
+        limit = 20,
+        useLike = true,
+        scope = "files",
+      } = req.query;
+      const userId = req.user?.id || req.headers["user-id"];
+      if (!query || query.length < 2) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Le mot-clé de recherche doit contenir au moins 2 caractères",
+          code: "INVALID_QUERY",
+        });
+      }
+      const result = await this.searchOccurrencesUseCase.execute(query, {
+        userId,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        useLike,
+        scope,
+      });
+      res.json({
+        success: true,
+        data: result,
+        metadata: {
+          processingTime: Date.now() - startTime,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Erreur lors de la recherche globale",
+        error: error.message,
       });
     }
   }

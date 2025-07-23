@@ -7,7 +7,8 @@ class MessageController {
     updateMessageStatusUseCase,
     redisClient = null,
     kafkaProducer = null,
-    getMessageByIdUseCase = null // Ajout du use-case
+    getMessageByIdUseCase = null,
+    searchOccurrencesUseCase = null // Ajout du use-case
   ) {
     this.sendMessageUseCase = sendMessageUseCase;
     this.getMessagesUseCase = getMessagesUseCase;
@@ -15,6 +16,7 @@ class MessageController {
     this.cacheService = redisClient ? new CacheService(redisClient) : null;
     this.kafkaProducer = kafkaProducer;
     this.getMessageByIdUseCase = getMessageByIdUseCase;
+    this.searchOccurrencesUseCase = searchOccurrencesUseCase;
   }
 
   async sendMessage(req, res) {
@@ -384,6 +386,49 @@ class MessageController {
     } catch (error) {
       res.status(500).json({
         success: false,
+        error: error.message,
+      });
+    }
+  }
+
+  async searchOccurrences(req, res) {
+    const startTime = Date.now();
+    try {
+      const {
+        query,
+        page = 1,
+        limit = 20,
+        useLike = true,
+        scope = "messages",
+      } = req.query;
+      const userId = req.user?.id || req.headers["user-id"];
+      if (!query || query.length < 2) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Le mot-clé de recherche doit contenir au moins 2 caractères",
+          code: "INVALID_QUERY",
+        });
+      }
+      const result = await this.searchOccurrencesUseCase.execute(query, {
+        userId,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        useLike,
+        scope,
+      });
+      res.json({
+        success: true,
+        data: result,
+        metadata: {
+          processingTime: Date.now() - startTime,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Erreur lors de la recherche globale",
         error: error.message,
       });
     }

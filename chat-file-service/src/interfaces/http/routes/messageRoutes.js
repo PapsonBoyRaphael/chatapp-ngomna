@@ -209,6 +209,30 @@ function createMessageRoutes(messageController) {
       }
     );
 
+    /**
+     * @api {get} /messages/search Recherche globale messages/fichiers/conversations/groups/broadcast
+     * @apiName SearchOccurrences
+     * @apiGroup Messages
+     */
+    router.get(
+      "/search",
+      authMiddleware.authenticate,
+      rateLimitMiddleware.apiLimit,
+      validationMiddleware.sanitizeInput,
+      async (req, res) => {
+        try {
+          await messageController.searchOccurrences(req, res);
+        } catch (error) {
+          console.error("❌ Erreur route GET /messages/search:", error);
+          res.status(500).json({
+            success: false,
+            message: "Erreur lors de la recherche globale",
+            error: error.message,
+          });
+        }
+      }
+    );
+
     console.log("✅ Routes de messages configurées");
   } catch (error) {
     console.error("❌ Erreur configuration routes messages:", error);

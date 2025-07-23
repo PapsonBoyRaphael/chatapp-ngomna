@@ -205,6 +205,29 @@ function createFileRoutes(fileController) {
       }
     );
 
+    /**
+     * @api {get} /files/search Recherche globale messages/fichiers/conversations/groups/broadcast
+     * @apiName SearchOccurrences
+     * @apiGroup Files
+     */
+    router.get(
+      "/search",
+      authMiddleware.validateToken,
+      validationMiddleware.sanitizeInput,
+      async (req, res) => {
+        try {
+          await fileController.searchOccurrences(req, res);
+        } catch (error) {
+          console.error("❌ Erreur route GET /files/search:", error);
+          res.status(500).json({
+            success: false,
+            message: "Erreur lors de la recherche globale",
+            error: error.message,
+          });
+        }
+      }
+    );
+
     // (Optionnel) POST /files/download-multiple - Télécharger plusieurs fichiers en ZIP
     router.post("/download-multiple", async (req, res) => {
       try {

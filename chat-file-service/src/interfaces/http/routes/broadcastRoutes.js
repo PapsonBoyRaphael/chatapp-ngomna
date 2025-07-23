@@ -17,5 +17,23 @@ module.exports = function createBroadcastRoutes(createBroadcastUseCase) {
     }
   });
 
+  /**
+   * @api {get} /broadcasts/search Recherche globale messages/fichiers/conversations/groups/broadcast
+   * @apiName SearchOccurrences
+   * @apiGroup Broadcasts
+   */
+  router.get("/search", async (req, res) => {
+    try {
+      // Ajoute la logique si BroadcastController possède searchOccurrences
+      await broadcastController.searchOccurrences(req, res);
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: "Erreur lors de la recherche globale",
+        error: error.message,
+      });
+    }
+  });
+
   return router;
 };
