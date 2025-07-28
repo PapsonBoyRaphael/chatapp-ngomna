@@ -14,21 +14,21 @@ class GetMessages {
       }
 
       // Vérifier le cache Redis via CacheService
-      let cachedMessages = null;
-      if (this.cacheService) {
-        try {
-          const cacheKey = `messages:${conversationId}:${page}:${limit}`;
-          cachedMessages = await this.cacheService.get(cacheKey);
-          if (cachedMessages) {
-            return {
-              ...cachedMessages,
-              fromCache: true,
-            };
-          }
-        } catch (redisError) {
-          console.warn("⚠️ Erreur cache Redis:", redisError.message);
-        }
-      }
+      // let cachedMessages = null;
+      // if (this.cacheService) {
+      //   try {
+      //     const cacheKey = `messages:${conversationId}:${page}:${limit}`;
+      //     cachedMessages = await this.cacheService.get(cacheKey);
+      //     if (cachedMessages) {
+      //       return {
+      //         ...cachedMessages,
+      //         fromCache: true,
+      //       };
+      //     }
+      //   } catch (redisError) {
+      //     console.warn("⚠️ Erreur cache Redis:", redisError.message);
+      //   }
+      // }
 
       // Récupérer depuis la base
       const messages = await this.messageRepository.findByConversation(
@@ -39,6 +39,8 @@ class GetMessages {
           userId,
         }
       );
+
+      console.log(messages);
 
       // Mettre en cache le résultat
       if (this.cacheService) {

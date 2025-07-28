@@ -18,7 +18,7 @@ class JwtService {
     });
 
     return jwt.sign(payload, this.secret, {
-      expiresIn: "24h",
+      expiresIn: "74h",
       algorithm: "HS256", // ✅ SPÉCIFIER L'ALGORITHME
     });
   }

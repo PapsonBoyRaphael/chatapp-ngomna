@@ -375,9 +375,17 @@ class MongoConversationRepository {
         }
       }
 
+      // Correction ici : matcher string et number
       const filter = {
-        participants: userId,
+        participants: {
+          $in: [
+            userId,
+            typeof userId === "string" ? Number(userId) : String(userId),
+          ],
+        },
       };
+
+      if (type) filter.type = type;
 
       const skip = (page - 1) * limit;
 

@@ -5,6 +5,7 @@ const JWT_SECRET = process.env.JWT_SECRET;
 class AuthMiddleware {
   // Middleware pour valider le token JWT
   static authenticate = async (req, res, next) => {
+    next();
     try {
       // Mode développement sans JWT
       if (process.env.NODE_ENV === "development" && !process.env.JWT_SECRET) {
@@ -106,6 +107,7 @@ class AuthMiddleware {
 
   // Middleware optionnel (continue même sans token)
   static optional = async (req, res, next) => {
+    next();
     try {
       const authHeader = req.headers.authorization;
 
@@ -130,7 +132,7 @@ class AuthMiddleware {
         req.user = null;
       }
 
-      next();
+      // next();
     } catch (error) {
       console.error("❌ Erreur auth optionnelle:", error);
       req.user = null;

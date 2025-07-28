@@ -7,12 +7,15 @@ class ChatHandler {
   constructor(
     io,
     sendMessageUseCase = null,
+    getMessagesUseCase = null,
     updateMessageStatusUseCase = null,
     messageProducer = null,
     redisClient = null,
     onlineUserManager = null,
     roomManager = null,
     getConversationIdsUseCase = null,
+    getConversationUseCase = null,
+    getConversationsUseCase = null,
     getMessageByIdUseCase = null,
     updateMessageContentUseCase = null,
     createGroupUseCase = null, // <-- Ajouté
@@ -20,12 +23,15 @@ class ChatHandler {
   ) {
     this.io = io;
     this.sendMessageUseCase = sendMessageUseCase;
+    this.getMessagesUseCase = getMessagesUseCase;
     this.updateMessageStatusUseCase = updateMessageStatusUseCase;
     this.messageProducer = messageProducer;
     this.redisClient = redisClient;
     this.onlineUserManager = onlineUserManager;
     this.roomManager = roomManager;
     this.getConversationIdsUseCase = getConversationIdsUseCase;
+    this.getConversationUseCase = getConversationUseCase;
+    this.getConversationsUseCase = getConversationsUseCase;
     this.getMessageByIdUseCase = getMessageByIdUseCase;
     this.updateMessageContentUseCase = updateMessageContentUseCase;
     this.createGroupUseCase = createGroupUseCase; // <-- Ajouté
@@ -146,6 +152,21 @@ class ChatHandler {
         // Dans setupSocketHandlers()
         socket.on("editMessage", (data) => {
           this.handleEditMessage(socket, data);
+        });
+
+        // ✅ Récupération des messages d'une conversation
+        socket.on("getMessages", (data) => {
+          this.handleGetMessages(socket, data);
+        });
+
+        // ✅ Récupération de toutes les conversations de l'utilisateur
+        socket.on("getConversations", (data) => {
+          this.handleGetConversations(socket, data);
+        });
+
+        // ✅ Récupération d'une conversation spécifique
+        socket.on("getConversation", (data) => {
+          this.handleGetConversation(socket, data);
         });
       });
 
@@ -574,6 +595,31 @@ class ChatHandler {
 
       const userid = socket.userId;
 
+      // ✅ NOUVEAU: GESTION KAFKA POUR MESSAGES AUTOMATIQUES
+      const consumer = kafka.consumer({ groupId: `user-${userid}` });
+      await consumer.connect();
+      await consumer.subscribe({
+        topic: "chat-messages",
+        fromBeginning: false,
+      });
+
+      consumer.run({
+        eachMessage: async ({ message }) => {
+          const msg = JSON.parse(message.value.toString());
+          if (
+            msg.receiverId === userId ||
+            msg.conversationId in userConversations
+          ) {
+            socket.emit("newMessage", msg);
+            await this.updateMessageStatusUseCase.markSingleMessage({
+              messageId: msg.messageId,
+              receiverId: userId,
+              status: "DELIVERED",
+            });
+          }
+        },
+      });
+
       // 1. Récupérer toutes les conversations de l'utilisateur (optionnel, ou faire la requête sur tous les messages)
       if (this.updateMessageStatusUseCase) {
         try {
@@ -784,6 +830,35 @@ class ChatHandler {
           message: "ID de conversation invalide",
           code: "INVALID_CONVERSATION_ID",
           details: `L'ID "${conversationId}" n'est pas un ObjectId MongoDB valide`,
+        });
+        return;
+      }
+
+      // ✅ VALIDATION DU CONTENU DU MESSAGE
+      if (
+        !content ||
+        typeof content !== "string" ||
+        content.trim().length === 0
+      ) {
+        socket.emit("message_error", {
+          message: "Le contenu du message est requis",
+          code: "MISSING_CONTENT",
+        });
+        return;
+      }
+      if (content.trim().length > 10000) {
+        socket.emit("message_error", {
+          message: "Le message ne peut pas dépasser 10000 caractères",
+          code: "CONTENT_TOO_LONG",
+        });
+        return;
+      }
+      // Optionnel : contrôle caractères spéciaux ou HTML
+      const forbiddenPattern = /<script|<\/script>/i;
+      if (forbiddenPattern.test(content)) {
+        socket.emit("message_error", {
+          message: "Le contenu du message contient des caractères interdits",
+          code: "CONTENT_FORBIDDEN",
         });
         return;
       }
@@ -1783,6 +1858,146 @@ class ChatHandler {
       socket.emit("status_error", {
         message: "Erreur lors de l'édition du message",
         code: "EDIT_MESSAGE_ERROR",
+        error:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    }
+  }
+
+  // ✅ Ajout de la méthode handleGetMessages
+  async handleGetMessages(socket, data) {
+    try {
+      console.log("📥 Récupération des messages", data);
+      const { conversationId, page = 1, limit = 50 } = data;
+      const userId = socket.userId;
+
+      if (!conversationId || !userId) {
+        socket.emit("messages_error", {
+          message: "ID conversation ou utilisateur manquant",
+          code: "MISSING_DATA",
+        });
+        return;
+      }
+
+      if (!this.getMessagesUseCase) {
+        socket.emit("messages_error", {
+          message: "Service de récupération des messages non disponible",
+          code: "SERVICE_UNAVAILABLE",
+        });
+        return;
+      }
+
+      const messages = await this.getMessagesUseCase.execute(conversationId, {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        userId,
+      });
+
+      console.log(
+        `📄 Récupération de ${messages.messages.length} messages pour conversation ${conversationId}`
+      );
+
+      socket.emit("messagesLoaded", messages);
+    } catch (error) {
+      console.error("❌ Erreur handleGetMessages:", error);
+      socket.emit("messages_error", {
+        message: "Erreur lors de la récupération des messages",
+        code: "GET_MESSAGES_ERROR",
+        error:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    }
+  }
+
+  // Récupérer toutes les conversations de l'utilisateur
+  async handleGetConversations(socket, data) {
+    try {
+      const userId = socket.userId;
+      const { page = 1, limit = 20, includeArchived = false } = data || {};
+
+      if (!userId) {
+        socket.emit("conversations_error", {
+          message: "ID utilisateur manquant",
+          code: "MISSING_USER_ID",
+        });
+        return;
+      }
+
+      if (!this.getConversationsUseCase) {
+        socket.emit("conversations_error", {
+          message: "Service de récupération des conversations non disponible",
+          code: "SERVICE_UNAVAILABLE",
+        });
+        return;
+      }
+
+      const result = await this.getConversationsUseCase.execute(userId, true);
+
+      console.log(
+        "📄 Récupération des conversations:",
+        result.conversations[0].participants
+      );
+
+      socket.emit("conversationsLoaded", {
+        conversations: result.conversations || [],
+        pagination: result.pagination || {},
+        totalCount: result.pagination?.totalCount || 0,
+        totalUnreadMessages: result.totalUnreadMessages || 0,
+        unreadConversations: result.unreadConversations || 0,
+        fromCache: result.fromCache || false,
+        cachedAt: result.cachedAt || new Date().toISOString(),
+      });
+    } catch (error) {
+      console.error("❌ Erreur handleGetConversations:", error);
+      socket.emit("conversations_error", {
+        message: "Erreur lors de la récupération des conversations",
+        code: "GET_CONVERSATIONS_ERROR",
+        error:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
+      });
+    }
+  }
+
+  // Récupérer une conversation spécifique
+  async handleGetConversation(socket, data) {
+    try {
+      const userId = socket.userId;
+      const { conversationId } = data || {};
+
+      if (!conversationId || !userId) {
+        socket.emit("conversation_error", {
+          message: "ID conversation ou utilisateur manquant",
+          code: "MISSING_DATA",
+        });
+        return;
+      }
+
+      if (!this.getConversationUseCase) {
+        socket.emit("conversation_error", {
+          message: "Service de récupération de la conversation non disponible",
+          code: "SERVICE_UNAVAILABLE",
+        });
+        return;
+      }
+
+      const result = await this.getConversationUseCase.execute(
+        conversationId,
+        userId,
+        true
+      );
+
+      socket.emit("conversationLoaded", {
+        conversation: result.conversation || result,
+        metadata: {
+          fromCache: result.fromCache || false,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      console.error("❌ Erreur handleGetConversation:", error);
+      socket.emit("conversation_error", {
+        message: "Erreur lors de la récupération de la conversation",
+        code: "GET_CONVERSATION_ERROR",
         error:
           process.env.NODE_ENV === "development" ? error.message : undefined,
       });

@@ -405,8 +405,14 @@ conversationSchema.statics.findByParticipant = function (userId, options = {}) {
     page = 1,
   } = options;
 
+  // Accepte les deux types pour la recherche
   const filter = {
-    participants: userId,
+    participants: {
+      $in: [
+        userId,
+        typeof userId === "string" ? Number(userId) : String(userId),
+      ],
+    },
     isActive: true,
   };
 
