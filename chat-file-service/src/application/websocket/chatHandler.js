@@ -414,10 +414,10 @@ class ChatHandler {
 
       // ✅ 3. Stocker les infos dans la socket
       socket.userId = userPayload.id || userPayload.userId;
-      socket.matricule = userPayload.matricule;
-      socket.nom = userPayload.nom;
-      socket.prenom = userPayload.prenom;
-      socket.ministere = userPayload.ministere;
+      socket.matricule = userPayload.matricule || "";
+      socket.nom = userPayload.nom || "";
+      socket.prenom = userPayload.prenom || "";
+      socket.ministere = userPayload.ministere || "";
       socket.userToken = data.token || null;
       socket.isAuthenticated = true;
 
@@ -593,10 +593,10 @@ class ChatHandler {
 
       // Après avoir authentifié l'utilisateur et stocké socket.userId, socket.matricule, etc.
 
-      const userid = socket.userId;
+      const userId = socket.userId;
 
       // ✅ NOUVEAU: GESTION KAFKA POUR MESSAGES AUTOMATIQUES
-      const consumer = kafka.consumer({ groupId: `user-${userid}` });
+      const consumer = kafka.consumer({ groupId: `user-${userId}` });
       await consumer.connect();
       await consumer.subscribe({
         topic: "chat-messages",
@@ -626,7 +626,7 @@ class ChatHandler {
           // 2. Mettre à jour tous les messages "SENT" destinés à cet utilisateur en "DELIVERED"
           const result = await this.updateMessageStatusUseCase.execute({
             conversationId: null, // null = toutes conversations
-            receiverId: userid,
+            receiverId: userId,
             status: "DELIVERED",
             messageIds: null, // null = tous les messages concernés
           });
@@ -636,7 +636,7 @@ class ChatHandler {
               `✅ ${result.modifiedCount} messages marqués comme DELIVERED pour l'utilisateur ${userId} à la connexion`
             );
             // 3. Notifier le client connecté (optionnel)
-            this.io.to(`user_${userid}`).emit("messagesAutoDelivered", {
+            this.io.to(`user_${userId}`).emit("messagesAutoDelivered", {
               deliveredCount: result.modifiedCount,
               timestamp: new Date().toISOString(),
             });
@@ -647,12 +647,12 @@ class ChatHandler {
               typeof this.messageRepository.getUserConversations === "function"
             ) {
               const conversationIds =
-                this.messageRepository.getUserConversations(userid);
+                this.messageRepository.getUserConversations(userId);
               for (const convId of conversationIds) {
                 this.io
                   .to(`conversation_${convId}`)
                   .emit("messagesAutoDelivered", {
-                    userId: userid,
+                    userId: userId,
                     deliveredCount: result.modifiedCount,
                     conversationId: convId,
                     timestamp: new Date().toISOString(),
@@ -811,30 +811,14 @@ class ChatHandler {
         receiverId: receiverId, // ✅ AJOUT
       });
 
-      if (!userId || !content || !conversationId) {
+      if (!userId) {
         socket.emit("message_error", {
-          message: "Données manquantes pour l'envoi du message",
-          code: "MISSING_DATA",
+          message: "Authentification requise",
+          code: "AUTH_REQUIRED",
         });
         return;
       }
 
-      // ✅ VALIDATION DE L'OBJECTID MONGODB
-      if (!this.isValidObjectId(conversationId)) {
-        console.error(
-          "❌ ID de conversation MongoDB invalide:",
-          conversationId
-        );
-
-        socket.emit("message_error", {
-          message: "ID de conversation invalide",
-          code: "INVALID_CONVERSATION_ID",
-          details: `L'ID "${conversationId}" n'est pas un ObjectId MongoDB valide`,
-        });
-        return;
-      }
-
-      // ✅ VALIDATION DU CONTENU DU MESSAGE
       if (
         !content ||
         typeof content !== "string" ||
@@ -853,7 +837,6 @@ class ChatHandler {
         });
         return;
       }
-      // Optionnel : contrôle caractères spéciaux ou HTML
       const forbiddenPattern = /<script|<\/script>/i;
       if (forbiddenPattern.test(content)) {
         socket.emit("message_error", {
@@ -861,6 +844,53 @@ class ChatHandler {
           code: "CONTENT_FORBIDDEN",
         });
         return;
+      }
+
+      if (!conversationId) {
+        socket.emit("message_error", {
+          message: "ID de conversation requis",
+          code: "MISSING_CONVERSATION_ID",
+        });
+        return;
+      }
+
+      if (!this.isValidObjectId(conversationId)) {
+        socket.emit("message_error", {
+          message: "ID de conversation invalide",
+          code: "INVALID_CONVERSATION_ID",
+        });
+        return;
+      }
+
+      // Validation receiverId
+      if (receiverId) {
+        if (Array.isArray(receiverId)) {
+          if (receiverId.includes(userId)) {
+            socket.emit("message_error", {
+              message:
+                "Vous ne pouvez pas vous ajouter vous-même comme destinataire",
+              code: "INVALID_RECEIVER",
+            });
+            return;
+          }
+        } else if (receiverId === userId) {
+          socket.emit("message_error", {
+            message: "Vous ne pouvez pas vous envoyer un message à vous-même",
+            code: "INVALID_RECEIVER",
+          });
+          return;
+        }
+        // Optionnel : vérifier existence receiverId dans la base
+        // if (this.userRepository && typeof this.userRepository.exists === "function") {
+        //   const exists = await this.userRepository.exists(receiverId);
+        //   if (!exists) {
+        //     socket.emit("message_error", {
+        //       message: "Destinataire introuvable",
+        //       code: "RECEIVER_NOT_FOUND",
+        //     });
+        //     return;
+        //   }
+        // }
       }
 
       // ✅ CRÉER LE MESSAGE AVEC DONNÉES ENRICHIES
@@ -1010,20 +1040,59 @@ class ChatHandler {
         this.messageProducer &&
         typeof this.messageProducer.publishMessage === "function"
       ) {
-        try {
-          await this.messageProducer.publishMessage({
-            eventType: "MESSAGE_SENT",
-            messageId: message.id,
-            senderId: message.senderId,
-            conversationId: message.conversationId,
-            content: message.content,
-            timestamp: message.timestamp,
-            source: "chat-handler",
-          });
+        // Publication Kafka avec gestion avancée des erreurs
+        let kafkaSuccess = false;
+        let kafkaError = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            await this.messageProducer.publishMessage({
+              eventType: "MESSAGE_SENT",
+              messageId: message.id,
+              senderId: message.senderId,
+              conversationId: message.conversationId,
+              content: message.content,
+              timestamp: new Date().toISOString(),
+            });
+            kafkaSuccess = true;
+            break;
+          } catch (err) {
+            kafkaError = err;
+            console.warn(
+              `⚠️ Erreur publication Kafka (tentative ${attempt}):`,
+              err.message
+            );
+            await new Promise((res) => setTimeout(res, 500 * attempt)); // backoff
+          }
+        }
 
-          console.log("✅ Message publié sur Kafka");
-        } catch (kafkaError) {
-          console.warn("⚠️ Erreur publication Kafka:", kafkaError.message);
+        if (!kafkaSuccess) {
+          // Stocker le message pour retry ultérieur (exemple avec Redis)
+          if (this.redisClient) {
+            try {
+              await this.redisClient.lPush(
+                "pending:kafka:messages",
+                JSON.stringify({
+                  message,
+                  error: kafkaError ? kafkaError.message : "Unknown error",
+                  timestamp: new Date().toISOString(),
+                })
+              );
+              console.warn(
+                "⚠️ Message stocké temporairement pour retry Kafka",
+                message.id
+              );
+            } catch (redisError) {
+              console.error(
+                "❌ Erreur stockage temporaire message Kafka:",
+                redisError.message
+              );
+            }
+          }
+          socket.emit("kafka_error", {
+            message: "Erreur Kafka, message stocké pour retry",
+            code: "KAFKA_PUBLISH_FAILED",
+            details: kafkaError ? kafkaError.message : undefined,
+          });
         }
       }
 
@@ -1519,68 +1588,74 @@ class ChatHandler {
       }
 
       console.log(
-        `📚 Marquage conversation lue: ${conversationId} par utilisateur ${userId}`
+        `📚 Marquage conversation comme lue: ${conversationId} par ${userId}`
       );
 
-      // ✅ UTILISER LE USE CASE UPDATEMESSAGESTATUS
-      if (this.updateMessageStatusUseCase) {
-        try {
-          const result = await this.updateMessageStatusUseCase.execute({
-            conversationId: conversationId,
-            receiverId: userId,
-            status: "READ",
-          });
-
-          if (result && result.modifiedCount > 0) {
-            console.log(
-              `✅ ${result.modifiedCount} messages marqués comme lus dans conversation ${conversationId}`
-            );
-
-            // ✅ NOTIFIER TOUS LES PARTICIPANTS
-            this.io
-              .to(`conversation_${conversationId}`)
-              .emit("conversationRead", {
-                conversationId: conversationId,
-                readBy: userId,
-                readCount: result.modifiedCount,
-                timestamp: new Date().toISOString(),
-              });
-
-            // ✅ CONFIRMER AU LECTEUR
-            socket.emit("conversationMarkedRead", {
-              conversationId: conversationId,
-              readCount: result.modifiedCount,
-              timestamp: new Date().toISOString(),
-            });
-          } else {
-            console.log(
-              `ℹ️ Aucun nouveau message à marquer comme lu dans ${conversationId}`
-            );
-            socket.emit("conversationMarkedRead", {
-              conversationId: conversationId,
-              readCount: 0,
-              message: "Tous les messages étaient déjà lus",
-              timestamp: new Date().toISOString(),
-            });
-          }
-        } catch (useCaseError) {
-          console.error(
-            `❌ Erreur Use Case conversation read:`,
-            useCaseError.message
-          );
-          socket.emit("status_error", {
-            message: "Erreur marquage conversation",
-            code: "CONVERSATION_READ_ERROR",
-            type: "conversation_read",
-          });
-        }
-      } else {
-        console.log("⚠️ Mode dégradé: Use Case non disponible");
+      // ✅ VÉRIFIER QUE LE USE CASE EST DISPONIBLE
+      if (!this.updateMessageStatusUseCase) {
+        console.warn(
+          "⚠️ UpdateMessageStatusUseCase non disponible - mode dégradé"
+        );
         socket.emit("conversationMarkedRead", {
           conversationId: conversationId,
           readCount: 0,
           degraded: true,
           timestamp: new Date().toISOString(),
+        });
+        return;
+      }
+
+      try {
+        // 1. Récupérer tous les messages non lus de la conversation
+        const messages = await this.getMessagesUseCase.execute(conversationId, {
+          page: 1,
+          limit: 100,
+          userId,
+        });
+
+        if (messages && messages.messages.length > 0) {
+          // 2. Mettre à jour chaque message en tant que "LU"
+          const messageIds = messages.messages.map((msg) => msg.id);
+          const result = await this.updateMessageStatusUseCase.execute({
+            conversationId,
+            receiverId: userId,
+            status: "READ",
+            messageIds,
+          });
+
+          console.log(
+            `✅ ${result.modifiedCount} messages marqués comme lus dans la conversation ${conversationId}`
+          );
+
+          // ✅ NOTIFIER L'EXPÉDITEUR ET LES PARTICIPANTS
+          this.io
+            .to(`conversation_${conversationId}`)
+            .emit("messageStatusChanged", {
+              messageId: messageIds,
+              status: "READ",
+              userId: userId,
+              timestamp: new Date().toISOString(),
+            });
+        } else {
+          console.log(
+            `ℹ️ Aucun nouveau message à marquer comme lu dans ${conversationId}`
+          );
+          socket.emit("conversationMarkedRead", {
+            conversationId: conversationId,
+            readCount: 0,
+            message: "Tous les messages étaient déjà lus",
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (useCaseError) {
+        console.error(
+          `❌ Erreur Use Case conversation read:`,
+          useCaseError.message
+        );
+        socket.emit("status_error", {
+          message: "Erreur marquage conversation",
+          code: "CONVERSATION_READ_ERROR",
+          type: "conversation_read",
         });
       }
     } catch (error) {
