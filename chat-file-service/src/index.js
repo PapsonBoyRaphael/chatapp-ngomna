@@ -443,6 +443,14 @@ const startServer = async () => {
       createBroadcastUseCase
     );
 
+    // Gestionnaire d'utilisateurs Kafka
+    const UserConsumerManager = require("./infrastructure/kafka/consumers/UserConsumerManager");
+
+    const userConsumerManager = new UserConsumerManager(kafka);
+
+    // Injecter le manager
+    chatHandler.userConsumerManager = userConsumerManager;
+
     // ✅ CONFIGURER LES GESTIONNAIRES D'ÉVÉNEMENTS SOCKET.IO
     chatHandler.setupSocketHandlers();
 

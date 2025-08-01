@@ -3,6 +3,7 @@
  * Responsable de la gestion des connexions, messages et événements socket
  */
 const AuthMiddleware = require("../../interfaces/http/middleware/authMiddleware");
+const UserConsumerManager = require("../../infrastructure/kafka/consumers/UserConsumerManager");
 class ChatHandler {
   constructor(
     io,
@@ -36,6 +37,7 @@ class ChatHandler {
     this.updateMessageContentUseCase = updateMessageContentUseCase;
     this.createGroupUseCase = createGroupUseCase; // <-- Ajouté
     this.createBroadcastUseCase = createBroadcastUseCase; // <-- Ajouté
+    this.userConsumerManager = null;
 
     // Collections pour gérer les connexions
     this.connectedUsers = new Map();
@@ -288,6 +290,11 @@ class ChatHandler {
             `⚠️ RoomManager disponible mais méthodes de nettoyage manquantes pour ${userId}`
           );
         }
+      }
+
+      // Supprimer le consumer utilisateur si présent
+      if (this.userConsumerManager && userId) {
+        this.userConsumerManager.removeUserConsumer(userId);
       }
     } catch (error) {
       console.error(`❌ Erreur lors de la déconnexion de ${socketId}:`, error);
@@ -595,31 +602,6 @@ class ChatHandler {
 
       const userId = socket.userId;
 
-      // ✅ NOUVEAU: GESTION KAFKA POUR MESSAGES AUTOMATIQUES
-      const consumer = kafka.consumer({ groupId: `user-${userId}` });
-      await consumer.connect();
-      await consumer.subscribe({
-        topic: "chat-messages",
-        fromBeginning: false,
-      });
-
-      consumer.run({
-        eachMessage: async ({ message }) => {
-          const msg = JSON.parse(message.value.toString());
-          if (
-            msg.receiverId === userId ||
-            msg.conversationId in userConversations
-          ) {
-            socket.emit("newMessage", msg);
-            await this.updateMessageStatusUseCase.markSingleMessage({
-              messageId: msg.messageId,
-              receiverId: userId,
-              status: "DELIVERED",
-            });
-          }
-        },
-      });
-
       // 1. Récupérer toutes les conversations de l'utilisateur (optionnel, ou faire la requête sur tous les messages)
       if (this.updateMessageStatusUseCase) {
         try {
@@ -664,6 +646,22 @@ class ChatHandler {
           console.warn(
             "⚠️ Erreur auto-delivery messages à la connexion:",
             err.message
+          );
+        }
+      }
+
+      // Si le consumer utilisateur est disponible, le créer
+      if (this.userConsumerManager) {
+        try {
+          // Référence vers le ChatHandler pour accéder aux use-cases
+          socket.chatHandler = this;
+
+          await this.userConsumerManager.createUserConsumer(userId, socket);
+          console.log(`✅ Consumer personnel configuré pour ${userId}`);
+        } catch (error) {
+          console.warn(
+            "⚠️ Erreur création consumer utilisateur:",
+            error.message
           );
         }
       }
@@ -739,21 +737,6 @@ class ChatHandler {
       return await this.onlineUserManager.getOnlineUsers();
     }
     // Fallback local
-    return Array.from(this.connectedUsers.entries()).map(
-      ([userId, userData]) => ({
-        userId,
-        matricule: userData.matricule,
-        connectedAt: userData.connectedAt,
-        lastActivity: userData.lastActivity,
-      })
-    );
-  }
-
-  getUserBySocketId(socketId) {
-    return this.userSockets.get(socketId);
-  }
-
-  isUserConnected(userId) {
     return this.connectedUsers.has(userId);
   }
 
