@@ -19,7 +19,7 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Exemple de configuration d'écoute globale (à adapter selon les besoins)
+    // Exemple de configuration d'écoute globale (à adapter selon besoins)
     globalSocket.onConnect((_) {
       print('Socket.IO connecté (global)');
       // Authentification supprimée, sera gérée via mock-data après saisie matricule
