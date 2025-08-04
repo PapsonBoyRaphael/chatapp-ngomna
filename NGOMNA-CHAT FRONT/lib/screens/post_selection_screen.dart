@@ -1,71 +1,7 @@
 import 'package:flutter/material.dart';
-// ...existing code...
 import '../main.dart';
+import '../utils/mock_data.dart' as MockData;
 import 'chat_list_screen.dart';
-
-const Map<String, Map<String, dynamic>> userMapping = {
-  'M. Louis Paul MOTAZE': {
-    'id': '51',
-    'matricule': '151703A',
-    'nom': 'M. Louis Paul MOTAZE',
-  },
-  'Dr Madeleine TCHUINTE': {
-    'id': '52',
-    'matricule': '565939D',
-    'nom': 'Dr Madeleine TCHUINTE',
-  },
-  'M. MESSANGA ETOUNDI Serge Ulrich': {
-    'id': '53',
-    'matricule': '671633X',
-    'nom': 'M. MESSANGA ETOUNDI Serge Ulrich',
-  },
-  'M. NLEME AKONO Patrick': {
-    'id': '54',
-    'matricule': '601376Y',
-    'nom': 'M. NLEME AKONO Patrick',
-  },
-  'Mme YECKE ENDALE Berthe épse EKO EKO': {
-    'id': '55',
-    'matricule': '567265M',
-    'nom': 'Mme YECKE ENDALE Berthe épse EKO EKO',
-  },
-  'Pr MBARGA BINDZI Marie Alain': {
-    'id': '56',
-    'matricule': '547865Q',
-    'nom': 'Pr MBARGA BINDZI Marie Alain',
-  },
-  'M. NSONGAN ETUNG Joseph': {
-    'id': '57',
-    'matricule': '546513Q',
-    'nom': 'M. NSONGAN ETUNG Joseph',
-  },
-  'M. SOUTH SOUTH Ruben': {
-    'id': '58',
-    'matricule': '680875L',
-    'nom': 'M. SOUTH SOUTH Ruben',
-  },
-  'M. ABENA MVEME Innocent Paul': {
-    'id': '59',
-    'matricule': 'X007',
-    'nom': 'M. ABENA MVEME Innocent Paul',
-  },
-  'Mme GOMA Flore': {'id': '60', 'matricule': 'X008', 'nom': 'Mme GOMA Flore'},
-  'M. EPIE NGENE Goddy': {
-    'id': '61',
-    'matricule': 'X009',
-    'nom': 'M. EPIE NGENE Goddy',
-  },
-  'Mme TCHUENTE FOGUEM GERMAINE épse BAHANAG': {
-    'id': '62',
-    'matricule': 'X010',
-    'nom': 'Mme TCHUENTE FOGUEM GERMAINE épse BAHANAG',
-  },
-  'Pr MVEH Chantal Marguerite': {
-    'id': '63',
-    'matricule': 'X011',
-    'nom': 'Pr MVEH Chantal Marguerite',
-  },
-};
 
 class PostSelectionScreen extends StatefulWidget {
   const PostSelectionScreen({super.key});
@@ -88,11 +24,49 @@ class _PostSelectionScreenState extends State<PostSelectionScreen> {
         _isButtonEnabled = _matriculeController.text.isNotEmpty;
       });
     });
+
+    // Configurer les écouteurs Socket.IO pour l'authentification
+    _setupSocketListeners();
+  }
+
+  void _setupSocketListeners() {
+    // Écouteur pour authentification réussie
+    globalSocket.on('authenticated', (data) {
+      print('Authentification réussie : $data');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => ChatListScreen(
+              matricule: data['matricule'],
+              userId: data['userId'],
+            ),
+          ),
+        );
+      }
+    });
+
+    // Écouteur pour erreur d'authentification
+    globalSocket.on('auth_error', (data) {
+      print('Erreur d\'authentification : $data');
+      if (mounted) {
+        setState(() {
+          _errorMessage = data['message'] ?? 'Erreur d\'authentification';
+          _isLoading = false;
+        });
+      }
+    });
   }
 
   @override
   void dispose() {
     _matriculeController.dispose();
+    // Nettoyer les écouteurs Socket.IO
+    globalSocket.off('authenticated');
+    globalSocket.off('auth_error');
     super.dispose();
   }
 
@@ -101,41 +75,54 @@ class _PostSelectionScreenState extends State<PostSelectionScreen> {
       _isLoading = true;
       _errorMessage = null;
     });
-    final matricule = _matriculeController.text.trim();
-    // Sélection des données mock
-    final userEntry = userMapping.entries.firstWhere(
-      (entry) => entry.value['matricule'] == matricule,
-      orElse: () => MapEntry('', {}),
-    );
-    if (userEntry.key.isNotEmpty) {
-      final userData = userEntry.value;
+
+    final matricule = _matriculeController.text.trim().toUpperCase();
+
+    // Validation du format du matricule
+    if (!MockData.isValidMatriculeFormat(matricule)) {
+      setState(() {
+        _errorMessage =
+            'Matricule invalide. Utilisez uniquement des lettres majuscules et des chiffres.';
+        _isLoading = false;
+      });
+      return;
+    }
+
+    // Recherche de l'utilisateur dans les données mock
+    final userData = MockData.findUserByMatricule(matricule);
+
+    if (userData != null) {
       // Lancer l'événement Socket.IO 'authenticate' avec les données mock
       globalSocket.emit('authenticate', {
         'userId': userData['id'],
         'matricule': userData['matricule'],
         'nom': userData['nom'],
-        // Ajoutez d'autres champs si besoin
       });
-      // Navigation vers la liste des chats
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => ChatListScreen(
-            matricule: userData['matricule'],
-            userId: userData['id'] as String?,
-          ),
-        ),
-      );
-      setState(() {
-        _isLoading = false;
+
+      // Note: La navigation se fera dans l'écouteur 'authenticated'
+      // ou en cas de timeout, on navigue directement après 3 secondes
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted && _isLoading) {
+          // Timeout: naviguer directement si pas de réponse du serveur
+          setState(() {
+            _isLoading = false;
+          });
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => ChatListScreen(
+                matricule: userData['matricule'],
+                userId: userData['id'] as String?,
+              ),
+            ),
+          );
+        }
       });
-      return;
     } else {
       setState(() {
         _errorMessage = 'Matricule inconnu ou non autorisé.';
         _isLoading = false;
       });
-      return;
     }
   }
 
@@ -146,13 +133,37 @@ class _PostSelectionScreenState extends State<PostSelectionScreen> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        leading: IconButton(icon: const Icon(Icons.menu), onPressed: () {}),
+        leading: IconButton(
+          icon: const Icon(Icons.menu),
+          onPressed: () {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Menu - Fonctionnalité à implémenter'),
+              ),
+            );
+          },
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.notifications_outlined),
-            onPressed: () {},
+            onPressed: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Notifications - Fonctionnalité à implémenter'),
+                ),
+              );
+            },
           ),
-          IconButton(icon: const Icon(Icons.settings), onPressed: () {}),
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Paramètres - Fonctionnalité à implémenter'),
+                ),
+              );
+            },
+          ),
         ],
       ),
       body: Padding(
@@ -279,6 +290,27 @@ class _PostSelectionScreenState extends State<PostSelectionScreen> {
         ],
         currentIndex: 0,
         selectedItemColor: Colors.green,
+        onTap: (index) {
+          if (index == 1) {
+            // Retourner à l'écran d'accueil (HomePage)
+            Navigator.popUntil(context, (route) => route.isFirst);
+          } else if (index == 0) {
+            // Déjà sur l'écran de saisie du matricule
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Saisissez votre matricule pour continuer'),
+                duration: Duration(seconds: 1),
+              ),
+            );
+          } else if (index == 2) {
+            // Favoris - à implémenter
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Favoris - Fonctionnalité à implémenter'),
+              ),
+            );
+          }
+        },
       ),
     );
   }

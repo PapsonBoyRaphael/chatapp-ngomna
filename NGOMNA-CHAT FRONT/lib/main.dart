@@ -2,11 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 import 'screens/chat_welcome_screen.dart';
 
+// Configuration Socket.IO
+const socketUrl = String.fromEnvironment(
+  'SOCKET_URL',
+  defaultValue: 'http://localhost:8003',
+);
+
 // Socket.IO global
 late IO.Socket globalSocket;
 
 void main() {
-  globalSocket = IO.io('http://localhost:8003', <String, dynamic>{
+  globalSocket = IO.io(socketUrl, <String, dynamic>{
     'transports': ['websocket'],
     'autoConnect': true,
     'extraHeaders': {'origin': '*'},
@@ -14,26 +20,66 @@ void main() {
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  @override
+  void initState() {
+    super.initState();
+    _setupSocketListeners();
+  }
+
+  void _setupSocketListeners() {
     // Exemple de configuration d'écoute globale (à adapter selon besoins)
     globalSocket.onConnect((_) {
       print('Socket.IO connecté (global)');
       // Authentification supprimée, sera gérée via mock-data après saisie matricule
     });
+
     globalSocket.on('newMessage', (data) {
       print('Nouveau message reçu (global): $data');
     });
+
     globalSocket.on('onlineUsers', (data) {
       print('Utilisateurs en ligne (global): ${data['users']}');
     });
+
     globalSocket.on('authenticated', (data) {
       print('Authentifié (global): $data');
     });
 
+    // Gestion des erreurs de connexion
+    globalSocket.onConnectError((error) {
+      print('Erreur de connexion Socket.IO : $error');
+      // Afficher un message à l'utilisateur ou tenter une reconnexion
+    });
+
+    globalSocket.onDisconnect((_) {
+      print('Socket.IO déconnecté');
+      // Tenter une reconnexion ou informer l'utilisateur
+    });
+  }
+
+  @override
+  void dispose() {
+    // Nettoyer les écouteurs pour éviter les fuites de mémoire
+    globalSocket.off('connect');
+    globalSocket.off('newMessage');
+    globalSocket.off('onlineUsers');
+    globalSocket.off('authenticated');
+    globalSocket.off('connect_error');
+    globalSocket.off('disconnect');
+    globalSocket.disconnect();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Ngomna App',
       theme: ThemeData(
