@@ -1394,6 +1394,241 @@ class MongoMessageRepository {
       throw error;
     }
   }
+
+  async updateSingleMessageStatus(messageId, receiverId, status) {
+    const startTime = Date.now();
+
+    try {
+      console.log(`📝 Mise à jour statut message unique:`, {
+        messageId,
+        receiverId,
+        status,
+      });
+
+      // ✅ VALIDATION DES PARAMÈTRES
+      if (!messageId || !receiverId || !status) {
+        throw new Error("messageId, receiverId et status sont requis");
+      }
+
+      // ✅ VALIDATION DU STATUT
+      const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED"];
+      if (!validStatuses.includes(status)) {
+        throw new Error(
+          `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`
+        );
+      }
+
+      // ✅ CONSTRUIRE LE FILTRE POUR LE MESSAGE SPÉCIFIQUE
+      const filter = {
+        _id: messageId,
+        status: { $ne: status }, // Ne pas mettre à jour si déjà au bon statut
+      };
+
+      // ✅ POUR LES STATUTS DELIVERED ET READ, VÉRIFIER QUE L'UTILISATEUR EST LE DESTINATAIRE
+      if (status === "DELIVERED" || status === "READ") {
+        // Option 1: Le receiverId doit correspondre à un participant
+        // (on ne vérifie pas forcément que c'est exactement le receiverId du message)
+        // Car pour les conversations de groupe, plusieurs utilisateurs peuvent marquer comme lu
+
+        // Récupérer d'abord le message pour vérifier
+        var existingMessage = await Message.findById(messageId);
+        if (!existingMessage) {
+          throw new Error(`Message ${messageId} introuvable`);
+        }
+
+        console.log(`✅ Message trouvé pour mise à jour statut:`, {
+          messageId: existingMessage._id,
+          senderId: existingMessage.senderId,
+          conversationId: existingMessage.conversationId,
+          currentStatus: existingMessage.status,
+        });
+      }
+
+      // ✅ EFFECTUER LA MISE À JOUR
+      const updateResult = await Message.findOneAndUpdate(
+        filter,
+        {
+          $set: {
+            status: status,
+            updatedAt: new Date(),
+            // ✅ AJOUTER LES MÉTADONNÉES DE LIVRAISON
+            ...(status === "DELIVERED" && {
+              "metadata.deliveryMetadata.deliveredAt": new Date().toISOString(),
+              "metadata.deliveryMetadata.deliveredBy": receiverId,
+            }),
+            ...(status === "READ" && {
+              "metadata.deliveryMetadata.readAt": new Date().toISOString(),
+              "metadata.deliveryMetadata.readBy": receiverId,
+            }),
+          },
+        },
+        {
+          new: true, // Retourner le document mis à jour
+          runValidators: true,
+        }
+      );
+
+      const processingTime = Date.now() - startTime;
+
+      // ✅ VÉRIFIER SI LA MISE À JOUR A RÉUSSI
+      if (!updateResult) {
+        console.log(
+          `ℹ️ Aucune mise à jour nécessaire pour message ${messageId} (déjà ${status})`
+        );
+        return {
+          modifiedCount: 0,
+          matchedCount: 0,
+          message: `Message déjà au statut ${status}`,
+          processingTime,
+        };
+      }
+
+      console.log(`✅ Statut message mis à jour:`, {
+        messageId: updateResult._id,
+        oldStatus: filter.status,
+        newStatus: updateResult.status,
+        updatedAt: updateResult.updatedAt,
+        processingTime: `${processingTime}ms`,
+      });
+
+      // ✅ GESTION SPÉCIALE POUR LA SUPPRESSION
+      if (status === "DELETED" && updateResult) {
+        try {
+          // 1. Récupérer la conversation pour vérifier si c'était le lastMessage
+          const Conversation = require("../mongodb/models/ConversationModel");
+          const conversation = await Conversation.findOne({
+            "lastMessage._id": messageId,
+          });
+
+          if (conversation) {
+            console.log(
+              `🔍 Message supprimé était le lastMessage de ${conversation._id}`
+            );
+
+            // 2. Récupérer le message précédent non supprimé
+            const previousMessage = await Message.findOne({
+              conversationId: conversation._id,
+              status: { $ne: "DELETED" },
+              deletedAt: null,
+            })
+              .sort({ createdAt: -1 })
+              .lean();
+
+            // 3. Mettre à jour la conversation
+            if (previousMessage) {
+              await Conversation.findByIdAndUpdate(conversation._id, {
+                $set: {
+                  "lastMessage._id": previousMessage._id,
+                  "lastMessage.content": previousMessage.content.substring(
+                    0,
+                    200
+                  ),
+                  "lastMessage.type": previousMessage.type,
+                  "lastMessage.senderId": previousMessage.senderId,
+                  "lastMessage.timestamp": previousMessage.createdAt,
+                  lastMessageAt: previousMessage.createdAt,
+                  updatedAt: new Date(),
+                },
+              });
+              console.log(
+                `✅ Conversation mise à jour avec message précédent: ${previousMessage._id}`
+              );
+            } else {
+              // Aucun message restant - vider lastMessage
+              await Conversation.findByIdAndUpdate(conversation._id, {
+                $set: {
+                  lastMessage: null,
+                  lastMessageAt: null,
+                  updatedAt: new Date(),
+                },
+              });
+              console.log(`✅ Conversation vidée - aucun message restant`);
+            }
+
+            // 4. Invalider le cache de la conversation
+            if (this.cacheService) {
+              try {
+                await this.cacheService.del(`conversation:${conversation._id}`);
+                await this.cacheService.del(`conversations:*`);
+              } catch (cacheError) {
+                console.warn(
+                  "⚠️ Erreur invalidation cache conversation:",
+                  cacheError.message
+                );
+              }
+            }
+          }
+        } catch (convError) {
+          console.warn(
+            "⚠️ Erreur mise à jour lastMessage après suppression:",
+            convError.message
+          );
+          // Ne pas faire échouer la suppression du message pour autant
+        }
+      }
+
+      // ✅ INVALIDER LES CACHES LIÉS
+      if (this.cacheService) {
+        try {
+          await this._invalidateMessageCaches(messageId);
+          await this._invalidateConversationCaches(updateResult.conversationId);
+          await this._invalidateUserCaches(receiverId);
+          console.log(`🗑️ Caches invalidés pour message ${messageId}`);
+        } catch (cacheError) {
+          console.warn(
+            "⚠️ Erreur invalidation cache statut:",
+            cacheError.message
+          );
+        }
+      }
+
+      // ✅ PUBLIER ÉVÉNEMENT KAFKA
+      if (
+        this.kafkaProducer &&
+        typeof this.kafkaProducer.publishMessage === "function"
+      ) {
+        try {
+          await this._publishMessageEvent(
+            "SINGLE_MESSAGE_STATUS_UPDATED",
+            updateResult,
+            {
+              messageId,
+              receiverId,
+              status,
+              processingTime,
+              previousStatus: existingMessage
+                ? existingMessage.status
+                : "unknown",
+            }
+          );
+          console.log(`📤 Événement Kafka publié pour message ${messageId}`);
+        } catch (kafkaError) {
+          console.warn("⚠️ Erreur publication Kafka:", kafkaError.message);
+        }
+      }
+
+      // ✅ RETOURNER LE RÉSULTAT DANS LE FORMAT ATTENDU
+      return {
+        modifiedCount: 1,
+        matchedCount: 1,
+        message: updateResult,
+        processingTime,
+        status: "success",
+      };
+    } catch (error) {
+      const processingTime = Date.now() - startTime;
+      console.error(`❌ Erreur mise à jour statut message ${messageId}:`, {
+        error: error.message,
+        messageId,
+        receiverId,
+        status,
+        processingTime: `${processingTime}ms`,
+      });
+      throw new Error(
+        `Impossible de mettre à jour le statut: ${error.message}`
+      );
+    }
+  }
 }
 
 module.exports = MongoMessageRepository;
