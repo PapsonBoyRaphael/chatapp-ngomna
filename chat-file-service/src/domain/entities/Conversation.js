@@ -418,6 +418,40 @@ class Conversation {
       },
     });
   }
+
+  // Dans handleDeleteMessage ou dans le repository
+  async deleteMessage(messageId, userId) {
+    // 1. Supprimer le message
+    const deletedMessage = await this.messageRepository.deleteById(messageId);
+
+    // 2. Vérifier si c'était le lastMessage de la conversation
+    const conversation = await this.conversationRepository.findById(
+      deletedMessage.conversationId
+    );
+
+    if (conversation.lastMessage?._id?.toString() === messageId) {
+      // 3. Récupérer le message précédent non supprimé
+      const previousMessage =
+        await this.messageRepository.findLastNonDeletedMessage(
+          deletedMessage.conversationId
+        );
+
+      // 4. Mettre à jour la conversation
+      if (previousMessage) {
+        await this.conversationRepository.updateLastMessage(
+          deletedMessage.conversationId,
+          previousMessage
+        );
+      } else {
+        // Aucun message restant
+        await this.conversationRepository.clearLastMessage(
+          deletedMessage.conversationId
+        );
+      }
+    }
+
+    return deletedMessage;
+  }
 }
 
 module.exports = Conversation;

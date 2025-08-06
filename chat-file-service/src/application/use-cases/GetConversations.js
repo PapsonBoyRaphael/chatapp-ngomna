@@ -13,25 +13,25 @@ class GetConversations {
       console.log(`🔍 Récupération conversations pour utilisateur: ${userId}`);
 
       const cacheKey = `conversations:${userId}`;
-      // if (useCache && this.cacheService) {
-      //   try {
-      //     const cached = await this.cacheService.get(cacheKey);
-      //     if (cached) {
-      //       console.log(
-      //         `📦 Conversations depuis cache: ${userId} (${
-      //           Date.now() - startTime
-      //         }ms)`
-      //       );
-      //       return {
-      //         ...cached,
-      //         fromCache: true,
-      //         processingTime: Date.now() - startTime,
-      //       };
-      //     }
-      //   } catch (cacheError) {
-      //     console.warn("⚠️ Erreur lecture cache:", cacheError.message);
-      //   }
-      // }
+      if (useCache && this.cacheService) {
+        try {
+          const cached = await this.cacheService.get(cacheKey);
+          if (cached) {
+            console.log(
+              `📦 Conversations depuis cache: ${userId} (${
+                Date.now() - startTime
+              }ms)`
+            );
+            return {
+              ...cached,
+              fromCache: true,
+              processingTime: Date.now() - startTime,
+            };
+          }
+        } catch (cacheError) {
+          console.warn("⚠️ Erreur lecture cache:", cacheError.message);
+        }
+      }
 
       // Désactiver le cache interne du repository pour éviter la duplication
       const conversationsResult =

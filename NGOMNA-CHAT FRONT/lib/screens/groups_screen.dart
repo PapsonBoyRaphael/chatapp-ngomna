@@ -1,100 +1,109 @@
 import 'package:flutter/material.dart';
+import '../main.dart';
+import '../utils/mock_data.dart' as MockData;
 import 'chat_detail_screen.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 
-// Mock data pour tous les membres du groupe
-const Map<String, Map<String, dynamic>> groupMembersMock = {
-  'M. Louis Paul MOTAZE': {
-    'id': 'a1f52b',
-    'matricule': '151703A',
-    'nom': 'M. Louis Paul MOTAZE',
-  },
-  'Dr Madeleine TCHUINTE': {
-    'id': 'b2c63d',
-    'matricule': '565939D',
-    'nom': 'Dr Madeleine TCHUINTE',
-  },
-  'M. MESSANGA ETOUNDI Serge Ulrich': {
-    'id': 'c3d74e',
-    'matricule': 'X001',
-    'nom': 'M. MESSANGA ETOUNDI Serge Ulrich',
-  },
-  'M. NLEME AKONO Patrick': {
-    'id': 'd4e85f',
-    'matricule': 'X002',
-    'nom': 'M. NLEME AKONO Patrick',
-  },
-  'Mme YECKE ENDALE Berthe épse EKO EKO': {
-    'id': 'e5f96a',
-    'matricule': 'X003',
-    'nom': 'Mme YECKE ENDALE Berthe épse EKO EKO',
-  },
-  'Pr MBARGA BINDZI Marie Alain': {
-    'id': 'f6a07b',
-    'matricule': 'X004',
-    'nom': 'Pr MBARGA BINDZI Marie Alain',
-  },
-  'M. NSONGAN ETUNG Joseph': {
-    'id': 'g7b18c',
-    'matricule': 'X005',
-    'nom': 'M. NSONGAN ETUNG Joseph',
-  },
-  'M. SOUTH SOUTH Ruben': {
-    'id': 'h8c29d',
-    'matricule': 'X006',
-    'nom': 'M. SOUTH SOUTH Ruben',
-  },
-  'M. ABENA MVEME Innocent Paul': {
-    'id': 'i9d30e',
-    'matricule': 'X007',
-    'nom': 'M. ABENA MVEME Innocent Paul',
-  },
-  'Mme GOMA Flore': {
-    'id': 'j0e41f',
-    'matricule': 'X008',
-    'nom': 'Mme GOMA Flore',
-  },
-  'M. EPIE NGENE Goddy': {
-    'id': 'k1f52a',
-    'matricule': 'X009',
-    'nom': 'M. EPIE NGENE Goddy',
-  },
-  'Mme TCHUENTE FOGUEM GERMAINE épse BAHANAG': {
-    'id': 'l2g63b',
-    'matricule': 'X010',
-    'nom': 'Mme TCHUENTE FOGUEM GERMAINE épse BAHANAG',
-  },
-  'Pr MVEH Chantal Marguerite': {
-    'id': 'm3h74c',
-    'matricule': 'X011',
-    'nom': 'Pr MVEH Chantal Marguerite',
-  },
-};
+class GroupsScreen extends StatefulWidget {
+  const GroupsScreen({super.key});
 
-class GroupsScreen extends StatelessWidget {
+  @override
+  State<GroupsScreen> createState() => _GroupsScreenState();
+}
+
+class _GroupsScreenState extends State<GroupsScreen> {
+  List<Map<String, dynamic>> groups = [];
+  bool isLoading = true;
+  int unreadGroupsCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _setupSocketListeners();
+    _loadGroups();
+  }
+
+  void _setupSocketListeners() {
+    // Écoute des groupes chargés
+    globalSocket.on('conversationsLoaded', (data) {
+      if (mounted) {
+        setState(() {
+          // Filtrer seulement les groupes
+          final allConversations = List<Map<String, dynamic>>.from(
+            data['conversations'] ?? [],
+          );
+          groups = allConversations
+              .where((conv) => conv['isGroup'] == true)
+              .toList();
+          unreadGroupsCount = data['unreadGroups'] ?? 0;
+          isLoading = false;
+        });
+      }
+    });
+
+    // Écoute des nouveaux messages dans les groupes
+    globalSocket.on('newMessage', (data) {
+      if (data != null && data['isGroup'] == true && mounted) {
+        _refreshGroups();
+      }
+    });
+  }
+
+  void _loadGroups() {
+    // Demander les conversations avec filtre pour les groupes
+    globalSocket.emit('getConversations', {
+      'page': 1,
+      'limit': 50,
+      'filter': {'isGroup': true},
+    });
+  }
+
+  void _refreshGroups() {
+    setState(() {
+      isLoading = true;
+    });
+    _loadGroups();
+  }
+
   // Fonction utilitaire pour récupérer les messages du groupe
-  Future<List<dynamic>> fetchGroupMessages() async {
-    const groupConvId = '60f7b3b3b3b3b3b3b3b3b3b4';
+  Future<List<dynamic>> fetchGroupMessages(
+    String convId,
+    BuildContext context,
+  ) async {
     final url = Uri.parse(
-      'http://localhost:8000/messages?conversationId=$groupConvId&page=1&limit=50',
+      'http://localhost:8003/messages?conversationId=$convId',
     );
     try {
-      final response = await http.get(
-        url,
-        headers: {'user-id': '51'},
-      ); // id admin ou connecté
+      final response = await http.get(url, headers: {'user-id': '51'});
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         if (data['success'] == true) {
           return data['data']['messages'] ?? data['data'] ?? [];
         }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Erreur lors de la récupération des messages du groupe',
+            ),
+          ),
+        );
       }
-    } catch (e) {}
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Erreur réseau : $e')));
+    }
     return [];
   }
 
-  const GroupsScreen({super.key});
+  @override
+  void dispose() {
+    globalSocket.off('conversationsLoaded');
+    globalSocket.off('newMessage');
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -110,9 +119,34 @@ class GroupsScreen extends StatelessWidget {
         ),
         leading: IconButton(
           icon: const Icon(Icons.more_vert),
-          onPressed: () {},
+          onPressed: () {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Menu - Fonctionnalité à implémenter'),
+              ),
+            );
+          },
         ),
-        actions: [IconButton(icon: const Icon(Icons.add), onPressed: () {})],
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _refreshGroups,
+            tooltip: 'Actualiser les groupes',
+          ),
+          IconButton(
+            icon: const Icon(Icons.add),
+            onPressed: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Créer un groupe - Fonctionnalité à implémenter',
+                  ),
+                ),
+              );
+            },
+            tooltip: 'Créer un groupe',
+          ),
+        ],
       ),
       body: SafeArea(
         child: Column(
@@ -166,19 +200,53 @@ class GroupsScreen extends StatelessWidget {
 
             // Groups List
             Expanded(
-              child: ListView(
-                padding: const EdgeInsets.all(16),
-                children: [
-                  _buildGroupItem(
-                    context,
-                    name: 'CONSEIL DE DIRECTION CENADI',
-                    memberCount: 13,
-                    message: 'Click to start group conversation',
-                    time: '',
-                    isOnline: true,
-                  ),
-                ],
-              ),
+              child: isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : groups.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.group_outlined,
+                            size: 48,
+                            color: Colors.grey[400],
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'Aucun groupe trouvé',
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 16,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          ElevatedButton(
+                            onPressed: _refreshGroups,
+                            child: const Text('Actualiser'),
+                          ),
+                        ],
+                      ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: () async => _refreshGroups(),
+                      child: ListView.builder(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: groups.length,
+                        itemBuilder: (context, index) {
+                          final group = groups[index];
+                          return _buildGroupItem(
+                            context,
+                            name: group['name'] ?? 'Groupe sans nom',
+                            memberCount: group['memberCount'] ?? 0,
+                            message: group['lastMessage'] ?? 'Aucun message',
+                            time: group['lastTime'] ?? '',
+                            isOnline: group['isOnline'] ?? false,
+                            convId: group['_id'] ?? group['convId'],
+                          );
+                        },
+                      ),
+                    ),
             ),
           ],
         ),
@@ -189,26 +257,30 @@ class GroupsScreen extends StatelessWidget {
             icon: Stack(
               children: [
                 const Icon(Icons.chat_bubble),
-                Positioned(
-                  right: -2,
-                  top: -2,
-                  child: Container(
-                    padding: const EdgeInsets.all(2),
-                    decoration: BoxDecoration(
-                      color: Colors.red,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    constraints: const BoxConstraints(
-                      minWidth: 20,
-                      minHeight: 14,
-                    ),
-                    child: const Text(
-                      '1234',
-                      style: TextStyle(color: Colors.white, fontSize: 10),
-                      textAlign: TextAlign.center,
+                if (unreadGroupsCount > 0)
+                  Positioned(
+                    right: -2,
+                    top: -2,
+                    child: Container(
+                      padding: const EdgeInsets.all(2),
+                      decoration: BoxDecoration(
+                        color: Colors.red,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      constraints: const BoxConstraints(
+                        minWidth: 20,
+                        minHeight: 14,
+                      ),
+                      child: Text(
+                        unreadGroupsCount.toString(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
                     ),
                   ),
-                ),
               ],
             ),
             label: 'Chat',
@@ -263,10 +335,21 @@ class GroupsScreen extends StatelessWidget {
     required String message,
     required String time,
     bool isOnline = false,
+    String? convId,
   }) {
     return GestureDetector(
       onTap: () async {
-        final messages = await fetchGroupMessages();
+        if (convId == null || convId.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('ID de conversation manquant pour ce groupe'),
+              backgroundColor: Colors.red,
+            ),
+          );
+          return;
+        }
+
+        final messages = await fetchGroupMessages(convId, context);
         Navigator.push(
           context,
           MaterialPageRoute(
@@ -274,7 +357,7 @@ class GroupsScreen extends StatelessWidget {
               name: name,
               isGroup: true,
               isOnline: isOnline,
-              convId: '60f7b3b3b3b3b3b3b3b3b3b4',
+              convId: convId,
               initialMessages: messages,
             ),
           ),

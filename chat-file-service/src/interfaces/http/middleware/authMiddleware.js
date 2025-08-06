@@ -6,74 +6,58 @@ class AuthMiddleware {
   // Middleware pour valider le token JWT
   static authenticate = async (req, res, next) => {
     next();
-    try {
-      // Mode développement sans JWT
-      if (process.env.NODE_ENV === "development" && !process.env.JWT_SECRET) {
-        req.user = {
-          id:
-            req.headers["user-id"] ||
-            req.headers["x-user-id"] ||
-            "dev-user-123",
-          userId:
-            req.headers["user-id"] ||
-            req.headers["x-user-id"] ||
-            "dev-user-123",
-          matricule:
-            req.headers["matricule"] ||
-            req.headers["x-matricule"] ||
-            "MATRICULE-DEV",
-          nom:
-            req.headers["user-name"] ||
-            req.headers["x-user-name"] ||
-            "Dev User",
-          prenom: req.headers["prenom"] || req.headers["x-prenom"] || "Dev",
-          ministere:
-            req.headers["ministere"] ||
-            req.headers["x-ministere"] ||
-            "Développement",
-        };
-        return next();
-      }
+    // try {
+    //   const authHeader = req.headers.authorization;
+    //   const userIdHeader = req.headers["user-id"];
 
-      const authHeader = req.headers.authorization;
+    //   // 1. Vérifier la présence du token
+    //   if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    //     // ✅ RETURN après la réponse
+    //     return res.status(401).json({
+    //       success: false,
+    //       message: "Token d'authentification requis",
+    //       code: "MISSING_TOKEN",
+    //     });
+    //   }
 
-      if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return res.status(401).json({
-          success: false,
-          message: "Token d'authentification requis",
-          code: "MISSING_TOKEN",
-        });
-      }
+    //   const token = authHeader.substring(7);
 
-      const token = authHeader.substring(7); // Enlever "Bearer "
+    //   // 2. Valider le token JWT
+    //   try {
+    //     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    //     req.user = decoded;
 
-      try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        req.user = {
-          id: decoded.id,
-          userId: decoded.id, // Compatibilité
-          matricule: decoded.matricule,
-          nom: decoded.nom,
-          prenom: decoded.prenom,
-          ministere: decoded.ministere,
-        };
-        next();
-      } catch (jwtError) {
-        console.warn("⚠️ Token JWT invalide:", jwtError.message);
-        return res.status(401).json({
-          success: false,
-          message: "Token invalide ou expiré",
-          code: "INVALID_TOKEN",
-        });
-      }
-    } catch (error) {
-      console.error("❌ Erreur validation token:", error);
-      return res.status(500).json({
-        success: false,
-        message: "Erreur de validation d'authentification",
-        code: "AUTH_ERROR",
-      });
-    }
+    //     // ✅ APPELER next() seulement si authentification réussie
+    //     return next();
+    //   } catch (jwtError) {
+    //     console.warn("⚠️ Token JWT invalide:", jwtError.message);
+
+    //     // ✅ RETURN après la réponse d'erreur JWT
+    //     return res.status(401).json({
+    //       success: false,
+    //       message: "Token invalide ou expiré",
+    //       code: "INVALID_TOKEN",
+    //       error:
+    //         process.env.NODE_ENV === "development"
+    //           ? jwtError.message
+    //           : undefined,
+    //     });
+    //   }
+    // } catch (error) {
+    //   console.error("❌ Erreur validation token:", error);
+
+    //   // ✅ VÉRIFIER si la réponse n'a pas déjà été envoyée
+    //   if (!res.headersSent) {
+    //     return res.status(500).json({
+    //       success: false,
+    //       message: "Erreur serveur lors de l'authentification",
+    //       code: "AUTH_SERVER_ERROR",
+    //     });
+    //   }
+
+    //   // Si headers déjà envoyés, ne pas essayer d'envoyer une réponse
+    //   return;
+    // }
   };
 
   // ✅ ALIAS EXPLICITE POUR COMPATIBILITÉ
@@ -81,6 +65,7 @@ class AuthMiddleware {
 
   // Middleware pour vérifier les rôles
   static requireRole = (roles) => {
+    next();
     return (req, res, next) => {
       if (!req.user) {
         return res.status(401).json({

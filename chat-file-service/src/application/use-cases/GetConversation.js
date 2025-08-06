@@ -15,19 +15,19 @@ class GetConversation {
       const cacheKey = `conversation:${conversationId}:${userId}`;
 
       // 🚀 CACHE REDIS via CacheService
-      // if (this.cacheService && useCache) {
-      //   try {
-      //     const cached = await this.cacheService.get(cacheKey);
-      //     if (cached) {
-      //       console.log(
-      //         `📦 Conversation récupérée depuis Redis: ${conversationId}`
-      //       );
-      //       return cached;
-      //     }
-      //   } catch (redisError) {
-      //     console.warn("⚠️ Erreur cache conversation:", redisError.message);
-      //   }
-      // }
+      if (this.cacheService && useCache) {
+        try {
+          const cached = await this.cacheService.get(cacheKey);
+          if (cached) {
+            console.log(
+              `📦 Conversation récupérée depuis Redis: ${conversationId}`
+            );
+            return cached;
+          }
+        } catch (redisError) {
+          console.warn("⚠️ Erreur cache conversation:", redisError.message);
+        }
+      }
 
       const conversation =
         await this.conversationRepository.getConversationById(conversationId);

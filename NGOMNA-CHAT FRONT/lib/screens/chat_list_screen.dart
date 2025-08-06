@@ -22,7 +22,7 @@ Future<Map<String, dynamic>?> fetchMessages(
 ) async {
   if (convId == null) return null;
   final url = Uri.parse(
-    'http://localhost:8003/messages?conversationId=$convId&page=1&limit=50',
+    'http://localhost:8003/messages?conversationId=$convId',
   );
   try {
     final response = await http.get(url, headers: {'user-id': userId ?? ''});
@@ -158,9 +158,10 @@ class _ChatListScreenState extends State<ChatListScreen> {
                         ...conversations.map(
                           (conv) => _buildChatItem(
                             context,
-                            name: conv['name'] is String
-                                ? conv['name']
-                                : (conv['name']?['nom'] ?? 'Inconnu'),
+                            name: MockData.getConversationDisplayName(
+                              conv,
+                              widget.userId,
+                            ),
                             message: conv['lastMessage'] is String
                                 ? conv['lastMessage']
                                 : (conv['lastMessage']?['text'] ??
@@ -172,7 +173,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
                                 : (conv['lastTime']?.toString() ?? ''),
                             isGroup: conv['isGroup'] ?? false,
                             isOnline: conv['isOnline'] ?? false,
-                            convId: normalizeConversationId(
+                            convId: MockData.normalizeConversationId(
                               conv['_id'] ?? conv['convId'],
                             ),
                           ),
@@ -298,16 +299,14 @@ class _ChatListScreenState extends State<ChatListScreen> {
               isOnline: isOnline,
               convId: convId,
               initialMessages: messages,
-              userMetadata:
-                  (conversations.firstWhere(
-                    (c) =>
-                        (c['convId'] == convId) ||
-                        (c['_id'] == convId) ||
-                        (c['_id']?['\$oid'] == convId),
-                    orElse: () => {},
-                  )['userMetadata'] ??
-                  []),
+              userMetadata: MockData.ensureList(
+                MockData.findConversationById(
+                  conversations,
+                  convId,
+                )['userMetadata'],
+              ),
               matricule: widget.matricule,
+              userId: widget.userId,
             ),
           ),
         );

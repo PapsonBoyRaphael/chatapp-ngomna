@@ -241,20 +241,22 @@ class SendMessage {
       // ✅ INVALIDER LE CACHE REDIS VIA CacheService
       if (this.cacheService) {
         try {
-          const cacheKeys = [
-            `messages:${conversationId}`,
-            `conversation:${conversationId}`,
-            `conversations:user:${senderId}`,
-            `unread:*:${conversationId}`,
+          const cacheKeysToInvalidate = [
+            `messages:${conversationId}:*`, // ✅ TOUTES les pages de messages
+            `conversation:${conversationId}:*`,
+            `conversations:${senderId}`,
+            `conversations:${receiverId}`,
           ];
-          for (const key of cacheKeys) {
-            await this.cacheService.del(key);
+
+          for (const pattern of cacheKeysToInvalidate) {
+            await this.cacheService.del(pattern);
           }
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur invalidation cache SendMessage:",
-            cacheError.message
+
+          console.log(
+            `🗑️ Cache invalidé pour message dans conversation ${conversationId}`
           );
+        } catch (cacheError) {
+          console.warn("⚠️ Erreur invalidation cache:", cacheError.message);
         }
       }
 

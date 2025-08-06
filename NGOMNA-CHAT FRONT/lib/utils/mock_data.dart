@@ -1,6 +1,46 @@
 /// Données mock centralisées pour l'application Ngomna Chat
 /// Ce fichier contient toutes les données de test utilisées dans l'application
 
+// Fonctions utilitaires pour la gestion des IDs de conversation
+/// Normalise un conversationId venant du backend (String ou Map avec $oid)
+String normalizeConversationId(dynamic convId) {
+  if (convId == null) return '';
+  if (convId is String) return convId;
+  if (convId is Map && convId['\$oid'] != null) {
+    return convId['\$oid'].toString();
+  }
+  return convId.toString();
+}
+
+/// Vérifie si deux IDs de conversation correspondent
+bool conversationIdsMatch(dynamic id1, dynamic id2) {
+  final normalizedId1 = normalizeConversationId(id1);
+  final normalizedId2 = normalizeConversationId(id2);
+  return normalizedId1.isNotEmpty &&
+      normalizedId2.isNotEmpty &&
+      normalizedId1 == normalizedId2;
+}
+
+/// Trouve une conversation par son ID de manière sécurisée
+Map<String, dynamic> findConversationById(
+  List<Map<String, dynamic>> conversations,
+  String? convId,
+) {
+  if (convId == null || convId.isEmpty) return {};
+
+  try {
+    return conversations.firstWhere(
+      (c) =>
+          conversationIdsMatch(c['convId'], convId) ||
+          conversationIdsMatch(c['_id'], convId),
+      orElse: () => {},
+    );
+  } catch (e) {
+    print('Erreur lors de la recherche de conversation: $e');
+    return {};
+  }
+}
+
 const Map<String, Map<String, dynamic>> userMapping = {
   'M. Louis Paul MOTAZE': {
     'id': '51',
@@ -148,4 +188,112 @@ Map<String, dynamic>? findUserByMatricule(String matricule) {
 bool isValidMatriculeFormat(String matricule) {
   // Format accepté: lettres majuscules et chiffres uniquement
   return RegExp(r'^[A-Z0-9]+$').hasMatch(matricule);
+}
+
+/// Assure qu'une valeur est une liste, retourne une liste vide si ce n'est pas le cas
+List<dynamic> ensureList(dynamic value) {
+  if (value is List) {
+    return value;
+  }
+  return <dynamic>[];
+}
+
+/// Extrait le nom approprié d'une conversation en fonction du userId connecté
+/// Utilise les noms dans userMetadata pour les conversations privées
+String getConversationDisplayName(
+  Map<String, dynamic> conversation,
+  String? currentUserId,
+) {
+  // Pour les groupes, utiliser le nom de la conversation
+  if (conversation['type'] == 'GROUP' || conversation['isGroup'] == true) {
+    return conversation['name']?.toString() ?? 'Groupe';
+  }
+
+  // Pour les conversations privées, chercher l'autre participant
+  final userMetadata = ensureList(conversation['userMetadata']);
+
+  if (userMetadata.isNotEmpty && currentUserId != null) {
+    // Trouver l'autre participant (pas le currentUserId)
+    for (final user in userMetadata) {
+      if (user is Map && user['userId'] != currentUserId) {
+        final name = user['name']?.toString();
+        if (name != null && name.isNotEmpty) {
+          return name;
+        }
+      }
+    }
+  }
+
+  // Fallback sur le nom de la conversation
+  return conversation['name']?.toString() ?? 'Conversation';
+}
+
+/// Exemple de conversation MongoDB pour les tests
+const Map<String, dynamic> exampleConversation = {
+  "_id": {"\$oid": "000051000052aaaaaaaaaaaa"},
+  "name": "M. Louis Paul MOTAZE & Dr Madeleine TCHUINTE",
+  "type": "PRIVATE",
+  "participants": ["51", "52"],
+  "createdBy": "51",
+  "isActive": true,
+  "isArchived": false,
+  "userMetadata": [
+    {
+      "userId": "51",
+      "name": "M. Louis Paul MOTAZE",
+      "unreadCount": 0,
+      "lastReadAt": null,
+      "isMuted": false,
+      "isPinned": false,
+      "notificationSettings": {
+        "enabled": true,
+        "sound": true,
+        "vibration": true,
+      },
+    },
+    {
+      "userId": "52",
+      "name": "Dr Madeleine TCHUINTE",
+      "unreadCount": 0,
+      "lastReadAt": null,
+      "isMuted": false,
+      "isPinned": false,
+      "notificationSettings": {
+        "enabled": true,
+        "sound": true,
+        "vibration": true,
+      },
+    },
+  ],
+  "unreadCounts": {"51": 0, "52": 0},
+  "lastMessage": {
+    "content": "Hello",
+    "type": "TEXT",
+    "senderId": "51",
+    "senderName": null,
+    "timestamp": {"\$date": "2025-07-24T12:17:58.926Z"},
+  },
+  "lastMessageAt": {"\$date": "2025-07-24T12:17:58.926Z"},
+  "settings": {},
+  "metadata": {},
+  "integrations": {},
+  "updatedAt": {"\$date": "2025-07-24T12:17:58.926Z"},
+};
+
+/// Fonction de test pour vérifier l'extraction des noms
+void testConversationDisplayNames() {
+  print(
+    'Test avec userId 51: ${getConversationDisplayName(exampleConversation, "51")}',
+  );
+  // Devrait afficher: "Dr Madeleine TCHUINTE"
+
+  print(
+    'Test avec userId 52: ${getConversationDisplayName(exampleConversation, "52")}',
+  );
+  // Devrait afficher: "M. Louis Paul MOTAZE"
+
+  print(
+    'Test avec userId inconnu: ${getConversationDisplayName(exampleConversation, "99")}',
+  );
+  // Devrait afficher: "M. Louis Paul MOTAZE & Dr Madeleine TCHUINTE"
 }

@@ -150,9 +150,14 @@ class MessageController {
     const startTime = Date.now();
 
     try {
-      const { conversationId } = req.params;
+      // ✅ CORRECTION : récupérer depuis req.query au lieu de req.params
+      const { conversationId } = req.query;
       const { page = 1, limit = 50, useCache = true } = req.query;
       const userId = req.user?.id || req.headers["user-id"];
+
+      console.log("req:", req.originalUrl);
+      console.log("userId:", userId);
+      console.log("conversationId:", conversationId); // Maintenant défini
 
       if (!conversationId || !userId) {
         return res.status(400).json({
@@ -166,11 +171,10 @@ class MessageController {
       const pageNum = Math.max(1, parseInt(page));
       const limitNum = Math.min(100, Math.max(10, parseInt(limit)));
 
-      const result = await this.getMessagesUseCase.execute({
-        conversationId,
-        userId,
+      const result = await this.getMessagesUseCase.execute(conversationId, {
         page: pageNum,
         limit: limitNum,
+        userId: userId,
         useCache: useCache === "true",
       });
 

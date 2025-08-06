@@ -1,13 +1,6 @@
 import 'package:flutter/material.dart';
-import '../../main.dart'; // Pour accéder à globalSocket
-
-// Normalise un conversationId venant du backend (String ou Map)
-String normalizeConversationId(dynamic convId) {
-  if (convId is String) return convId;
-  if (convId is Map && convId['\$oid'] != null)
-    return convId['\$oid'] as String;
-  return convId?.toString() ?? '';
-}
+import '../main.dart'; // Pour accéder à globalSocket
+import '../utils/mock_data.dart' as MockData;
 
 // Génère un id MongoDB conversation à partir de deux ids participants (String)
 String generateMongoId(String id1, String id2) {
@@ -16,29 +9,21 @@ String generateMongoId(String id1, String id2) {
   final base = sorted[0].padLeft(6, '0') + sorted[1].padLeft(6, '0');
   return (base + 'a' * (24 - base.length)).substring(0, 24);
 }
-// ...existing code...
-
-// Mapping mock users (copie de chat_list_screen.dart)
-const Map<String, Map<String, dynamic>> userMapping = {
-  'M. Louis Paul MOTAZE': {
-    'id': 52,
-    'matricule': '151703A',
-    'nom': 'M. Louis Paul MOTAZE',
-  },
-  'Dr Madeleine TCHUINTE': {
-    'id': 51,
-    'matricule': '565939D',
-    'nom': 'Dr Madeleine TCHUINTE',
-  },
-  // Ajoutez ici les autres utilisateurs mock si besoin
-};
 
 class Message {
   final String text;
   final bool isSent;
   final String time;
+  final String? messageId;
+  final String? status; // 'sent', 'delivered', 'read'
 
-  Message({required this.text, required this.isSent, required this.time});
+  Message({
+    required this.text,
+    required this.isSent,
+    required this.time,
+    this.messageId,
+    this.status = 'sent',
+  });
 }
 
 class ChatDetailScreen extends StatefulWidget {
@@ -47,6 +32,7 @@ class ChatDetailScreen extends StatefulWidget {
   final bool isOnline;
   final bool isGroup;
   final String? matricule; // Ajouté pour identifier l'utilisateur connecté
+  final String? userId; // ID utilisateur pour la comparaison
   final String? convId; // Id temporaire de la conversation
   final List<dynamic>? initialMessages; // Ajouté pour précharger les messages
   const ChatDetailScreen({
@@ -56,6 +42,7 @@ class ChatDetailScreen extends StatefulWidget {
     this.isOnline = false,
     this.isGroup = false,
     this.matricule,
+    this.userId,
     this.convId,
     this.initialMessages,
   }) : super(key: key);
@@ -69,10 +56,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     if (widget.isGroup) return widget.name;
     final meta = widget.userMetadata;
     if (meta == null || meta.length < 2) return widget.name;
-    // On cherche le participant dont l'id n'est pas le mien
-    final myId = widget.matricule;
+
+    // On cherche le participant dont l'userId n'est pas le mien
     for (final user in meta) {
-      if (user is Map && user['userId'] != myId) {
+      if (user is Map && user['userId'] != widget.userId) {
         return user['name'] as String? ?? widget.name;
       }
     }
@@ -82,22 +69,30 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   late final String conversationId;
   final TextEditingController _messageController = TextEditingController();
   final List<Message> _messages = [];
+  String? currentUserId; // ID utilisateur pour le backend
 
   @override
   void initState() {
+    super.initState();
+
+    // Récupérer l'ID utilisateur à partir du matricule
+    final userData = MockData.findUserByMatricule(widget.matricule ?? '');
+    currentUserId = userData?['id']?.toString();
+
     // Ajoute les messages initiaux si fournis (fallback HTTP)
     if (widget.initialMessages != null && widget.initialMessages!.isNotEmpty) {
       for (var msg in widget.initialMessages!) {
         _messages.add(
           Message(
             text: msg['content'] ?? '',
-            isSent: msg['senderId'] == widget.matricule,
-            time: _getCurrentTime(),
+            isSent: msg['senderId'] == currentUserId,
+            time: _formatTimestamp(msg['timestamp']),
+            messageId: msg['_id']?.toString(),
+            status: msg['status'] ?? 'sent',
           ),
         );
       }
     }
-    super.initState();
 
     // Nouvelle logique : on n'utilise QUE l'id fourni par le backend
     if (widget.convId != null && widget.convId!.isNotEmpty) {
@@ -130,8 +125,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             _messages.add(
               Message(
                 text: msg['content'] ?? '',
-                isSent: msg['senderId'] == widget.matricule,
-                time: _getCurrentTime(),
+                isSent: msg['senderId'] == currentUserId,
+                time: _formatTimestamp(msg['timestamp']),
+                messageId: msg['_id']?.toString(),
+                status: msg['status'] ?? 'sent',
               ),
             );
           }
@@ -143,15 +140,17 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     globalSocket.on('newMessage', (data) {
       if (data is List) {
         for (var msg in data) {
-          if (normalizeConversationId(msg['conversationId']) ==
+          if (MockData.normalizeConversationId(msg['conversationId']) ==
               conversationId) {
             if (mounted) {
               setState(() {
                 _messages.add(
                   Message(
                     text: msg['content'] ?? '',
-                    isSent: msg['senderId'] == widget.matricule,
-                    time: _getCurrentTime(),
+                    isSent: msg['senderId'] == currentUserId,
+                    time: _formatTimestamp(msg['timestamp']),
+                    messageId: msg['_id']?.toString(),
+                    status: msg['status'] ?? 'sent',
                   ),
                 );
               });
@@ -159,60 +158,75 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
           }
         }
       } else if (data != null &&
-          normalizeConversationId(data['conversationId']) == conversationId) {
+          MockData.normalizeConversationId(data['conversationId']) ==
+              conversationId) {
         if (mounted) {
           setState(() {
             _messages.add(
               Message(
                 text: data['content'] ?? '',
-                isSent: data['senderId'] == widget.matricule,
-                time: _getCurrentTime(),
+                isSent: data['senderId'] == currentUserId,
+                time: _formatTimestamp(data['timestamp']),
+                messageId: data['_id']?.toString(),
+                status: data['status'] ?? 'sent',
               ),
             );
           });
         }
       }
     });
+
+    // Gestion des accusés de réception
+    _setupMessageStatusListeners();
   }
 
   void _sendMessage() {
-    if (_messageController.text.trim().isEmpty) return;
+    final messageText = _messageController.text.trim();
 
-    // Détermination dynamique des IDs
-    String senderId = widget.matricule ?? '151703A';
+    if (messageText.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Veuillez saisir un message'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    // Utiliser l'ID utilisateur au lieu du matricule pour le backend
+    String senderId = currentUserId ?? widget.matricule ?? '51';
     String receiverId = '';
+
     // On récupère l'id du destinataire via le mapping (pour 1-1)
     if (!widget.isGroup) {
-      final receiverInfo = userMapping[widget.name];
-      if (receiverInfo != null &&
-          receiverInfo['matricule'] != null &&
-          receiverInfo['matricule'].toString().isNotEmpty) {
-        receiverId = receiverInfo['matricule'];
-      } else {
-        // Fallback : tente d'utiliser l'id numérique si pas de matricule
-        receiverId = receiverInfo != null && receiverInfo['id'] != null
-            ? receiverInfo['id'].toString()
-            : '';
-        if (receiverId.isEmpty) {
-          print('❌ receiverId introuvable pour ${widget.name}');
-        }
+      final receiverInfo = MockData.userMapping[widget.name];
+      if (receiverInfo != null) {
+        receiverId = receiverInfo['id']?.toString() ?? '';
+      }
+      if (receiverId.isEmpty) {
+        print('❌ receiverId introuvable pour ${widget.name}');
       }
     }
     final messageData = {
-      'content': _messageController.text,
+      'content': messageText,
       'senderId': senderId,
       'receiverId': widget.isGroup ? null : receiverId,
       'conversationId': conversationId,
-      'matricule': senderId,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
     };
     globalSocket.emit('sendMessage', messageData);
+
+    // Générer un ID temporaire pour le message
+    final tempMessageId = DateTime.now().millisecondsSinceEpoch.toString();
 
     setState(() {
       _messages.add(
         Message(
-          text: _messageController.text,
+          text: messageText,
           isSent: true,
           time: _getCurrentTime(),
+          messageId: tempMessageId,
+          status: 'sending', // État temporaire
         ),
       );
     });
@@ -224,10 +238,99 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     return "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
   }
 
+  String _formatTimestamp(dynamic timestamp) {
+    if (timestamp == null) return _getCurrentTime();
+
+    try {
+      DateTime dateTime;
+      if (timestamp is int) {
+        dateTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
+      } else if (timestamp is String) {
+        dateTime = DateTime.parse(timestamp);
+      } else {
+        return _getCurrentTime();
+      }
+
+      return "${dateTime.hour.toString().padLeft(2, '0')}:${dateTime.minute.toString().padLeft(2, '0')}";
+    } catch (e) {
+      return _getCurrentTime();
+    }
+  }
+
+  void _setupMessageStatusListeners() {
+    // Écoute des accusés de réception
+    globalSocket.on('messageDelivered', (data) {
+      final messageId = data['messageId']?.toString();
+      if (messageId != null && mounted) {
+        setState(() {
+          final messageIndex = _messages.indexWhere(
+            (msg) => msg.messageId == messageId,
+          );
+          if (messageIndex != -1) {
+            final message = _messages[messageIndex];
+            _messages[messageIndex] = Message(
+              text: message.text,
+              isSent: message.isSent,
+              time: message.time,
+              messageId: message.messageId,
+              status: 'delivered',
+            );
+          }
+        });
+      }
+    });
+
+    globalSocket.on('messageRead', (data) {
+      final messageId = data['messageId']?.toString();
+      if (messageId != null && mounted) {
+        setState(() {
+          final messageIndex = _messages.indexWhere(
+            (msg) => msg.messageId == messageId,
+          );
+          if (messageIndex != -1) {
+            final message = _messages[messageIndex];
+            _messages[messageIndex] = Message(
+              text: message.text,
+              isSent: message.isSent,
+              time: message.time,
+              messageId: message.messageId,
+              status: 'read',
+            );
+          }
+        });
+      }
+    });
+
+    globalSocket.on('messageStatusChanged', (data) {
+      final messageId = data['messageId']?.toString();
+      final status = data['status']?.toString();
+      if (messageId != null && status != null && mounted) {
+        setState(() {
+          final messageIndex = _messages.indexWhere(
+            (msg) => msg.messageId == messageId,
+          );
+          if (messageIndex != -1) {
+            final message = _messages[messageIndex];
+            _messages[messageIndex] = Message(
+              text: message.text,
+              isSent: message.isSent,
+              time: message.time,
+              messageId: message.messageId,
+              status: status,
+            );
+          }
+        });
+      }
+    });
+  }
+
   @override
   void dispose() {
     globalSocket.off('messagesLoaded');
     globalSocket.off('newMessage');
+    globalSocket.off('messageDelivered');
+    globalSocket.off('messageRead');
+    globalSocket.off('messageStatusChanged');
     _messageController.dispose();
     super.dispose();
   }
@@ -346,6 +449,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                           ? _SentMessage(
                               message: message.text,
                               time: message.time,
+                              status: message.status,
                             )
                           : _ReceivedMessage(
                               message: message.text,
@@ -446,8 +550,24 @@ class _ReceivedMessage extends StatelessWidget {
 class _SentMessage extends StatelessWidget {
   final String message;
   final String time;
+  final String? status;
 
-  const _SentMessage({required this.message, required this.time});
+  const _SentMessage({required this.message, required this.time, this.status});
+
+  Widget _buildStatusIcon() {
+    switch (status) {
+      case 'sending':
+        return const Icon(Icons.schedule, size: 12, color: Colors.grey);
+      case 'sent':
+        return const Icon(Icons.check, size: 12, color: Colors.grey);
+      case 'delivered':
+        return const Icon(Icons.done_all, size: 12, color: Colors.grey);
+      case 'read':
+        return const Icon(Icons.done_all, size: 12, color: Colors.blue);
+      default:
+        return const Icon(Icons.check, size: 12, color: Colors.grey);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -469,7 +589,17 @@ class _SentMessage extends StatelessWidget {
             child: Text(message, style: const TextStyle(color: Colors.white)),
           ),
           const SizedBox(height: 4),
-          Text(time, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              Text(
+                time,
+                style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+              ),
+              const SizedBox(width: 4),
+              _buildStatusIcon(),
+            ],
+          ),
         ],
       ),
     );
