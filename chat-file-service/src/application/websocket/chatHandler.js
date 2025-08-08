@@ -665,6 +665,113 @@ class ChatHandler {
           );
         }
       }
+
+      // ✅ 1. RÉCUPÉRER TOUTES LES CONVERSATIONS DE L'UTILISATEUR
+      if (this.updateMessageStatusUseCase && this.getConversationIdsUseCase) {
+        try {
+          // 1.1 Récupérer les IDs des conversations
+          console.log(
+            `🔍 Récupération conversations pour utilisateur ${userId}`
+          );
+          const conversationIds = await this.getConversationIdsUseCase.execute(
+            userId
+          );
+
+          if (conversationIds && conversationIds.length > 0) {
+            console.log(
+              `📋 ${conversationIds.length} conversations trouvées pour ${userId}`
+            );
+
+            let totalUpdated = 0;
+
+            // ✅ 1.2 TRAITER CHAQUE CONVERSATION INDIVIDUELLEMENT
+            for (const conversationId of conversationIds) {
+              try {
+                const result = await this.updateMessageStatusUseCase.execute({
+                  conversationId: conversationId, // ✅ CONVERSATION SPÉCIFIQUE
+                  receiverId: userId,
+                  status: "DELIVERED",
+                  messageIds: null, // null = tous les messages de cette conversation
+                });
+
+                if (result && result.modifiedCount > 0) {
+                  totalUpdated += result.modifiedCount;
+                  console.log(
+                    `✅ ${result.modifiedCount} messages mis à jour dans conversation ${conversationId}`
+                  );
+
+                  // ✅ NOTIFIER LES AUTRES PARTICIPANTS DE CETTE CONVERSATION
+                  this.io
+                    .to(`conversation_${conversationId}`)
+                    .emit("messagesStatusChanged", {
+                      conversationId: conversationId,
+                      status: "DELIVERED",
+                      userId: userId,
+                      updatedCount: result.modifiedCount,
+                      timestamp: new Date().toISOString(),
+                      reason: "user_connected",
+                    });
+                }
+              } catch (convError) {
+                console.warn(
+                  `⚠️ Erreur mise à jour conversation ${conversationId}:`,
+                  convError.message
+                );
+                // Continue avec les autres conversations
+              }
+            }
+
+            // ✅ 1.3 RÉSUMÉ GLOBAL
+            if (totalUpdated > 0) {
+              console.log(
+                `✅ TOTAL: ${totalUpdated} messages marqués comme DELIVERED pour ${userId} à la connexion`
+              );
+
+              // Notifier l'utilisateur connecté
+              this.io.to(`user_${userId}`).emit("messagesAutoDelivered", {
+                deliveredCount: totalUpdated,
+                conversationsCount: conversationIds.length,
+                timestamp: new Date().toISOString(),
+              });
+            } else {
+              console.log(
+                `ℹ️ Aucun nouveau message à marquer comme DELIVERED pour ${userId}`
+              );
+            }
+          } else {
+            console.log(
+              `ℹ️ Aucune conversation trouvée pour utilisateur ${userId}`
+            );
+          }
+        } catch (conversationsError) {
+          console.warn(
+            `⚠️ Erreur récupération conversations pour ${userId}:`,
+            conversationsError.message
+          );
+
+          // ✅ FALLBACK : mise à jour globale si la récupération des conversations échoue
+          try {
+            console.log(`🔄 Fallback: mise à jour globale pour ${userId}`);
+            const result = await this.updateMessageStatusUseCase.execute({
+              conversationId: null, // null = toutes conversations
+              receiverId: userId,
+              status: "DELIVERED",
+              messageIds: null,
+            });
+
+            if (result && result.modifiedCount > 0) {
+              console.log(
+                `✅ Fallback réussi: ${result.modifiedCount} messages mis à jour`
+              );
+            }
+          } catch (fallbackError) {
+            console.error(
+              `❌ Erreur fallback mise à jour statut:`,
+              fallbackError.message
+            );
+          }
+        }
+      }
     } catch (error) {
       console.error("❌ Erreur authentification WebSocket:", error);
       socket.emit("auth_error", {

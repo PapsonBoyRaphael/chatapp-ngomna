@@ -338,22 +338,19 @@ class MongoMessageRepository {
       }
 
       // ✅ CONSTRUIRE LE FILTRE
-      const filter = {
-        status: { $ne: status }, // Ne pas mettre à jour si déjà au bon statut
-        receiverId: receiverId,
+      let filter = {
+        status: { $ne: status },
       };
 
-      // Si conversationId est fourni, on filtre dessus
       if (conversationId) {
         filter.conversationId = conversationId;
       }
 
-      // ✅ POUR DELIVERED ET READ, ON VEUT METTRE À JOUR LES MESSAGES QUI NE SONT PAS DE CET UTILISATEUR
+      // Pour DELIVERED/READ, on veut les messages reçus par l'utilisateur
       if (status === "DELIVERED" || status === "READ") {
-        filter.senderId = { $ne: receiverId }; // Exclure les messages de l'utilisateur lui-même
+        filter.senderId = { $ne: receiverId };
       }
 
-      // ✅ SI DES IDS SPÉCIFIQUES SONT FOURNIS
       if (messageIds && messageIds.length > 0) {
         filter._id = { $in: messageIds };
       }
@@ -1208,6 +1205,82 @@ class MongoMessageRepository {
         processingTime: `${processingTime}ms`,
       });
 
+      // ✅ GESTION SPÉCIALE POUR LA SUPPRESSION
+      if (status === "DELETED" && updateResult) {
+        try {
+          // 1. Récupérer la conversation pour vérifier si c'était le lastMessage
+          const Conversation = require("../mongodb/models/ConversationModel");
+          const conversation = await Conversation.findOne({
+            "lastMessage._id": messageId,
+          });
+
+          if (conversation) {
+            console.log(
+              `🔍 Message supprimé était le lastMessage de ${conversation._id}`
+            );
+
+            // 2. Récupérer le message précédent non supprimé
+            const previousMessage = await Message.findOne({
+              conversationId: conversation._id,
+              status: { $ne: "DELETED" },
+              deletedAt: null,
+            })
+              .sort({ createdAt: -1 })
+              .lean();
+
+            // 3. Mettre à jour la conversation
+            if (previousMessage) {
+              await Conversation.findByIdAndUpdate(conversation._id, {
+                $set: {
+                  "lastMessage._id": previousMessage._id,
+                  "lastMessage.content": previousMessage.content.substring(
+                    0,
+                    200
+                  ),
+                  "lastMessage.type": previousMessage.type,
+                  "lastMessage.senderId": previousMessage.senderId,
+                  "lastMessage.timestamp": previousMessage.createdAt,
+                  lastMessageAt: previousMessage.createdAt,
+                  updatedAt: new Date(),
+                },
+              });
+              console.log(
+                `✅ Conversation mise à jour avec message précédent: ${previousMessage._id}`
+              );
+            } else {
+              // Aucun message restant - vider lastMessage
+              await Conversation.findByIdAndUpdate(conversation._id, {
+                $set: {
+                  lastMessage: null,
+                  lastMessageAt: null,
+                  updatedAt: new Date(),
+                },
+              });
+              console.log(`✅ Conversation vidée - aucun message restant`);
+            }
+
+            // 4. Invalider le cache de la conversation
+            if (this.cacheService) {
+              try {
+                await this.cacheService.del(`conversation:${conversation._id}`);
+                await this.cacheService.del(`conversations:*`);
+              } catch (cacheError) {
+                console.warn(
+                  "⚠️ Erreur invalidation cache conversation:",
+                  cacheError.message
+                );
+              }
+            }
+          }
+        } catch (convError) {
+          console.warn(
+            "⚠️ Erreur mise à jour lastMessage après suppression:",
+            convError.message
+          );
+          // Ne pas faire échouer la suppression du message pour autant
+        }
+      }
+
       // ✅ INVALIDER LES CACHES LIÉS
       if (this.cacheService) {
         try {
@@ -1301,22 +1374,19 @@ class MongoMessageRepository {
       }
 
       // ✅ CONSTRUIRE LE FILTRE
-      const filter = {
-        status: { $ne: status }, // Ne pas mettre à jour si déjà au bon statut
-        receiverId: receiverId,
+      let filter = {
+        status: { $ne: status },
       };
 
-      // Si conversationId est fourni, on filtre dessus
       if (conversationId) {
         filter.conversationId = conversationId;
       }
 
-      // ✅ POUR DELIVERED ET READ, ON VEUT METTRE À JOUR LES MESSAGES QUI NE SONT PAS DE CET UTILISATEUR
+      // Pour DELIVERED/READ, on veut les messages reçus par l'utilisateur
       if (status === "DELIVERED" || status === "READ") {
-        filter.senderId = { $ne: receiverId }; // Exclure les messages de l'utilisateur lui-même
+        filter.senderId = { $ne: receiverId };
       }
 
-      // ✅ SI DES IDS SPÉCIFIQUES SONT FOURNIS
       if (messageIds && messageIds.length > 0) {
         filter._id = { $in: messageIds };
       }
