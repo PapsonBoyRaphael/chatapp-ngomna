@@ -1,1031 +1,415 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Document</title>
+    <title>🔧 Testeur Socket.IO - CENADI Chat Service</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="/socket.io/socket.io.js"></script>
   </head>
   <body>
-    <style>
-      body {
-        display: flex;
-        justify-content: center;
-      }
-      .container {
-        display: flex;
-        justify-content: space-between;
-        flex-direction: row;
-        border-radius: 5px;
-        width: 777px;
-        height: 705px;
-      }
-      .cont {
-        display: flex;
-
-        align-items: center;
-        flex-direction: column;
-        box-shadow: 0 0 5px rgb(148, 148, 148);
-        border-radius: 5px;
-        height: 762px;
-        padding: 20px 15px 20px 15px;
-      }
-
-      .conv {
-        display: flex;
-        font-family: Arial, Helvetica, sans-serif;
-        flex-direction: row;
-        align-items: center;
-        font-size: 20px;
-        background-color: rgb(221, 221, 221);
-        border-radius: 10px;
-        width: 280px;
-        height: 80px;
-        border: 2px solid white;
-        text-align: left;
-        padding: 10px 5px 10px 0px;
-      }
-
-      .group {
-        display: flex;
-        font-family: Arial, Helvetica, sans-serif;
-        flex-direction: row;
-        align-items: center;
-        font-size: 20px;
-        background-color: rgb(221, 221, 221);
-        border-radius: 10px;
-        width: 280px;
-        height: 80px;
-        border: 2px solid white;
-        text-align: left;
-        padding: 10px 5px 10px 0px;
-      }
-      .contact {
-        display: flex;
-        font-family: Arial, Helvetica, sans-serif;
-        flex-direction: row;
-        align-items: center;
-        font-size: 20px;
-        background-color: rgb(221, 221, 221);
-        border-radius: 10px;
-        width: 280px;
-        height: 80px;
-        border: 2px solid white;
-        text-align: left;
-        padding: 10px 5px 10px 0px;
-      }
-
-      .imgC {
-        width: 40px;
-        height: 40px;
-        padding: 5px;
-        border-radius: 40px;
-        background-color: white;
-        margin: 0 8px 0 15px;
-        border: 1px solid rgb(194, 194, 194);
-      }
-
-      .conv:hover,
-      .group:hover,
-      .contact:hover {
-        background-color: rgb(147, 148, 147);
-        cursor: pointer;
-        color: white;
-        .lastmsg {
-          color: white;
-        }
-      }
-      .conv:focus,
-      .group:focus,
-      .contact:focus {
-        background-color: rgb(147, 148, 147);
-        cursor: pointer;
-        color: white;
-        .lastmsg {
-          color: white;
-        }
-      }
-
-      .lastmsg {
-        font-size: 16px;
-        text-align: left;
-        margin: 5px 10px 5px 5px;
-        color: rgb(68, 68, 68);
-        height: 20px;
-        overflow: hidden;
-      }
-
-      .current {
-        display: flex;
-        flex-direction: row;
-        align-items: center;
-        font-family: Arial, Helvetica, sans-serif;
-        font-size: 20px;
-        background-color: rgb(126, 126, 126);
-        color: white;
-        border-radius: 10px;
-        width: 280px;
-        height: 80px;
-        border: 2px solid white;
-        text-align: center;
-        cursor: pointer;
-      }
-
-      .current > img {
-        width: 40px;
-        height: 40px;
-        padding: 5px;
-        border-radius: 40px;
-        background-color: white;
-        margin: 0 15px 0 15px;
-        border: 1px solid rgb(194, 194, 194);
-      }
-
-      hr {
-        width: 90%;
-        height: 3px;
-        color: #ff0000;
-      }
-
-      #contacts {
-        display: inline-block;
-        flex-direction: column;
-        justify-content: center;
-        align-items: center;
-        height: 760px;
-        padding: 10px;
-        width: auto;
-        border-radius: 5px;
-        overflow: auto;
-      }
-      .chat {
-        display: flex;
-        justify-content: space-between;
-        flex-direction: column;
-        box-shadow: 0 0 5px rgb(148, 148, 148);
-        padding: 0 10px 10px 10px;
-        margin: 0 0 0 5px;
-        border-radius: 5px;
-        width: 490px;
-        height: 792px;
-      }
-      #messages {
-        overflow: auto;
-        font-size: 25px;
-        padding: 0px 10px 10px 12px;
-        height: 700px;
-      }
-
-      .contmsg {
-        display: flex;
-        justify-content: start;
-        margin-bottom: 15px;
-      }
-
-      .msg {
-        display: inline-block;
-        font-family: Arial, Helvetica, sans-serif;
-        font-size: 20px;
-        background-color: rgb(219, 219, 219);
-        padding: 8px 15px 8px 15px;
-        border-radius: 0 12px 12px 12px;
-        max-width: 300px;
-        word-wrap: break-word; /*Very important !*/
-      }
-
-      input {
-        width: 345px;
-        height: 40px;
-        font-size: 18px;
-        border: 2px solid rgb(148, 148, 148);
-        border-radius: 5px;
-        padding: 0 0 0 10px;
-      }
-
-      .zone_saisie {
-        display: none;
-        width: 100%;
-        margin-top: 10px;
-      }
-      .button {
-        width: 100px;
-        height: 42px;
-        border: 2px solid rgb(122, 122, 122);
-        background-color: rgb(122, 122, 122);
-        border-radius: 5px;
-        color: white;
-        cursor: pointer;
-        font-size: 18px;
-      }
-      .button:hover {
-        background-color: rgb(87, 87, 87);
-        border-color: rgb(87, 87, 87);
-      }
-
-      .formuser {
-        display: none;
-        position: absolute;
-        max-width: 450px;
-        margin: 150px auto;
-        padding: 50px 60px 50px 50px;
-        border: 1px solid #ccc;
-        border-radius: 8px;
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-        background-color: #f9f9f9;
-        z-index: 11;
-      }
-
-      label {
-        display: block;
-        margin-bottom: 8px;
-        font-weight: bold;
-      }
-
-      #username,
-      input[type="password"],
-      input[type="email"],
-      input[type="file"] {
-        width: 100%;
-        padding: 10px;
-        margin-bottom: 15px;
-        border: 1px solid #ccc;
-        border-radius: 4px;
-        transition: border-color 0.3s;
-      }
-
-      #username:focus,
-      input[type="password"]:focus,
-      input[type="email"]:focus {
-        border-color: #007bff;
-        outline: none;
-      }
-
-      button[type="submit"],
-      button[id="cancelform"] {
-        width: 100%;
-        height: 50px;
-        display: flex;
-        margin-top: 10px;
-        justify-content: center;
-        align-items: center;
-        transform: translateX(10px);
-      }
-
-      #username::placeholder,
-      input[type="password"]::placeholder {
-        color: #aaa;
-      }
-
-      .userdetails {
-        display: none;
-        flex-direction: column;
-        position: absolute;
-        margin: 100px auto;
-        padding: 50px 60px 50px 50px;
-        border: 1px solid #ccc;
-        border-radius: 8px;
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-        background-color: #f9f9f9;
-        z-index: 10;
-        width: 320px;
-        height: 400px;
-      }
-      .name,
-      .type,
-      .email {
-        color: rgb(80, 80, 80);
-        font-size: 25px;
-        font-family: Arial, Helvetica, sans-serif;
-      }
-
-      .userdetails > button {
-        margin-top: 20px;
-        height: 50px;
-        font-size: 15px;
-        cursor: pointer;
-      }
-
-      .userdetails > img {
-        height: 60px;
-        width: 60px;
-        padding: 5px;
-        border: 1px solid rgb(122, 122, 122);
-        border-radius: 50px;
-      }
-
-      .currentconv {
-        display: none;
-        margin: 10px 0 10px 0;
-        width: 100%;
-        border-radius: 5px 5px 0 0;
-        height: 85px;
-        background-color: #ececec;
-        flex-direction: row;
-        align-items: center;
-        font-family: Arial, Helvetica, sans-serif;
-        z-index: 100;
-      }
-
-      .currentconv > img {
-        width: 45px;
-        height: 45px;
-        padding: 5px;
-        border-radius: 40px;
-        background-color: white;
-        margin: 0 15px 0 15px;
-        border: 1px solid rgb(194, 194, 194);
-      }
-
-      .currentconv > .infos > .n {
-        font-size: 20px;
-      }
-
-      .currentconv > .infos > .status {
-        color: rgb(105, 105, 105);
-      }
-    </style>
-    <script src="/socket.io/socket.io.js"></script>
-
-    <script>
-      var User;
-      var receiverId;
-      var groupId;
-      var convId;
-
-      var userId;
-      var username;
-      var role;
-      var email;
-      var profile_pic;
-      var accessToken = sessionStorage.getItem("accessToken");
-      var refreshToken = sessionStorage.getItem("refreshToken");
-      // console.log(userId, username, accessToken, refreshToken);
-
-      var socket = io({
-        auth: {
-          accessToken: `${accessToken}`,
-          refreshToken: `${refreshToken}`,
-        },
-        withCredentials: true,
-      });
-      socket.on("user-updated", (contact) => {
-        console.log("userupdated", contact);
-        if (contact._id === userId) {
-          userId = contact._id;
-          username = contact.username;
-          profile_pic = contact.profile_pic;
-          email = contact.email;
-          role = contact.role;
-
-          if (contact.profile_pic) {
-            // Option 1: Convertir en URL affichable
-            fetch(`/api/users/${userId}/profile-pic`)
-              .then((res) => res.blob())
-              .then((blob) => {
-                const imageUrl = URL.createObjectURL(blob);
-
-                // A. Afficher dans une balise img existante
-                const imgElement = document.getElementById("profile-pic");
-                if (imgElement) {
-                  imgElement.src = imageUrl;
-                  imgElement.alt = `Photo de profil de ${username}`;
-                  imgElement.style.padding = "1px";
-                }
-
-                console.log("Image de profil chargée", imageUrl);
-              })
-              .catch((error) => {
-                console.error("Erreur chargement image", error);
-              });
-          }
-        } else {
-          const cont = [
-            {
-              contact,
-            },
-          ];
-          console.log(cont);
-
-          displayContact(cont);
-        }
-      });
-
-      socket.on("userdetails", (data) => {
-        userId = data._id;
-        username = data.username;
-        profile_pic = data.profile_pic;
-        email = data.email;
-        role = data.role;
-
-        if (data.profile_pic) {
-          // Option 1: Convertir en URL affichable
-          fetch(`/api/users/${userId}/profile-pic`)
-            .then((res) => res.blob())
-            .then((blob) => {
-              const imageUrl = URL.createObjectURL(blob);
-
-              // A. Afficher dans une balise img existante
-              const imgElement = document.getElementById("profile-pic");
-              if (imgElement) {
-                imgElement.src = imageUrl;
-                imgElement.alt = `Photo de profil de ${username}`;
-                imgElement.style.padding = "1px";
-
-                // const cacheBuster = `?ts=${Date.now()}&rand=${Math.random()
-                //   .toString(36)
-                //   .substr(2, 9)}`;
-                // imgElement.src = `/api/users/${userId}/profile-pic${cacheBuster}`;
-              }
-
-              console.log("Image de profil chargée", imageUrl);
-            })
-            .catch((error) => {
-              console.error("Erreur chargement image", error);
-            });
-        }
-
-        console.log("userdetails", data);
-        socket.emit("sidebar", userId);
-      });
-
-      socket.on("onlineUsers", (data) => {
-        console.log("onlineUsers", data);
-        if (data.includes(receiverId)) {
-          document.querySelector(".status").innerText = "online";
-        } else {
-          socket.emit("status", receiverId);
-        }
-      });
-
-      socket.on("status", (status) => {
-        document.querySelector(".status").innerText = status;
-      });
-
-      // document.querySelector(".current").innerHTML = username;
-
-      const displayUpdateUser = () => {
-        document.querySelector(".formuser").style.display = "flex";
-      };
-
-      const updateUser = async () => {
-        event.preventDefault(); // Empêche le rechargement de la page
-
-        const form = document.querySelector("#updateForm");
-        // Créer un FormData avec les données du formulaire
-        const formData = new FormData(form);
-
-        // const username = document.getElementById("username").value;
-        // const password = document.getElementById("password").value;
-        // const email = document.getElementById("email").value;
-        // const profile_pic = document.getElementById("profile_pic").value;
-
-        try {
-          const response = await fetch(`/api/users/${userId}`, {
-            method: "PUT",
-            body: formData,
-          });
-
-          if (!response.ok) {
-            // Si le statut n'est pas dans la plage 200-299
-            const errorData = await response.json();
-            throw new Error(errorData.message || "Erreur lors de la connexion");
-          }
-
-          const data = await response.json();
-          console.log("Mis a jour réussie :", data);
-
-          sessionStorage.setItem("userid", data.data._id);
-          sessionStorage.setItem("username", data.data.username);
-          sessionStorage.setItem("role", data.data.role);
-          sessionStorage.setItem("email", data.data.email);
-          sessionStorage.setItem("pdp", data.data.profile_pic);
-
-          document.querySelector(".formuser").style.display = "none";
-
-          return data; // Renvoie les données résultantes, y compris l'utilisateur et les tokens
-        } catch (error) {
-          console.error("Erreur de connexion :", error.message);
-          alert(error.message); // Alerte l'utilisateur avec le message d'erreur
-        }
-      };
-
-      const displayConv = (data) => {
-        console.log("conversations : ", data);
-
-        const conversationUserData = data.map((conversationUser) => {
-          if (conversationUser?.sender?._id !== userId) {
-            return [
-              conversationUser?.sender,
-              conversationUser.lastMsg,
-              conversationUser.unseenMsg,
-              conversationUser._id,
-            ];
-          } else if (conversationUser?.receiver?._id !== userId) {
-            return [
-              conversationUser.receiver,
-              conversationUser.lastMsg,
-              conversationUser.unseenMsg,
-              conversationUser._id,
-            ];
-          }
-        });
-        // console.log(conversationUserData);
-        displayConversations(conversationUserData, username);
-      };
-
-      const displayGrp = (data) => {
-        console.log("groupes : ", data);
-      };
-
-      const checkcontact = (contactid) => {
-        const messagesDiv = document.getElementById("messages");
-        const write = document.getElementsByClassName("zone_saisie");
-        write[0].style.display = "flex";
-        messagesDiv.innerHTML = "";
-        groupId = null;
-        receiverId = contactid;
-        console.log(receiverId + " " + userId);
-        socket.emit("contact", contactid);
-      };
-
-      const checkconnversation = (convid, receiveid) => {
-        const messagesDiv = document.getElementById("messages");
-        const write = document.getElementsByClassName("zone_saisie");
-        write[0].style.display = "flex";
-        messagesDiv.innerHTML = "";
-        groupId = null;
-        receiverId = receiveid;
-        console.log(receiveid + " " + userId);
-        socket.emit("conversation", { sender: userId, convid: convid });
-        socket.emit("seen-conv", convid);
-      };
-
-      const checkGroups = (groupid) => {
-        const messagesDiv = document.getElementById("messages");
-        const write = document.getElementsByClassName("zone_saisie");
-        write[0].style.display = "flex";
-        messagesDiv.innerHTML = "";
-        receiverId = null;
-        groupId = groupid;
-        console.log("groupid : " + groupid + " " + userId);
-        socket.emit("group", { sender: userId, groupid: groupid });
-        socket.emit("seen-group", groupid);
-      };
-
-      const displayGroup = (groups) => {
-        const contactDiv = document.getElementById("contacts");
-        console.log("groups : ", groups);
-
-        const G = groups.map((group) => {
-          return [group];
-        });
-        groups.forEach((group) => {
-          const C = document.createElement("button");
-          const img = document.createElement("img");
-          const infos = document.createElement("div");
-          const a = group._id;
-
-          // if (group.profile_pic) {
-          //   // Option 1: Convertir en URL affichable
-          //   fetch(`/api/group/${group._id}/profile-pic`)
-          //     .then((res) => res.blob())
-          //     .then((blob) => {
-          //       const imageUrl = URL.createObjectURL(blob);
-
-          //       img.src = imageUrl;
-          //       img.alt = `Photo du groupe de ${name}`;
-          //       img.style.padding = "1px";
-
-          //       console.log("Image de profil chargée", imageUrl);
-          //     })
-          //     .catch((error) => {
-          //       console.error("Erreur chargement image", error);
-          //     });
-          // } else {
-          //   img.src = "user0.png";
-          // }
-          img.src = "user0.png";
-          img.classList.add("imgC");
-          infos.classList.add("infos");
-          C.classList.add(`group`);
-          C.classList.add(`${a}`);
-
-          let unseenMsg = "";
-
-          if (group.unseenMsg !== 0) {
-            unseenMsg = `(${group.unseenMsg})`;
-          }
-
-          if (group.lastMsg !== undefined) {
-            infos.innerHTML = `${group.name} ${unseenMsg} <div class="lastmsg">${group.lastMsg.content}</div>`; // Ajustez au besoin
-            C.onclick = () => {
-              const messagesDiv = document.getElementById("messages");
-              const write = document.getElementsByClassName("zone_saisie");
-              write[0].style.display = "flex";
-              messagesDiv.innerHTML = "";
-              const groupid = C.className.split(" ")[1];
-              checkGroups(groupid);
-            };
-            contactDiv.appendChild(C);
-            C.appendChild(img);
-            C.appendChild(infos);
-          } else {
-            infos.innerHTML = `${group.name}`; // Ajustez au besoin
-            C.onclick = () => {
-              const groupid = C.className.split(" ")[1];
-              checkGroups(groupid);
-            };
-            contactDiv.appendChild(C);
-            C.appendChild(img);
-            C.appendChild(infos);
-          }
-        });
-      };
-
-      const displayConversations = (contacts, current) => {
-        const contactDiv = document.getElementById("contacts");
-        const hr = document.createElement("hr");
-
-        contactDiv.appendChild(hr);
-        contacts.forEach((contact) => {
-          const isTrue = document.getElementsByClassName(
-            `${contact[0]._id.toString()}`
-          );
-          if (isTrue) {
-          }
-          console.log(contact);
-          const C = document.createElement("button");
-          const img = document.createElement("img");
-          const infos = document.createElement("div");
-          const a = contact[3];
-
-          if (contact[0].profile_pic) {
-            // Option 1: Convertir en URL affichable
-            fetch(`/api/users/${contact[0]._id}/profile-pic`)
-              .then((res) => res.blob())
-              .then((blob) => {
-                const imageUrl = URL.createObjectURL(blob);
-
-                img.src = imageUrl;
-                img.alt = `Photo de profil de ${username}`;
-                img.style.padding = "1px";
-
-                console.log("Image de profil chargée", imageUrl);
-              })
-              .catch((error) => {
-                console.error("Erreur chargement image", error);
-              });
-          } else {
-            img.src = "user0.png";
-          }
-
-          img.classList.add("imgC");
-          infos.classList.add("infos");
-          C.classList.add(`conv`);
-          C.classList.add(`${a}`);
-
-          let unseenMsg = "";
-
-          if (contact[2] !== 0) {
-            unseenMsg = `(${contact[2]})`;
-          }
-
-          infos.innerHTML = `${contact[0].username} ${unseenMsg} <div class="lastmsg">${contact[1].content}</div>`; // Ajustez au besoin
-          C.onclick = () => {
-            const convid = C.className.split(" ")[1];
-            checkconnversation(convid, contact[0]._id);
-          };
-          contactDiv.appendChild(C);
-
-          C.appendChild(img);
-          C.appendChild(infos);
-        });
-      };
-
-      const displayContact = async (contacts) => {
-        const contactDiv = document.getElementById("contacts");
-        const exclus = document.querySelectorAll(".conv");
-        const hr = document.createElement("hr");
-
-        console.log(contacts);
-
-        const current = document.querySelector(".username");
-        current.innerHTML = username;
-        const cancel = document.getElementById("cancel");
-        const cancelform = document.getElementById("cancelform");
-        const formuser = document.querySelector(".formuser");
-        const userdetails = document.querySelector(".userdetails");
-
-        cancel.onclick = () => {
-          userdetails.style.display = "none";
-        };
-        cancelform.onclick = () => {
-          formuser.style.display = "none";
-        };
-
-        current.onclick = () => {
-          const userdetails = document.querySelector(".userdetails");
-          userdetails.style.display = "flex";
-
-          document.querySelector(".img").src = "user0.png";
-          document.querySelector(
-            ".name"
-          ).innerHTML = `Nom d'Utilisateur : <br>-- ${username}`;
-          document.querySelector(
-            ".type"
-          ).innerHTML = `Type d'utilisateur : <br>-- ${role}`;
-          document.querySelector(
-            ".email"
-          ).innerHTML = `Adresse mail : <br>-- ${email}`;
-        };
-
-        contactDiv.appendChild(hr);
-
-        await contacts.forEach((contact) => {
-          contact = contact.contact;
-          let inc = false;
-          exclus.forEach((ex) => {
-            if (ex.innerHTML.includes(contact.username)) {
-              inc = true;
-            }
-          });
-          // console.log(inc);
-          // console.log(contact);
-          if (!inc) {
-            const C = document.createElement("button");
-            const img = document.createElement("img");
-            const infos = document.createElement("div");
-            const a = contact._id;
-
-            if (contact.profile_pic) {
-              // Option 1: Convertir en URL affichable
-              fetch(`/api/users/${contact._id}/profile-pic`)
-                .then((res) => res.blob())
-                .then((blob) => {
-                  const imageUrl = URL.createObjectURL(blob);
-
-                  img.src = imageUrl;
-                  img.alt = `Photo de profil de ${username}`;
-                  img.style.padding = "1px";
-
-                  console.log("Image de profil chargée", imageUrl);
-                })
-                .catch((error) => {
-                  console.error("Erreur chargement image", error);
-                });
-            } else {
-              img.src = "user0.png";
-            }
-
-            img.classList.add("imgC");
-            infos.classList.add("infos");
-            C.classList.add(`contact`);
-            C.classList.add(`${a}`);
-            infos.innerHTML = `${contact.username}`; // Ajustez au besoin
-            C.onclick = () => {
-              const contactid = C.className.split(" ")[1];
-              checkcontact(contactid);
-            };
-            contactDiv.appendChild(C);
-            C.appendChild(img);
-            C.appendChild(infos);
-          }
-        });
-      };
-
-      const displayMsg = (conv) => {
-        const messagesDiv = document.getElementById("messages");
-        messagesDiv.innerHTML = "";
-
-        console.log("conv", conv);
-        console.log("receiverId", receiverId);
-
-        if (receiverId !== null && receiverId !== undefined) {
-          if (
-            conv.receiver._id === receiverId ||
-            conv.sender._id === receiverId
-          ) {
-            const msgs = conv.messages;
-            console.log(msgs);
-            if (msgs) {
-              msgs.forEach((msg) => {
-                var M = document.createElement("div");
-                var C = document.createElement("div");
-                M.classList.add("msg");
-                C.classList.add("contmsg");
-                if (msg.msgByUserId === userId) {
-                  C.style.justifyContent = "end";
-                  M.style.borderRadius = "12px 0 12px 12px";
-                  M.style.backgroundColor = "rgb(148, 148, 148)";
-                  M.style.color = "white";
-                }
-                M.innerHTML = `${msg.content}  `; // Ajustez au besoin
-                messagesDiv.appendChild(C);
-                C.appendChild(M);
-              });
-            }
-          }
-        }
-        if (groupId !== null && groupId !== undefined) {
-          console.log(groupId, conv._id);
-          if (conv._id === groupId) {
-            const msgs = conv.messages;
-            console.log(msgs);
-            if (msgs) {
-              msgs.forEach((msg) => {
-                var M = document.createElement("div");
-                var C = document.createElement("div");
-                M.classList.add("msg");
-                C.classList.add("contmsg");
-                if (msg.msgByUserId === userId) {
-                  C.style.justifyContent = "end";
-                  M.style.borderRadius = "12px 0 12px 12px";
-                  M.style.backgroundColor = "rgb(148, 148, 148)";
-                  M.style.color = "white";
-                }
-                M.innerHTML = `${msg.content}  `; // Ajustez au besoin
-                messagesDiv.appendChild(C);
-                C.appendChild(M);
-              });
-            }
-          }
-        }
-      };
-
-      const send = (userid, receiverid, groupid) => {
-        var text = document.getElementById("m");
-        console.log(userid, receiverid, groupid);
-        if (groupid !== null) {
-          socket.emit("message-group", {
-            text: text.value,
-            sender: userid,
-            groupid: groupid,
-          });
-        }
-        if (receiverid !== null) {
-          socket.emit("message-conv", {
-            text: text.value,
-            sender: userid,
-            receiver: receiverid,
-          });
-        }
-        text.innerText = "";
-      };
-      const receive = (msg) => {
-        var M = document.createElement("div");
-        var br = document.createElement("br");
-        M.classList.add("msg");
-        M.innerText = msg;
-        document.getElementById("messages").appendChild(M);
-        document.getElementById("messages").appendChild(br);
-      };
-      socket.on("message-group", displayMsg);
-      socket.on("message-conv", displayMsg);
-      socket.on("groups", displayGroup);
-      socket.on("conversations", displayConv);
-      socket.on("contacts", displayContact);
-      socket.on("newAccessToken", (Tokens) => {
-        socket.disconnect(); // Ferme l'ancienne connexion proprement
-
-        // Mets à jour les tokens dans le sessionStorage
-        sessionStorage.setItem("accessToken", Tokens.newAccessToken);
-        sessionStorage.setItem("refreshToken", Tokens.refreshToken);
-
-        socket = io({
-          auth: {
-            accessToken: `${Tokens.newAccessToken}`,
-            refreshToken: `${Tokens.refreshToken}`,
-          },
-          withCredentials: true,
-        });
-      });
-      socket.on("tokenExpired", (data) => {
-        console.log(data.message);
-        alert(data.message);
-        socket.disconnect(); // Ferme l'ancienne connexion proprement
-        // Rediriger vers la page de connexion ou effectuer d'autres actions
-        window.location.href = "/";
-      });
-
-      socket.on("conversation", (data) => {
-        console.log("data :: ", data);
-
-        const conv = document.querySelector(".currentconv");
-        conv.style.display = "flex";
-
-        let img = document.querySelector(".img");
-
-        let n = document.querySelector(".n");
-        n.innerText = "";
-        let status = document.querySelector(".status");
-        status.innerText = "";
-
-        n.innerText = data.username;
-        status.innerText = data.status;
-      });
-
-      socket.on("contact", (data) => {
-        console.log("data :: ", data);
-
-        const conv = document.querySelector(".currentconv");
-        conv.style.display = "flex";
-
-        let img = document.querySelector(".img");
-
-        let n = document.querySelector(".n");
-        n.innerText = "";
-        let status = document.querySelector(".status");
-        status.innerText = "";
-
-        n.innerText = data.username;
-        status.innerText = data.status;
-      });
-
-      socket.on("group", (data) => {
-        console.log("data :: ", data);
-
-        const conv = document.querySelector(".currentconv");
-        conv.style.display = "flex";
-
-        let img = document.querySelector(".img");
-
-        let n = document.querySelector(".n");
-        n.innerHTML = "";
-        let status = document.querySelector(".status");
-        status.innerHTML = "";
-
-        n.innerText = data.name;
-
-        status.innerText = "Voir les infos du groupe";
-      });
-    </script>
-
-    <div class="formuser">
-      <form
-        action=""
-        id="updateForm"
-        method="post"
-        enctype="multipart/form-data"
-      >
-        <!-- <label for="username">Nom d'Utilisatreur</label>
-        <input type="text" name="username" id="username" />
-        <label for="password">Mot de passe</label>
-        <input type="password" name="password" id="password" />
-        <label for="email">Email</label>
-        <input type="email" name="email" id="email" /> -->
-        <label for="profile_pic">Photo de profil</label>
-        <input
-          type="file"
-          name="profile_pic"
-          id="profile_pic"
-          accept="image/*"
-        />
-        <!-- <div class="error"></div> -->
-        <button type="submit" onclick="updateUser()">Modifier</button>
-        <button id="cancelform">Annuler</button>
-      </form>
-    </div>
-
-    <div class="userdetails">
-      <img src="" alt="" class="img" />
-      <div class="name"></div>
-      <div class="type"></div>
-      <div class="email"></div>
-      <button onclick="displayUpdateUser()">Modifier le Profil</button>
-      <button id="cancel">Annuler</button>
-    </div>
-
     <div class="container">
-      <div class="cont">
-        <div id="contacts"></div>
-        <hr />
-        <div class="me">
-          <button class="current">
-            <img src="user0.png" alt="" id="profile-pic" />
-            <div class="infos">
-              <div class="username"></div>
-            </div>
-          </button>
-        </div>
-      </div>
+      <header class="header">
+        <h1>🔧 Testeur Socket.IO - CENADI Chat Service</h1>
+        <div class="connection-status" id="connectionStatus">🔴 Déconnecté</div>
+      </header>
 
-      <div class="chat">
-        <div class="currentconv">
-          <img src="user0.png" alt="" />
-          <div class="infos">
-            <div class="n"></div>
-            <div class="status"></div>
+      <div class="main-content">
+        <!-- Section Authentification -->
+        <div class="section auth-section">
+          <h2>🔐 Authentification</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="userId"
+              placeholder="ID Utilisateur (ex: 3)"
+              value="3"
+            />
+            <input
+              type="text"
+              id="matricule"
+              placeholder="Matricule (ex: 559296X)"
+              value="559296X"
+            />
+            <input type="text" id="token" placeholder="Token JWT (optionnel)" />
+            <!-- ✅ Ajout receiverId -->
+            <input
+              type="text"
+              id="receiverIdAuth"
+              placeholder="ID Destinataire (optionnel)"
+              value=""
+            />
+            <!-- ✅ Ajout statut -->
+            <select id="statusAuth">
+              <option value="">-- Statut (optionnel) --</option>
+              <option value="DELIVERED">DELIVERED</option>
+              <option value="SENT">SENT</option>
+              <option value="READ">READ</option>
+            </select>
+            <button onclick="authenticate()" class="btn-primary">
+              🔑 S'authentifier
+            </button>
+          </div>
+          <div class="status" id="authStatus"></div>
+        </div>
+
+        <!-- Section Tests de Base -->
+        <div class="section test-section">
+          <h2>🧪 Tests de Base</h2>
+          <div class="button-grid">
+            <button onclick="pingTest()" class="btn-secondary">
+              🏓 Test Ping
+            </button>
+            <button onclick="getOnlineUsers()" class="btn-secondary">
+              👥 Utilisateurs en ligne
+            </button>
+            <button onclick="disconnect()" class="btn-warning">
+              🔌 Déconnecter
+            </button>
+            <button onclick="reconnect()" class="btn-success">
+              🔄 Reconnecter
+            </button>
           </div>
         </div>
-        <div id="messages"></div>
-        <div class="zone_saisie">
-          <input type="text" id="m" /><button
-            class="button"
-            onclick="send(userId, receiverId, groupId)"
-          >
-            Send
-          </button>
+
+        <!-- Section Messages -->
+        <div class="section message-section">
+          <h2>💬 Test Messages</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="conversationId"
+              placeholder="ID Conversation (24 caractères hexa)"
+              value="60f7b3b3b3b3b3b3b3b3b3b5"
+            />
+            <input
+              type="text"
+              id="receiverId"
+              placeholder="ID Destinataire (REQUIS pour nouvelles conversations)"
+              value="1"
+            />
+            <textarea
+              id="messageContent"
+              placeholder="Contenu du message..."
+              rows="3"
+            >
+Message de test depuis le testeur Socket.IO 🚀</textarea
+            >
+            <select id="messageType">
+              <option value="TEXT">TEXT</option>
+              <option value="IMAGE">IMAGE</option>
+              <option value="FILE">FILE</option>
+            </select>
+            <div class="button-grid">
+              <button
+                onclick="validateMessageData() && sendMessage()"
+                class="btn-primary"
+              >
+                📤 Envoyer Message
+              </button>
+              <button onclick="generateTestIds()" class="btn-secondary">
+                🔧 Générer IDs Test
+              </button>
+            </div>
+            <div class="form-help">
+              <small>
+                💡 Pour une nouvelle conversation privée, le receiverId est
+                obligatoire
+              </small>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section Conversations -->
+        <div class="section conversation-section">
+          <h2>🗨️ Test Conversations</h2>
+          <div class="button-grid">
+            <button onclick="joinConversation()" class="btn-success">
+              ➕ Rejoindre Conversation
+            </button>
+            <button onclick="leaveConversation()" class="btn-warning">
+              ➖ Quitter Conversation
+            </button>
+            <button onclick="startTyping()" class="btn-secondary">
+              ⌨️ Commencer à taper
+            </button>
+            <button onclick="stopTyping()" class="btn-secondary">
+              ⏹️ Arrêter de taper
+            </button>
+          </div>
+        </div>
+
+        <!-- Section Tests Avancés -->
+        <div class="section advanced-section">
+          <h2>🔬 Tests Avancés</h2>
+          <div class="button-grid">
+            <button onclick="testInvalidData()" class="btn-danger">
+              ❌ Test Données Invalides
+            </button>
+            <button onclick="testLongMessage()" class="btn-secondary">
+              📝 Test Message Long
+            </button>
+            <button onclick="testSpecialChars()" class="btn-secondary">
+              🔤 Test Caractères Spéciaux
+            </button>
+            <button onclick="stressTest()" class="btn-warning">
+              ⚡ Test de Charge
+            </button>
+          </div>
+        </div>
+
+        <!-- ✅ AJOUTER CETTE SECTION APRÈS LA SECTION CONVERSATIONS -->
+        <div class="section message-status-section">
+          <h2>📊 Statuts de Messages</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="messageIdStatus"
+              placeholder="ID du Message (laisser vide pour utiliser le dernier envoyé)"
+              value=""
+            />
+            <div class="button-grid">
+              <button onclick="getLastMessageId()" class="btn-info">
+                🔍 Récupérer Dernier ID
+              </button>
+              <button onclick="markMessageDelivered()" class="btn-success">
+                📬 Marquer Livré
+              </button>
+              <button onclick="markMessageRead()" class="btn-success">
+                📖 Marquer Lu
+              </button>
+              <button onclick="markConversationRead()" class="btn-primary">
+                📚 Marquer Conversation Lue
+              </button>
+              <button onclick="getMessageStatus()" class="btn-secondary">
+                📊 Obtenir Statut
+              </button>
+            </div>
+            <div class="form-help">
+              <small>
+                🔍 Utilisez "Récupérer Dernier ID" pour auto-remplir avec le
+                dernier message envoyé
+              </small>
+              <br />
+              <small>
+                📬 Livré = Le message est arrivé sur l'appareil du destinataire
+              </small>
+              <br />
+              <small> 📖 Lu = Le destinataire a ouvert et lu le message </small>
+              <br />
+              <small>
+                📚 Conversation Lue = Tous les messages non lus de la
+                conversation sont marqués comme lus
+              </small>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section Messages & Événements Reçus -->
+        <div class="section messages-display-section">
+          <h2>📨 Messages & Événements Reçus</h2>
+          <div class="messages-container">
+            <!-- Onglets pour filtrer les types de messages -->
+            <div class="message-tabs">
+              <button
+                class="tab-btn active"
+                onclick="switchMessageTab('all')"
+                id="allTab"
+              >
+                📋 Tous
+              </button>
+              <button
+                class="tab-btn"
+                onclick="switchMessageTab('messages')"
+                id="messagesTab"
+              >
+                💬 Messages
+              </button>
+              <button
+                class="tab-btn"
+                onclick="switchMessageTab('typing')"
+                id="typingTab"
+              >
+                ⌨️ Frappe
+              </button>
+              <button
+                class="tab-btn"
+                onclick="switchMessageTab('users')"
+                id="usersTab"
+              >
+                👥 Utilisateurs
+              </button>
+            </div>
+
+            <!-- Zone d'affichage des messages -->
+            <div class="messages-display" id="messagesDisplay">
+              <div class="empty-state">
+                <i class="fas fa-inbox"></i>
+                <p>Aucun message reçu</p>
+                <small>Les messages et événements apparaîtront ici</small>
+              </div>
+            </div>
+
+            <!-- Contrôles -->
+            <div class="message-controls">
+              <button onclick="clearMessages()" class="btn-clear">
+                🗑️ Vider Messages
+              </button>
+              <button
+                onclick="toggleAutoScroll()"
+                class="btn-secondary"
+                id="autoScrollBtn"
+              >
+                📜 Auto-scroll: ON
+              </button>
+              <div class="message-stats">
+                <span id="messageCount">0 messages</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section Utilisateurs En Ligne -->
+        <div class="section online-users-section">
+          <h2>👥 Utilisateurs En Ligne</h2>
+          <div class="online-users-container">
+            <div class="users-grid" id="onlineUsersGrid">
+              <div class="empty-state">
+                <i class="fas fa-users"></i>
+                <p>Aucun utilisateur en ligne</p>
+                <small
+                  >Authentifiez-vous pour voir les utilisateurs connectés</small
+                >
+              </div>
+            </div>
+            <div class="users-stats">
+              <span id="onlineCount">0 utilisateurs en ligne</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section Indicateurs de Frappe -->
+        <div class="section typing-indicators-section">
+          <h2>⌨️ Indicateurs de Frappe</h2>
+          <div class="typing-container">
+            <div class="typing-list" id="typingList">
+              <div class="empty-state">
+                <i class="fas fa-keyboard"></i>
+                <p>Personne n'écrit actuellement</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section Upload de Fichier -->
+        <div class="section file-upload-section">
+          <h2>📁 Envoyer un Fichier</h2>
+          <form id="fileUploadForm" enctype="multipart/form-data">
+            <div class="form-group">
+              <input type="file" id="fileInput" name="file" required />
+              <input
+                type="text"
+                id="fileConversationId"
+                placeholder="ID Conversation (optionnel)"
+              />
+              <button type="submit" class="btn-primary">
+                ⬆️ Envoyer Fichier
+              </button>
+            </div>
+            <div class="status" id="fileUploadStatus"></div>
+          </form>
+        </div>
+
+        <!-- Section Mes Fichiers -->
+        <div class="section my-files-section">
+          <h2>📁 Mes Fichiers</h2>
+          <div class="button-grid">
+            <button onclick="fetchMyFiles()" class="btn-secondary">
+              📁 Mes Fichiers
+            </button>
+          </div>
+          <div id="myFilesList"></div>
+        </div>
+
+        <!-- Section Groupes et Diffusion -->
+        <div class="section group-section">
+          <h2>👥 Test Groupes & Diffusion</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="groupId"
+              placeholder="ID Groupe (ObjectId auto)"
+            />
+            <button onclick="generateGroupId()" class="btn-secondary">
+              🔧 Générer ID Groupe
+            </button>
+            <input
+              type="text"
+              id="broadcastId"
+              placeholder="ID Liste de diffusion (ObjectId auto)"
+            />
+            <button onclick="generateBroadcastId()" class="btn-secondary">
+              🔧 Générer ID Diffusion
+            </button>
+            <input
+              type="text"
+              id="groupReceiverIds"
+              placeholder="IDs utilisateurs (séparés par virgule)"
+            />
+            <textarea
+              id="groupMessageContent"
+              placeholder="Message pour le groupe..."
+              rows="2"
+            ></textarea>
+            <textarea
+              id="broadcastMessageContent"
+              placeholder="Message pour la diffusion..."
+              rows="2"
+            ></textarea>
+            <input
+              type="text"
+              id="groupName"
+              placeholder="Nom du groupe (optionnel)"
+            />
+            <input
+              type="text"
+              id="broadcastName"
+              placeholder="Nom de la diffusion (optionnel)"
+            />
+            <div class="button-grid">
+              <button onclick="sendGroupMessage()" class="btn-success">
+                📤 Envoyer au Groupe
+              </button>
+              <button onclick="sendBroadcastMessage()" class="btn-warning">
+                📤 Envoyer à la Diffusion
+              </button>
+              <button onclick="fetchGroupMessages()" class="btn-secondary">
+                📥 Récupérer Messages Groupe
+              </button>
+              <button onclick="fetchBroadcastMessages()" class="btn-secondary">
+                📥 Récupérer Messages Diffusion
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section réception complète des messages -->
+        <div class="section all-messages-section">
+          <h2>📥 Tous les messages reçus</h2>
+          <div id="allMessagesList"></div>
         </div>
       </div>
+
+      <!-- Logs en temps réel -->
+      <div class="logs-section">
+        <div class="logs-header">
+          <h3>📊 Logs en temps réel</h3>
+          <button onclick="clearLogs()" class="btn-clear">🧹 Vider</button>
+        </div>
+        <div class="logs-container" id="logsContainer"></div>
+      </div>
     </div>
+
+    <script src="app.js"></script>
   </body>
 </html>

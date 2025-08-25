@@ -385,14 +385,27 @@ class MongoMessageRepository {
       // ✅ INVALIDER LES CACHES LIÉS SI DES MESSAGES ONT ÉTÉ MODIFIÉS
       if (this.cacheService && updateResult.modifiedCount > 0) {
         try {
-          if (conversationId) {
-            await this.cacheService.del(
-              `${this.cachePrefix}conv:${conversationId}:*`
-            );
+          // Invalider toutes les variantes de cache pour cette conversation
+          const patterns = [
+            `msg:conv:${conversationId}:*`,
+            `messages:${conversationId}:*`,
+            `conversation:${conversationId}:*`,
+            `conversation:${conversationId}`,
+            `conversations:*`,
+          ];
+          for (const pattern of patterns) {
+            if (
+              pattern.includes("*") &&
+              typeof this.cacheService.keys === "function"
+            ) {
+              const keys = await this.cacheService.keys(pattern);
+              if (keys.length > 0) {
+                await this.cacheService.del(keys);
+              }
+            } else {
+              await this.cacheService.del(pattern);
+            }
           }
-          await this.cacheService.del(
-            `${this.cachePrefix}uploader:${receiverId}:*`
-          );
           console.log(
             `🗑️ Caches invalidés pour conversation ${conversationId || "[all]"}`
           );
@@ -1421,14 +1434,27 @@ class MongoMessageRepository {
       // ✅ INVALIDER LES CACHES LIÉS SI DES MESSAGES ONT ÉTÉ MODIFIÉS
       if (this.cacheService && updateResult.modifiedCount > 0) {
         try {
-          if (conversationId) {
-            await this.cacheService.del(
-              `${this.cachePrefix}conv:${conversationId}:*`
-            );
+          // Invalider toutes les variantes de cache pour cette conversation
+          const patterns = [
+            `msg:conv:${conversationId}:*`,
+            `messages:${conversationId}:*`,
+            `conversation:${conversationId}:*`,
+            `conversation:${conversationId}`,
+            `conversations:*`,
+          ];
+          for (const pattern of patterns) {
+            if (
+              pattern.includes("*") &&
+              typeof this.cacheService.keys === "function"
+            ) {
+              const keys = await this.cacheService.keys(pattern);
+              if (keys.length > 0) {
+                await this.cacheService.del(keys);
+              }
+            } else {
+              await this.cacheService.del(pattern);
+            }
           }
-          await this.cacheService.del(
-            `${this.cachePrefix}uploader:${receiverId}:*`
-          );
           console.log(
             `🗑️ Caches invalidés pour conversation ${conversationId || "[all]"}`
           );

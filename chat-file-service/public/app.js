@@ -686,7 +686,7 @@ function testInvalidData() {
 
   // Test avec contenu vide
   socket.emit("sendMessage", {
-    conversationId: "60f7b3b3b3b3b3b3b3b3b3b4",
+    conversationId: "60f7b3b3b3b3b3b3b3b3b3b5",
     content: "",
   });
 }
