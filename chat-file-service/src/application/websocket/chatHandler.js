@@ -369,6 +369,7 @@ class ChatHandler {
   // ✅ MÉTHODE D'AUTHENTIFICATION CORRIGÉE
   async handleAuthentication(socket, data) {
     try {
+      console.log(`🔐 Authentification demande:`, data);
       // ✅ 1. Authentification via token JWT si présent
       let userPayload = null;
       if (data.token) {
@@ -402,7 +403,7 @@ class ChatHandler {
         }
       } else {
         // ✅ 2. Authentification fallback par données explicites (userId/matricule)
-        if (!data.userId || !data.matricule) {
+        if (!data.userId && !data.matricule) {
           socket.emit("auth_error", {
             message: "Données d'authentification manquantes",
             code: "MISSING_CREDENTIALS",
@@ -410,7 +411,7 @@ class ChatHandler {
           return;
         }
         userPayload = {
-          id: String(data.userId),
+          id: String(data.matricule),
           userId: String(data.userId),
           matricule: String(data.matricule),
           nom: data.nom || "",
@@ -429,11 +430,12 @@ class ChatHandler {
       socket.isAuthenticated = true;
 
       // ✅ DONNÉES UTILISATEUR POUR LES COLLECTIONS
-      const userIdString = socket.userId;
+      const userIdString = socket.matricule; // Utiliser matricule comme userId
       const matriculeString = socket.matricule;
 
       const userData = {
-        socketId: socket.id,
+        // socketId: socket.id,
+        socketId: socket.matriculeString,
         matricule: matriculeString,
         connectedAt: new Date(),
         lastActivity: new Date(),
@@ -443,7 +445,7 @@ class ChatHandler {
       // ✅ AJOUTER AUX COLLECTIONS LOCALES
       this.connectedUsers.set(userIdString, userData);
       this.userSockets.set(socket.id, {
-        userId: userIdString,
+        userId: matriculeString,
         matricule: matriculeString,
       });
 
