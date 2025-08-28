@@ -364,10 +364,12 @@ class MongoMessageRepository {
           ...(status === "DELIVERED" && {
             "metadata.deliveryMetadata.deliveredAt": new Date().toISOString(),
             "metadata.deliveryMetadata.deliveredBy": receiverId,
+            receivedAt: new Date().toISOString(),
           }),
           ...(status === "READ" && {
             "metadata.deliveryMetadata.readAt": new Date().toISOString(),
             "metadata.deliveryMetadata.readBy": receiverId,
+            readAt: new Date().toISOString(),
           }),
         },
       });

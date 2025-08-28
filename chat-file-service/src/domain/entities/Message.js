@@ -189,6 +189,7 @@ class Message {
     this.status = "READ";
     this.metadata.deliveryMetadata.readAt = new Date().toISOString();
     this.updatedAt = new Date();
+    this.readAt = new Date();
     return this;
   }
 
@@ -197,6 +198,7 @@ class Message {
     this.status = "DELIVERED";
     this.metadata.deliveryMetadata.deliveredAt = new Date().toISOString();
     this.updatedAt = new Date();
+    this.receivedAt = new Date();
     return this;
   }
 
