@@ -17,11 +17,11 @@ const createAuthRoutes = (authController) => {
 
     try {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
-      res.status(200).json({ 
-        id: decoded.id, 
+      res.status(200).json({
+        id: decoded.id,
         matricule: decoded.matricule,
         nom: decoded.nom,
-        prenom: decoded.prenom
+        prenom: decoded.prenom,
       });
     } catch (error) {
       res.status(401).json({ message: "Token invalide" });

@@ -1,4 +1,5 @@
 const Message = require("../mongodb/models/MessageModel");
+const mongoose = require("mongoose");
 
 class MongoMessageRepository {
   constructor(cacheService = null, kafkaProducer = null) {
@@ -235,77 +236,31 @@ class MongoMessageRepository {
   }
 
   async findByConversation(conversationId, options = {}) {
-    const {
-      page = 1,
-      limit = 50,
-      sortBy = "createdAt",
-      sortOrder = 1,
-      useCache = true,
-    } = options;
-    const cacheKey = `${this.cachePrefix}conv:${conversationId}:p${page}:l${limit}:s${sortBy}${sortOrder}`;
-    const startTime = Date.now();
+    const { page = 1, limit = 50 } = options;
 
     try {
-      if (this.cacheService && useCache) {
-        try {
-          const cached = await this.cacheService.get(cacheKey);
-          if (cached) {
-            this.metrics.cacheHits++;
-            return { ...cached, fromCache: true };
-          } else {
-            this.metrics.cacheMisses++;
-          }
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur lecture cache conversation:",
-            cacheError.message
-          );
-        }
-      }
+      // Corriger la création de l'ObjectId avec new
+      const objectId = new mongoose.Types.ObjectId(conversationId);
 
-      // Récupération depuis MongoDB avec pagination
-      const skip = (page - 1) * limit;
-      const sortObj = { [sortBy]: sortOrder };
-
-      const [messages, totalCount] = await Promise.all([
-        Message.find({ conversationId })
-          .sort(sortObj)
-          .skip(skip)
-          .limit(limit)
-          .lean(),
-        Message.countDocuments({ conversationId }),
-      ]);
-
-      const result = {
-        messages,
-        pagination: {
-          currentPage: page,
-          totalPages: Math.ceil(totalCount / limit),
-          totalCount,
-          hasNext: page * limit < totalCount,
-          hasPrevious: page > 1,
-        },
-        fromCache: false,
+      const filter = {
+        conversationId: objectId,
+        deletedAt: null,
       };
 
-      const processingTime = Date.now() - startTime;
+      console.log("🔍 Filtre MongoDB:", filter);
 
-      if (this.cacheService && useCache) {
-        try {
-          await this.cacheService.set(cacheKey, result, this.defaultTTL);
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur mise en cache conversation:",
-            cacheError.message
-          );
-        }
-      }
+      const messages = await Message.find(filter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean();
 
-      return result;
+      console.log("🔍 Messages trouvés:", messages.length);
+
+      return messages;
     } catch (error) {
-      this.metrics.errors++;
       console.error("❌ Erreur findByConversation:", error);
-      throw error;
+      return [];
     }
   }
 
@@ -364,12 +319,10 @@ class MongoMessageRepository {
           ...(status === "DELIVERED" && {
             "metadata.deliveryMetadata.deliveredAt": new Date().toISOString(),
             "metadata.deliveryMetadata.deliveredBy": receiverId,
-            receivedAt: new Date().toISOString(),
           }),
           ...(status === "READ" && {
             "metadata.deliveryMetadata.readAt": new Date().toISOString(),
             "metadata.deliveryMetadata.readBy": receiverId,
-            readAt: new Date().toISOString(),
           }),
         },
       });

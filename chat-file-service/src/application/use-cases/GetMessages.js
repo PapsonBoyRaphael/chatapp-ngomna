@@ -20,6 +20,10 @@ class GetMessages {
           const cacheKey = `messages:${conversationId}:${page}:${limit}`;
           cachedMessages = await this.cacheService.get(cacheKey);
           if (cachedMessages) {
+            console.log(
+              "✅ Messages récupérés depuis le cache:",
+              cachedMessages
+            );
             return {
               ...cachedMessages,
               fromCache: true,

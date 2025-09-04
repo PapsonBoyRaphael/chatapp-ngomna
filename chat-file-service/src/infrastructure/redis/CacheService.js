@@ -60,6 +60,28 @@ class CacheService {
     }
     return await this.redis.keys(pattern);
   }
+
+  async clearConversationCache(conversationId) {
+    if (!this.redis) return;
+
+    const patterns = [
+      `messages:${conversationId}:*`,
+      `conversation:${conversationId}:*`,
+      `conversations:*`,
+    ];
+
+    for (const pattern of patterns) {
+      try {
+        const keys = await this.redis.keys(pattern);
+        if (keys.length > 0) {
+          await this.redis.del(keys);
+          console.log(`🗑️ Cache nettoyé pour ${pattern}: ${keys.length} clés`);
+        }
+      } catch (err) {
+        console.warn(`⚠️ Erreur nettoyage cache ${pattern}:`, err.message);
+      }
+    }
+  }
 }
 
 module.exports = CacheService;
