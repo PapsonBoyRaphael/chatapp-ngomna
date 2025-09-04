@@ -2100,10 +2100,7 @@ class ChatHandler {
 
       const result = await this.getConversationsUseCase.execute(userId, true);
 
-      console.log(
-        "📄 Récupération des conversations:",
-        result.conversations[0].participants
-      );
+      console.log("📄 Récupération des conversations:", result.length);
 
       socket.emit("conversationsLoaded", {
         conversations: result.conversations || [],

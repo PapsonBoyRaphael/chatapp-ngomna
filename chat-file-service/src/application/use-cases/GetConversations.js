@@ -3,7 +3,7 @@ class GetConversations {
     this.conversationRepository = conversationRepository;
     this.messageRepository = messageRepository;
     this.cacheService = cacheService;
-    this.cacheTimeout = 600; // 10 min
+    this.cacheTimeout = 300; // Réduit à 5 minutes pour plus de fraîcheur
   }
 
   async execute(userId, useCache = true) {
@@ -13,27 +13,28 @@ class GetConversations {
       console.log(`🔍 Récupération conversations pour utilisateur: ${userId}`);
 
       const cacheKey = `conversations:${userId}`;
+
+      // 1. Vérification et validation du cache
       if (useCache && this.cacheService) {
         try {
           const cached = await this.cacheService.get(cacheKey);
-          if (cached) {
+          console.log(`🔍 Vérification cache pour ${userId}:`, cached);
+          if (cached && this._isValidCache(cached)) {
+            console.log("✅ Cache valide trouvé");
             console.log(
               `📦 Conversations depuis cache: ${userId} (${
                 Date.now() - startTime
               }ms)`
             );
-            return {
-              ...cached,
-              fromCache: true,
-              processingTime: Date.now() - startTime,
-            };
+            return JSON.parse(cached); // Parse explicite du JSON
           }
         } catch (cacheError) {
           console.warn("⚠️ Erreur lecture cache:", cacheError.message);
+          await this.invalidateUserCache(userId); // Invalider en cas d'erreur
         }
       }
 
-      // Désactiver le cache interne du repository pour éviter la duplication
+      // 2. Récupération depuis MongoDB avec vérification
       const conversationsResult =
         await this.conversationRepository.findByParticipant(userId, {
           page: 1,
@@ -41,6 +42,13 @@ class GetConversations {
           useCache: false,
           includeArchived: false,
         });
+
+      if (
+        !conversationsResult ||
+        !Array.isArray(conversationsResult.conversations)
+      ) {
+        throw new Error("Format de données invalide depuis le repository");
+      }
 
       const conversations = conversationsResult.conversations || [];
 
@@ -139,11 +147,19 @@ class GetConversations {
         processingTime: Date.now() - startTime,
       };
 
-      // Mise en cache
-      if (useCache && this.cacheService) {
+      // 3. Mise en cache améliorée
+      if (useCache && this.cacheService && result.conversations.length > 0) {
         try {
-          await this.cacheService.set(cacheKey, result, this.cacheTimeout);
-          console.log(`💾 Conversations mises en cache pour ${userId}`);
+          const cacheData = JSON.stringify({
+            ...result,
+            cachedAt: Date.now(),
+            version: "1.0",
+          });
+
+          await this.cacheService.set(cacheKey, this.cacheTimeout, cacheData);
+          console.log(
+            `💾 ${result.conversations.length} conversations mises en cache pour ${userId}`
+          );
         } catch (cacheError) {
           console.warn("⚠️ Erreur mise en cache:", cacheError.message);
         }
@@ -162,11 +178,37 @@ class GetConversations {
     }
   }
 
+  // Nouvelle méthode de validation du cache
+  _isValidCache(cachedData) {
+    try {
+      const parsed = JSON.parse(cachedData);
+      const now = Date.now();
+      const cachedAt = parsed.cachedAt || 0;
+
+      // Vérifier si le cache n'est pas trop vieux (5 minutes max)
+      if (now - cachedAt > this.cacheTimeout * 1000) {
+        return false;
+      }
+
+      // Vérifier la structure minimale des données
+      return Array.isArray(parsed.conversations) && parsed.version === "1.0";
+    } catch {
+      return false;
+    }
+  }
+
+  // Méthode d'invalidation améliorée
   async invalidateUserCache(userId) {
     if (!this.cacheService) return;
+
+    const cacheKey = `conversations:${userId}`;
     try {
-      await this.cacheService.del(`conversations:${userId}`);
-      console.log(`🗑️ Cache conversations invalidé pour ${userId}`);
+      const deleted = await this.cacheService.del(cacheKey);
+      console.log(
+        `🗑️ Cache conversations ${
+          deleted ? "invalidé" : "déjà absent"
+        } pour ${userId}`
+      );
     } catch (error) {
       console.warn(
         "⚠️ Erreur invalidation cache conversations:",

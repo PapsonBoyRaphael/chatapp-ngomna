@@ -31,7 +31,7 @@ class CacheMiddleware {
           if (data.success && data.data) {
             setImmediate(async () => {
               try {
-                await this.redisClient.setex(
+                await this.redisClient.set(
                   cacheKey,
                   Math.floor(ttl / 1000),
                   JSON.stringify(data)
