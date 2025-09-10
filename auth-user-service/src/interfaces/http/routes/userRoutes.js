@@ -7,6 +7,10 @@ const createUserRoutes = (userController) => {
   router.get("/all", (req, res) => {
     userController.getAllUsers(req, res);
   });
+  // Route pour obtenir tous les utilisateurs
+  router.get("/alls", (req, res) => {
+    userController.getAllUsers(req, res);
+  });
 
   // Route pour obtenir un utilisateur par son ID
   router.get("/:id", (req, res) => {

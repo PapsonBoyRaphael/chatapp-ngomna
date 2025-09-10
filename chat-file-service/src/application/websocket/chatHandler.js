@@ -94,8 +94,8 @@ class ChatHandler {
         });
 
         // ✅ ÉVÉNEMENTS DE GESTION
-        socket.on("getOnlineUsers", () => {
-          this.handleGetOnlineUsers(socket);
+        socket.on("getOnlineUsers", (data) => {
+          this.handleGetOnlineUsers(socket, data);
         });
 
         socket.on("ping", () => {
@@ -841,7 +841,7 @@ class ChatHandler {
     };
   }
 
-  async getConnectedUsers() {
+  async getConnectedUsers(userId) {
     if (this.onlineUserManager) {
       return await this.onlineUserManager.getOnlineUsers();
     }
@@ -885,7 +885,7 @@ class ChatHandler {
     try {
       const {
         content,
-        conversationId,
+        conversationId = "",
         type = "TEXT",
         receiverId = null,
         conversationName = null,
@@ -938,7 +938,7 @@ class ChatHandler {
         return;
       }
 
-      if (!conversationId) {
+      if (!conversationId && !receiverId) {
         socket.emit("message_error", {
           message: "ID de conversation requis",
           code: "MISSING_CONVERSATION_ID",
@@ -946,7 +946,7 @@ class ChatHandler {
         return;
       }
 
-      if (!this.isValidObjectId(conversationId)) {
+      if (conversationId !== "" && !this.isValidObjectId(conversationId)) {
         socket.emit("message_error", {
           message: "ID de conversation invalide",
           code: "INVALID_CONVERSATION_ID",
@@ -1051,6 +1051,14 @@ class ChatHandler {
           broadcast,
         });
       }
+
+      socket.emit("newMessage", {
+        messageId: message.id,
+        conversationId: conversation.id,
+        content: message.content,
+        senderId: message.senderId,
+        timestamp: message.timestamp,
+      });
 
       // Logique pour chaque type de conversation
       if (conversation.type === "BROADCAST") {
@@ -1359,9 +1367,9 @@ class ChatHandler {
   }
 
   // ✅ AJOUTER handleGetOnlineUsers
-  handleGetOnlineUsers(socket) {
+  handleGetOnlineUsers(socket, data) {
     try {
-      const onlineUsers = this.getConnectedUsers();
+      const onlineUsers = this.getConnectedUsers(data);
 
       socket.emit("onlineUsers", {
         users: onlineUsers,
@@ -2061,7 +2069,7 @@ class ChatHandler {
       });
 
       console.log(
-        `📄 Récupération de ${messages.messages.length} messages pour conversation ${conversationId}`
+        `📄 Récupération de ${messages} messages pour conversation ${conversationId}`
       );
 
       socket.emit("messagesLoaded", messages);

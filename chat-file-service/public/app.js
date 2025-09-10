@@ -1637,7 +1637,7 @@ async function handleFileUpload(e) {
     const res = await fetch("/files/upload", {
       method: "POST",
       body: formData,
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: currentUser?.userId ? { "user-id": currentUser.userId } : {},
     });
 
     const data = await res.json();

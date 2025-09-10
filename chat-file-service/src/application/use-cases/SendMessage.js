@@ -43,13 +43,13 @@ class SendMessage {
       const {
         content,
         senderId,
-        conversationId,
+        conversationId = "",
         type = "TEXT",
-        receiverId = null,
-        conversationName = null,
+        receiverId = "",
+        conversationName = "",
       } = messageData;
 
-      if (!content || !senderId || !conversationId) {
+      if (!content || !senderId) {
         throw new Error("Données de message incomplètes");
       }
 
@@ -58,6 +58,10 @@ class SendMessage {
         contentLength: content.length,
         type,
       });
+
+      if (conversationId === null) {
+        conversationId = "";
+      }
 
       // ✅ VÉRIFIER OU CRÉER LA CONVERSATION AVEC VALIDATION RECEIVER ID
       let conversation = null;

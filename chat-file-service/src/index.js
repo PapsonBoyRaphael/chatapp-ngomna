@@ -177,7 +177,7 @@ const startServer = async () => {
         origin: ["*"],
         credentials: true,
         methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allowedHeaders: ["Content-Type", "Authorization"],
+        allowedHeaders: ["Content-Type", "Authorization", "Accept", "user-id"],
       })
     );
 
@@ -199,13 +199,7 @@ const startServer = async () => {
     // ===============================
     const io = new Server(server, {
       cors: {
-        origin: [
-          "http://localhost:3000",
-          "http://localhost:8000",
-          "http://localhost:8001",
-          "http://localhost:8002",
-          "http://localhost:8003",
-        ],
+        origin: ["*"],
         methods: ["GET", "POST"],
         credentials: true,
       },

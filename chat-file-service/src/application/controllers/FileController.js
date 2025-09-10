@@ -49,7 +49,7 @@ class FileController {
         throw new Error("Service de stockage de fichiers non disponible");
       }
 
-      const userId = req.user?.id || req.user?.userId;
+      const userId = req.user?.id || req.user?.userId || req.headers["user-id"];
       if (!userId) {
         return res.status(401).json({
           success: false,
