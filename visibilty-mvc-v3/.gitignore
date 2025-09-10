@@ -1,0 +1,7 @@
+# igonre some stuffs
+
+node_modules
+.vscode
+.DS_Store
+.env
+dist

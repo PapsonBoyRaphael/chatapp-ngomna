@@ -1,0 +1,29 @@
+### Service d'auth
+
+working with Kafka
+
+### KAFKA_TOPIC=user-logins
+U can modify the topic depending on what u want to use
+
+### Process
+1. Windows. 
+allez ou kafka est installe e.g: C:\kafka pour moi
+
+ouvrez 02 terminaux:
+sur le premier, lancez le zookeeper: 
+### C:\kafka> .\bin\windows\zookeeper-server-start.bat .\config\zookeeper.properties
+
+ensuite sur le deuxieme: 
+### C:\kafka>  .\bin\windows\kafka-server-start.bat .\config\server.properties 
+pour lancer le server
+
+Maintenant, creez un ficheir .env en utlisnat la structure sur le .example.env
+
+# Le port c'est 3001 mais vous pouvez changer
+
+# npm i
+# npm run dev
+
+# Allez sur http://localhost/3001/user-login
+
+# Mbame Mbame Martin James

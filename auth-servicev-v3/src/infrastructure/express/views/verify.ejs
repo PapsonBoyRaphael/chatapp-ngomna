@@ -1,0 +1,84 @@
+<div class="bg-white rounded-lg shadow-lg p-8">
+    <h2 class="text-2xl font-bold text-center text-gray-800 mb-6">
+        🔍 Verify Agent Matricule
+    </h2>
+    
+    <% if (error) { %>
+        <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+            <div class="flex items-center">
+                <span class="text-red-500 text-xl mr-3">⚠️</span>
+                <div>
+                    <h3 class="text-red-800 font-medium">Verification Error</h3>
+                    <p class="text-red-700 text-sm"><%= error %></p>
+                </div>
+            </div>
+        </div>
+    <% } %>
+    
+    <% if (success) { %>
+        <div class="bg-green-50 border border-green-200 rounded-lg p-4 mb-6">
+            <div class="flex items-center">
+                <span class="text-green-500 text-xl mr-3">✅</span>
+                <div>
+                    <h3 class="text-green-800 font-medium">Success</h3>
+                    <p class="text-green-700 text-sm"><%= success %></p>
+                </div>
+            </div>
+        </div>
+    <% } %>
+    
+    <form method="POST" action="/" class="space-y-6">
+        <div>
+            <label for="matricule" class="block text-sm font-medium text-gray-700 mb-2">
+                Agent Matricule
+            </label>
+            <input 
+                type="text" 
+                id="matricule" 
+                name="matricule"
+                placeholder="e.g., 010204B"
+                pattern="[0-9]{6}[A-Za-z]"
+                maxlength="7"
+                class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-green-500 transition duration-200 text-lg font-mono"
+                required
+            >
+            <p class="text-sm text-gray-500 mt-2">
+                Format: 6 digits followed by 1 letter (e.g., 010204B)
+            </p>
+        </div>
+        
+        <button 
+            type="submit"
+            class="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-3 px-4 rounded-lg transition duration-200 transform hover:scale-105"
+        >
+            🔍 Verify Matricule
+        </button>
+    </form>
+    
+    <div class="mt-8 p-4 bg-gray-50 rounded-lg">
+        <h3 class="font-medium text-gray-800 mb-2">Test Matricules:</h3>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+            <code class="bg-white px-2 py-1 rounded border cursor-pointer hover:bg-green-50" onclick="setMatricule('010204B')">010204B</code>
+            <code class="bg-white px-2 py-1 rounded border cursor-pointer hover:bg-green-50" onclick="setMatricule('010205K')">010205K</code>
+            <code class="bg-white px-2 py-1 rounded border cursor-pointer hover:bg-green-50" onclick="setMatricule('010225E')">010225E</code>
+            <code class="bg-white px-2 py-1 rounded border cursor-pointer hover:bg-green-50" onclick="setMatricule('010233V')">010233V</code>
+        </div>
+        <p class="text-xs text-gray-600 mt-2">
+            Click on any test matricule above to use it.
+        </p>
+    </div>
+</div>
+
+<script>
+function setMatricule(matricule) {
+    const matriculeInput = document.getElementById('matricule');
+    matriculeInput.value = matricule;
+    matriculeInput.focus();
+    
+    // Visual feedback
+    event.target.style.backgroundColor = '#dcfce7';
+    setTimeout(() => {
+        event.target.style.backgroundColor = 'white';
+    }, 500);
+}
+</script>

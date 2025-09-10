@@ -1,0 +1,76 @@
+<div class="bg-white rounded-lg shadow-lg p-8">
+    <h2 class="text-2xl font-bold text-center text-gray-800 mb-6">
+        👥 Your Collaborators
+    </h2>
+    
+    <div class="mb-6">
+        <h3 class="text-lg font-semibold text-blue-800 mb-2">Your Information</h3>
+        <p><strong>Name:</strong> <%= agent.prenom %> <%= agent.nom %></p>
+        <p><strong>Matricule:</strong> <%= agent.matricule %></p>
+        <p><strong>Rank:</strong> <%= agent.rang %></p>
+        <p><strong>Unit:</strong> <%= unit ? unit.name : 'Not assigned' %></p>
+    </div>
+    
+    <% if (unit && boss) { %>
+        <div class="mb-6">
+            <h3 class="text-lg font-semibold text-blue-800 mb-2">Unit Boss</h3>
+            <div class="border-b pb-2">
+                <p class="font-bold"><%= boss.matricule %></p>
+                <p class="text-sm"><%= boss.rang %> | <%= unit.name %></p>
+            </div>
+        </div>
+    <% } %>
+    
+    <% if (collaborators && collaborators.length > 0) { %>
+        <div class="mb-6">
+            <h3 class="text-lg font-semibold text-blue-800 mb-2">Unit Collaborators</h3>
+            <div class="space-y-4">
+                <% collaborators.forEach(collaborator => { %>
+                    <div class="border-b pb-2">
+                        <p class="font-bold"><%= collaborator.matricule %></p>
+                        <p class="text-sm"><%= collaborator.rang %> | <%= collaborator.unitName %></p>
+                    </div>
+                <% }); %>
+            </div>
+        </div>
+    <% } %>
+    
+    <% if (overseen && overseen.length > 0) { %>
+        <div class="mb-6">
+            <h3 class="text-lg font-semibold text-blue-800 mb-2">Overseen Units</h3>
+            <div class="space-y-4">
+                <% overseen.forEach(member => { %>
+                    <div class="border-b pb-2">
+                        <p class="font-bold"><%= member.matricule %></p>
+                        <p class="text-sm"><%= member.rang %> | <%= member.unitName %></p>
+                    </div>
+                <% }); %>
+            </div>
+        </div>
+    <% } %>
+    
+    <% if (supervisingBoss) { %>
+        <div class="mb-6">
+            <h3 class="text-lg font-semibold text-blue-800 mb-2">Supervising Unit Boss</h3>
+            <div class="border-b pb-2">
+                <p class="font-bold"><%= supervisingBoss.matricule %></p>
+                <p class="text-sm"><%= supervisingBoss.rang %> | <%= supervisingBoss.unitName %></p>
+            </div>
+        </div>
+    <% } %>
+    
+    <div class="flex space-x-4">
+        <a 
+            href="/search-unit?matricule=<%= matricule %>"
+            class="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-center font-medium py-3 px-4 rounded-lg transition duration-200"
+        >
+            🔄 Update Unit
+        </a>
+        <a 
+            href="/search-agent?matricule=<%= matricule %>&rang=<%= agent.sanitizedRang %>"
+            class="flex-1 bg-green-600 hover:bg-green-700 text-white text-center font-medium py-3 px-4 rounded-lg transition duration-200"
+        >
+            🔍 Search Other Agents
+        </a>
+    </div>
+</div>

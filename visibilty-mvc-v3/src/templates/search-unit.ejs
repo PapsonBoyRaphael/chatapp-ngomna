@@ -1,0 +1,85 @@
+<div class="bg-white rounded-lg shadow-lg p-8">
+    <h2 class="text-2xl font-bold text-center text-gray-800 mb-6">
+        🔍 Search Your Unit
+    </h2>
+    
+    <% if (error) { %>
+        <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+            <div class="flex items-center">
+                <span class="text-red-500 text-xl mr-3">⚠️</span>
+                <div>
+                    <h3 class="text-red-800 font-medium">Error</h3>
+                    <p class="text-red-700 text-sm"><%= error %></p>
+                </div>
+            </div>
+        </div>
+    <% } %>
+    
+    <form method="GET" action="/confirm-unit" class="space-y-6">
+        <input type="hidden" name="matricule" value="<%= matricule %>">
+        <div>
+            <label for="unitSearch" class="block text-sm font-medium text-gray-700 mb-2">
+                Unit Name
+            </label>
+            <input 
+                type="text" 
+                id="unitSearch" 
+                name="query"
+                placeholder="Start typing unit name..."
+                class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition duration-200"
+                oninput="searchUnits(this.value)"
+                required
+            >
+            <div id="unitSuggestions" class="mt-2"></div>
+        </div>
+        
+        <button 
+            type="submit"
+            class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-3 px-4 rounded-lg transition duration-200"
+        >
+            🔍 Select Unit
+        </button>
+    </form>
+</div>
+
+<script>
+async function searchUnits(query) {
+    if (query.length < 2) {
+        document.getElementById('unitSuggestions').innerHTML = '';
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/units/search?query=${encodeURIComponent(query)}`);
+        const data = await response.json();
+        
+        if (data.success && data.units.length > 0) {
+            const suggestions = data.units.map(unit => `
+                <div 
+                    class="p-2 border-b cursor-pointer hover:bg-blue-50"
+                    onclick="selectUnit('${unit.id}', '${unit.name}')"
+                >
+                    ${unit.name} ${unit.acronyme ? `(${unit.acronyme})` : ''}
+                </div>
+            `).join('');
+            document.getElementById('unitSuggestions').innerHTML = suggestions;
+        } else {
+            document.getElementById('unitSuggestions').innerHTML = '<p class="text-gray-500">No units found</p>';
+        }
+    } catch (error) {
+        console.error('Error searching units:', error);
+        document.getElementById('unitSuggestions').innerHTML = '<p class="text-red-500">Error searching units</p>';
+    }
+}
+
+function selectUnit(unitId, unitName) {
+    document.getElementById('unitSearch').value = unitName;
+    const form = document.querySelector('form');
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'unitId';
+    input.value = unitId;
+    form.appendChild(input);
+    document.getElementById('unitSuggestions').innerHTML = '';
+}
+</script>
