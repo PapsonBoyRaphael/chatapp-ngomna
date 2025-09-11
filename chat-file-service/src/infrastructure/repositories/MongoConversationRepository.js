@@ -290,7 +290,7 @@ class MongoConversationRepository {
     }
   }
 
-  async findById(conversationId, useCache = true) {
+  async findById(conversationId, useCache = false) {
     const startTime = Date.now();
 
     try {

@@ -1205,6 +1205,61 @@ class ChatHandler {
         requiresReceipts: true,
       });
 
+      if (result && this.getConversationUseCase) {
+        try {
+          // Récupérer la conversation avec findById du MongoConversationRepository
+          const conversationResult = await this.getConversationUseCase.execute(
+            result.conversation._id || result.conversation.id, // Utiliser _id ou id
+            userId,
+            false // Ne pas utiliser le cache pour avoir les données à jour
+          );
+
+          if (conversationResult) {
+            // Construire l'objet conversation avec le dernier message
+            const conversation = {
+              ...conversationResult,
+              lastMessage: {
+                _id: result.message._id,
+                content: result.message.content,
+                senderId: result.message.senderId,
+                type: result.message.type,
+                timestamp: result.message.createdAt || new Date(),
+              },
+            };
+
+            // Émettre la mise à jour aux participants de la conversation
+            const roomId = `conversation_${conversation._id}`;
+            this.io.to(roomId).emit("conversationUpdate", {
+              conversation,
+              metadata: {
+                event: "NEW_MESSAGE",
+                timestamp: new Date().toISOString(),
+              },
+            });
+
+            // Log de succès
+            console.log(
+              `✅ Conversation ${conversation._id} mise à jour avec message ${result.message._id}`
+            );
+
+            // Notifier individuellement chaque participant
+            if (Array.isArray(conversation.participants)) {
+              conversation.participants.forEach((participantId) => {
+                this.io
+                  .to(`user_${participantId}`)
+                  .emit("conversationsUpdated", {
+                    type: "NEW_MESSAGE",
+                    conversationId: conversation._id,
+                    timestamp: new Date().toISOString(),
+                  });
+              });
+            }
+          }
+        } catch (error) {
+          console.error("❌ Erreur mise à jour conversation:", error);
+        }
+      }
+
       console.log(
         `✅ Message diffusé avec tracking pour conversation ${conversationId}`
       );

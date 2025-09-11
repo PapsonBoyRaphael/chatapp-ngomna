@@ -6,7 +6,7 @@ class GetConversation {
     this.cacheTimeout = 300; // 5 minutes
   }
 
-  async execute(conversationId, userId, useCache = true) {
+  async execute(conversationId, userId, useCache = false) {
     try {
       if (!conversationId || !userId) {
         throw new Error("conversationId et userId sont requis");
@@ -29,8 +29,9 @@ class GetConversation {
         }
       }
 
-      const conversation =
-        await this.conversationRepository.getConversationById(conversationId);
+      const conversation = await this.conversationRepository.findById(
+        conversationId
+      );
 
       if (!conversation) {
         throw new Error("Conversation non trouvée");
@@ -43,19 +44,21 @@ class GetConversation {
 
       // Enrichir avec métadonnées
       const [unreadCount, lastMessage, messageCount] = await Promise.all([
-        this.messageRepository.getUnreadMessagesCount(conversationId, userId),
-        this.messageRepository.getLastMessage(conversationId),
-        this.messageRepository.getMessageCount(conversationId),
+        // this.messageRepository.getUnreadMessagesCount(conversationId, userId),
+        // this.messageRepository.getLastMessage(conversationId),
+        // this.messageRepository.getMessageCount(conversationId),
       ]);
 
       const result = {
         ...conversation,
-        unreadCount,
-        lastMessage,
-        messageCount,
-        isActive: messageCount > 0,
+        // unreadCount,
+        // lastMessage,
+        // messageCount,
+        // isActive: messageCount > 0,
         retrievedAt: new Date().toISOString(),
       };
+
+      console.log(`✅ Conversation récupérée: ${conversation.participants}`);
 
       // Mise en cache via CacheService
       if (this.cacheService) {

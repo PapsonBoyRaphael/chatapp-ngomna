@@ -67,6 +67,8 @@ class FileController {
         req.file.mimetype
       );
 
+      duration = req.body;
+
       const fileData = {
         originalName: req.file.originalname,
         fileName: remoteFileName,
@@ -78,6 +80,11 @@ class FileController {
           ? String(req.body.conversationId)
           : null,
         url: remotePath, // ou une URL publique si besoin
+        metadata: {
+          content: {
+            duration: duration,
+          },
+        },
       };
 
       let result;
