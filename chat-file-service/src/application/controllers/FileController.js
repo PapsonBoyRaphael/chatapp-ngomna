@@ -67,7 +67,7 @@ class FileController {
         req.file.mimetype
       );
 
-      duration = req.body;
+      const duration = req.body.duration || 0;
 
       const fileData = {
         originalName: req.file.originalname,

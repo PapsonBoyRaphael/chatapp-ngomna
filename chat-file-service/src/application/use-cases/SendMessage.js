@@ -41,13 +41,39 @@ class SendMessage {
   async execute(messageData) {
     try {
       const {
-        content,
+        content = "",
         senderId,
         conversationId = "",
         type = "TEXT",
         receiverId = "",
         conversationName = "",
+        duration,
+        fileUrl = null,
+        fileId = null, // ✅ NOUVEAU: ID du fichier pour les messages de type FILE
+        fileName = null, // ✅ NOUVEAU: Nom du fichier
+        fileSize = null, // ✅ NOUVEAU: Taille du fichier
+        mimeType = null, // ✅ NOUVEAU: Type MIME du fichier
       } = messageData;
+
+      if (!content || !senderId) {
+        throw new Error("Données de message incomplètes");
+      }
+
+      if (type !== "TEXT") {
+        if (type === "FILE" && (!fileId || !fileName)) {
+          throw new Error(
+            "Pour les messages FILE, fileId et fileName sont requis"
+          );
+        }
+
+        if (type === "AUDIO" && !duration) {
+          throw new Error("Pour les messages AUDIO, la durée est requise");
+        }
+
+        if (type === "IMAGE" && !fileId) {
+          throw new Error("Pour les messages IMAGE, fileId est requis");
+        }
+      }
 
       if (!content || !senderId) {
         throw new Error("Données de message incomplètes");
@@ -57,6 +83,9 @@ class SendMessage {
         hasReceiverId: !!receiverId,
         contentLength: content.length,
         type,
+        fileId,
+        fileName,
+        duration,
       });
 
       if (conversationId === null) {
@@ -185,11 +214,52 @@ class SendMessage {
         updatedAt: new Date(),
       };
 
+      // ✅ AJOUTER LES MÉTADONNÉES SPÉCIFIQUES AU TYPE DE MESSAGE
+      if (type !== "TEXT") {
+        message.metadata = {};
+
+        if (type === "FILE" || type === "IMAGE") {
+          message.metadata.file = {
+            ...(fileId && { fileId: fileId }),
+            ...(fileName && { fileName: fileName }),
+            ...(fileSize && { fileSize: fileSize }),
+            ...(fileUrl && { fileUrl: fileUrl }),
+            ...(mimeType && { mimeType: mimeType }),
+            ...(urlfile && { url: urlfile }),
+            uploadedAt: new Date(),
+          };
+        }
+
+        if (type === "AUDIO") {
+          message.metadata.audio = {
+            ...(duration && { duration: duration }),
+            ...(fileId && { fileId: fileId }),
+            ...(fileUrl && { fileUrl: fileUrl }),
+            ...(fileName && { fileName: fileName }),
+            ...(fileSize && { fileSize: fileSize }),
+            ...(mimeType && { mimeType: mimeType }),
+            ...(urlfile && { url: urlfile }),
+          };
+        }
+
+        if (type === "IMAGE") {
+          message.metadata.image = {
+            ...(fileId && { fileId: fileId }),
+            ...(fileName && { fileName: fileName }),
+            ...(fileUrl && { fileUrl: fileUrl }),
+            ...(fileSize && { fileSize: fileSize }),
+            ...(mimeType && { mimeType: mimeType }),
+            ...(urlfile && { url: urlfile }),
+          };
+        }
+      }
+
       console.log(`📝 Création message:`, {
         senderId: message.senderId,
         conversationId: message.conversationId,
         contentLength: message.content.length,
         type: message.type,
+        hasMetadata: !!message.metadata,
       });
 
       // ✅ SAUVEGARDER LE MESSAGE AVEC GESTION D'ERREUR

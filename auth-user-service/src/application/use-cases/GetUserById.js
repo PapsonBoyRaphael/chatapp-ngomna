@@ -7,7 +7,10 @@ class GetUserById {
     if (!userId) {
       throw new Error("L'ID de l'utilisateur est requis");
     }
-    return await this.userRepository.findById(userId);
+
+    // Utilisez findByMatricule si userId est un matricule
+    // ou findById si c'est un ID classique
+    return await this.userRepository.findByMatricule(userId);
   }
 }
 

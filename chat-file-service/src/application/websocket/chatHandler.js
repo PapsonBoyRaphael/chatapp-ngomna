@@ -889,6 +889,12 @@ class ChatHandler {
         type = "TEXT",
         receiverId = null,
         conversationName = null,
+        duration,
+        fileId,
+        fileUrl,
+        fileName,
+        fileSize,
+        mimeType,
         broadcast = false,
       } = data;
       const userId = socket.userId;
@@ -1035,6 +1041,12 @@ class ChatHandler {
           conversationId,
           type,
           receiverId,
+          duration: duration,
+          fileId: fileId,
+          fileName: fileName,
+          fileUrl: fileUrl,
+          fileSize: fileSize,
+          mimeType: mimeType,
           conversationName,
           broadcast,
         });
@@ -1047,6 +1059,12 @@ class ChatHandler {
           conversationId: conversation._id,
           type,
           receiverId: null,
+          duration: duration,
+          fileId: fileId,
+          fileName: fileName,
+          fileUrl: fileUrl,
+          fileSize: fileSize,
+          mimeType: mimeType,
           conversationName: conversation.name,
           broadcast,
         });
