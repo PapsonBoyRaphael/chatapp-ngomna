@@ -1,4 +1,30 @@
 const File = require("../../domain/entities/File");
+const musicMetadata = require("music-metadata");
+const path = require("path");
+
+async function processAudioFile(file) {
+  try {
+    // Construire le chemin absolu
+    const absolutePath = path.resolve(process.cwd(), file.path);
+    console.log("📂 Chemin absolu du fichier:", absolutePath);
+
+    const metadata = await musicMetadata.parseFile(absolutePath);
+
+    await file.setAudioMetadata({
+      duration: metadata.format.duration,
+      bitrate: metadata.format.bitrate,
+      sampleRate: metadata.format.sampleRate,
+      channels: metadata.format.numberOfChannels,
+      title: metadata.common.title,
+      artist: metadata.common.artist,
+      album: metadata.common.album,
+      genre: metadata.common.genre?.[0],
+      year: metadata.common.year,
+    });
+  } catch (error) {
+    console.error("❌ Erreur traitement audio:", error);
+  }
+}
 
 class UploadFile {
   constructor(fileRepository, kafkaProducer = null) {
@@ -34,6 +60,11 @@ class UploadFile {
 
       if (!savedFile) {
         throw new Error("Échec de la sauvegarde du fichier");
+      }
+
+      // ✅ TRAITEMENT DES MÉTADONNÉES AUDIO SI BESOIN
+      if (fileEntity.mimeType && fileEntity.mimeType.startsWith("audio/")) {
+        await processAudioFile(savedFile);
       }
 
       // ✅ PUBLIER ÉVÉNEMENT KAFKA VIA LE USE CASE

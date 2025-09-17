@@ -497,6 +497,29 @@ fileSchema.methods.publishKafkaEvent = async function (
   }
 };
 
+// Ajouter après les autres méthodes
+fileSchema.methods.setAudioMetadata = async function (metadata) {
+  try {
+    this.metadata.content.duration = metadata.duration;
+    this.metadata.content.bitrate = metadata.bitrate;
+    this.metadata.content.sampleRate = metadata.sampleRate;
+    this.metadata.content.channels = metadata.channels;
+
+    // Métadonnées optionnelles
+    if (metadata.title) this.metadata.content.title = metadata.title;
+    if (metadata.artist) this.metadata.content.artist = metadata.artist;
+    if (metadata.album) this.metadata.content.album = metadata.album;
+    if (metadata.genre) this.metadata.content.genre = metadata.genre;
+    if (metadata.year) this.metadata.content.year = metadata.year;
+
+    await this.save();
+    return true;
+  } catch (error) {
+    console.error("❌ Erreur définition métadonnées audio:", error);
+    return false;
+  }
+};
+
 // ===============================
 // MÉTHODES STATIQUES
 // ===============================
