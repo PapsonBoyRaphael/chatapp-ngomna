@@ -2,3 +2,4 @@ node_modules
 schemas.json
 dist
 *.log
+chat-file-service/~/minio-data/
