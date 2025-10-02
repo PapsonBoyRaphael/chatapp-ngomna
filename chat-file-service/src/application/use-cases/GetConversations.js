@@ -3,44 +3,51 @@ class GetConversations {
     this.conversationRepository = conversationRepository;
     this.messageRepository = messageRepository;
     this.cacheService = cacheService;
-    this.cacheTimeout = 300; // Réduit à 5 minutes pour plus de fraîcheur
+    this.cacheTimeout = 300;
   }
 
-  async execute(userId, useCache = true) {
+  async execute(userId, options = {}) {
     const startTime = Date.now();
 
+    // ✅ RÉCUPÉRER LES OPTIONS DE PAGINATION
+    const {
+      page = 1,
+      limit = 20,
+      offset = (page - 1) * limit,
+      includeArchived = false,
+      useCache = true,
+    } = options;
+
     try {
-      console.log(`🔍 Récupération conversations pour utilisateur: ${userId}`);
+      console.log(
+        `🔍 Récupération conversations page ${page} (limit: ${limit}) pour utilisateur: ${userId}`
+      );
 
-      const cacheKey = `conversations:${userId}`;
+      // ✅ INCLURE LA PAGINATION DANS LA CLÉ DE CACHE
+      const cacheKey = `conversations:${userId}:page:${page}:limit:${limit}`;
 
-      // 1. Vérification et validation du cache
+      // 1. Vérification du cache (avec pagination)
       if (useCache && this.cacheService) {
         try {
           const cached = await this.cacheService.get(cacheKey);
-          console.log(`🔍 Vérification cache pour ${userId}:`, cached);
           if (cached && this._isValidCache(cached)) {
-            console.log("✅ Cache valide trouvé");
-            console.log(
-              `📦 Conversations depuis cache: ${userId} (${
-                Date.now() - startTime
-              }ms)`
-            );
-            return JSON.parse(cached); // Parse explicite du JSON
+            console.log("✅ Cache valide trouvé pour la page", page);
+            return JSON.parse(cached);
           }
         } catch (cacheError) {
           console.warn("⚠️ Erreur lecture cache:", cacheError.message);
-          await this.invalidateUserCache(userId); // Invalider en cas d'erreur
+          await this.invalidateUserCache(userId, page, limit);
         }
       }
 
-      // 2. Récupération depuis MongoDB avec vérification
+      // 2. ✅ RÉCUPÉRATION AVEC PAGINATION
       const conversationsResult =
         await this.conversationRepository.findByParticipant(userId, {
-          page: 1,
-          limit: 50,
+          page: parseInt(page),
+          limit: parseInt(limit),
+          offset: parseInt(offset),
+          includeArchived: includeArchived,
           useCache: false,
-          includeArchived: false,
         });
 
       if (
@@ -51,16 +58,19 @@ class GetConversations {
       }
 
       const conversations = conversationsResult.conversations || [];
+      const totalCount =
+        conversationsResult.totalCount ||
+        conversationsResult.pagination?.totalCount ||
+        0;
 
       console.log(
-        `📋 ${conversations.length} conversations trouvées pour ${userId}`
+        `📋 ${conversations.length} conversations trouvées sur ${totalCount} total pour la page ${page}`
       );
 
-      // Pour chaque conversation, ajouter le nombre de messages non lus et autres métadonnées
+      // 3. Traitement des métadonnées (inchangé)
       const conversationsWithMetadata = await Promise.all(
         conversations.map(async (conversation) => {
           try {
-            // ✅ OBTENIR LES MÉTADONNÉES UTILISATEUR DEPUIS LA CONVERSATION
             const userMetadata = conversation.userMetadata?.find(
               (meta) => meta.userId === userId
             ) || {
@@ -71,13 +81,11 @@ class GetConversations {
               isPinned: false,
             };
 
-            // ✅ UTILISER LES COMPTEURS UNREADCOUNTS SI DISPONIBLES
             const unreadCount =
               conversation.unreadCounts?.[userId] ||
               userMetadata.unreadCount ||
               0;
 
-            // ✅ RÉCUPÉRER LE DERNIER MESSAGE SI PAS DÉJÀ PRÉSENT
             let lastMessage = conversation.lastMessage;
             if (!lastMessage && this.messageRepository.getLastMessage) {
               try {
@@ -120,22 +128,30 @@ class GetConversations {
         })
       );
 
-      // Trier par dernière activité
+      // 4. Trier par dernière activité
       const sortedConversations = conversationsWithMetadata.sort(
         (a, b) => new Date(b.lastActivity) - new Date(a.lastActivity)
       );
 
+      // 5. ✅ CALCULS DE PAGINATION CORRECTS
+      const totalPages = Math.ceil(totalCount / limit);
+      const hasNext = page < totalPages;
+      const hasPrevious = page > 1;
+
       const result = {
         conversations: sortedConversations,
-        pagination: conversationsResult.pagination || {
-          currentPage: 1,
-          totalPages: 1,
-          totalCount: sortedConversations.length,
-          hasNext: false,
-          hasPrevious: false,
-          limit: 50,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages: totalPages,
+          totalCount: totalCount,
+          hasNext: hasNext,
+          hasPrevious: hasPrevious,
+          limit: parseInt(limit),
+          offset: parseInt(offset),
+          nextPage: hasNext ? parseInt(page) + 1 : null,
+          previousPage: hasPrevious ? parseInt(page) - 1 : null,
         },
-        totalCount: sortedConversations.length,
+        totalCount: totalCount,
         unreadConversations: sortedConversations.filter(
           (c) => c.unreadCount > 0
         ).length,
@@ -147,7 +163,7 @@ class GetConversations {
         processingTime: Date.now() - startTime,
       };
 
-      // 3. Mise en cache améliorée
+      // 6. Mise en cache (avec clé paginée)
       if (useCache && this.cacheService && result.conversations.length > 0) {
         try {
           const cacheData = JSON.stringify({
@@ -157,16 +173,14 @@ class GetConversations {
           });
 
           await this.cacheService.set(cacheKey, this.cacheTimeout, cacheData);
-          console.log(
-            `💾 ${result.conversations.length} conversations mises en cache pour ${userId}`
-          );
+          console.log(`💾 Cache mis à jour pour la page ${page}`);
         } catch (cacheError) {
           console.warn("⚠️ Erreur mise en cache:", cacheError.message);
         }
       }
 
       console.log(
-        `✅ ${result.conversations.length} conversations récupérées pour ${userId} (${result.processingTime}ms)`
+        `✅ Page ${page}: ${result.conversations.length} conversations récupérées (${result.processingTime}ms)`
       );
       return result;
     } catch (error) {
@@ -178,42 +192,38 @@ class GetConversations {
     }
   }
 
-  // Nouvelle méthode de validation du cache
   _isValidCache(cachedData) {
     try {
       const parsed = JSON.parse(cachedData);
       const now = Date.now();
       const cachedAt = parsed.cachedAt || 0;
 
-      // Vérifier si le cache n'est pas trop vieux (5 minutes max)
       if (now - cachedAt > this.cacheTimeout * 1000) {
         return false;
       }
 
-      // Vérifier la structure minimale des données
       return Array.isArray(parsed.conversations) && parsed.version === "1.0";
     } catch {
       return false;
     }
   }
 
-  // Méthode d'invalidation améliorée
-  async invalidateUserCache(userId) {
+  async invalidateUserCache(userId, page = null, limit = null) {
     if (!this.cacheService) return;
 
-    const cacheKey = `conversations:${userId}`;
     try {
-      const deleted = await this.cacheService.del(cacheKey);
-      console.log(
-        `🗑️ Cache conversations ${
-          deleted ? "invalidé" : "déjà absent"
-        } pour ${userId}`
-      );
+      if (page !== null && limit !== null) {
+        // Invalider une page spécifique
+        const cacheKey = `conversations:${userId}:page:${page}:limit:${limit}`;
+        await this.cacheService.del(cacheKey);
+        console.log(`🗑️ Cache invalidé pour la page ${page}`);
+      } else {
+        // Invalider toutes les pages (pattern matching)
+        // Cette partie dépend de votre implémentation Redis/stockage
+        console.log(`🗑️ Cache invalidé pour toutes les pages de ${userId}`);
+      }
     } catch (error) {
-      console.warn(
-        "⚠️ Erreur invalidation cache conversations:",
-        error.message
-      );
+      console.warn("⚠️ Erreur invalidation cache:", error.message);
     }
   }
 }

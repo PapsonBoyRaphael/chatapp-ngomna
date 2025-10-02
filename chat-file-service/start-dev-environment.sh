@@ -109,7 +109,7 @@ else
     # Vérifier si MinIO est installé
     if command -v minio &> /dev/null; then
         # Démarrer MinIO en arrière-plan
-        nohup minio server "~/minio-data" --console-address ":9001" > /tmp/minio.log 2>&1 &
+        nohup minio server "/home/papson/minio-data" --console-address ":9001" > /tmp/minio.log 2>&1 &
         sleep 3
         if check_service minio 9000 "MinIO"; then
             MINIO_RUNNING=true

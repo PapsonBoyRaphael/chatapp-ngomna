@@ -52,7 +52,7 @@ function createConversationRoutes(conversationController) {
   // Routes des conversations avec gestion d'erreurs
   try {
     /**
-     * @api {get} /conversations Get User Conversations
+     * @api {get} /conversations?limit=20&cursor=2024-01-15T10:30:00.000Z Get User Conversations
      * @apiName GetConversations
      * @apiGroup Conversations
      */
@@ -62,6 +62,19 @@ function createConversationRoutes(conversationController) {
       rateLimitMiddleware.apiLimit,
       async (req, res) => {
         try {
+          // Récupérer les paramètres de pagination
+          const { limit, cursor, page } = req.query;
+
+          // Valider les paramètres
+          const paginationParams = {
+            limit: Math.min(parseInt(limit) || 20, 50), // Max 50 par requête
+            cursor: cursor || null,
+            page: parseInt(page) || 1,
+          };
+
+          // Ajouter les paramètres à la requête
+          req.pagination = paginationParams;
+
           await conversationController.getConversations(req, res);
         } catch (error) {
           console.error("❌ Erreur route GET /conversations:", error);

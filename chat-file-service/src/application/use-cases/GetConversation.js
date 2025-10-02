@@ -44,17 +44,17 @@ class GetConversation {
 
       // Enrichir avec métadonnées
       const [unreadCount, lastMessage, messageCount] = await Promise.all([
-        // this.messageRepository.getUnreadMessagesCount(conversationId, userId),
-        // this.messageRepository.getLastMessage(conversationId),
-        // this.messageRepository.getMessageCount(conversationId),
+        this.messageRepository.getUnreadCount(userId, conversationId),
+        this.messageRepository.getLastMessage(conversationId),
+        this.messageRepository.getMessageCount(conversationId),
       ]);
 
       const result = {
         ...conversation,
-        // unreadCount,
-        // lastMessage,
-        // messageCount,
-        // isActive: messageCount > 0,
+        unreadCount,
+        lastMessage,
+        messageCount,
+        isActive: messageCount > 0,
         retrievedAt: new Date().toISOString(),
       };
 

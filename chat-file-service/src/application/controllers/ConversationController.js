@@ -21,9 +21,11 @@ class ConversationController {
 
     try {
       const userId = req.user?.id || req.user?.userId || req.headers["user-id"];
-      const { page = 1, limit = 20, includeArchived = false } = req.query;
+      const { page = 1, limit = 1, includeArchived = false } = req.query;
 
-      console.log(`🔍 Récupération conversations pour utilisateur ${userId}`);
+      console.log(
+        `🔍 Récupération conversations page ${page} pour utilisateur ${userId}`
+      );
 
       if (!userId) {
         return res.status(400).json({
@@ -33,38 +35,35 @@ class ConversationController {
         });
       }
 
-      // ✅ APPELER LE USE CASE AVEC GESTION D'ERREURS
-      let result;
-      try {
-        result = await this.getConversationsUseCase.execute(userId, true);
-      } catch (useCaseError) {
-        console.error("❌ Erreur Use Case conversations:", useCaseError);
+      // Validation des paramètres
+      const pageNum = Math.max(1, parseInt(page));
+      const limitNum = Math.min(Math.max(1, parseInt(limit)), 50);
 
-        // ✅ FALLBACK AVEC DONNÉES VIDES MAIS STRUCTURE CORRECTE
-        result = {
-          conversations: [],
-          pagination: {
-            currentPage: parseInt(page),
-            totalPages: 0,
-            totalCount: 0,
-            hasNext: false,
-            hasPrevious: false,
-            limit: parseInt(limit),
-          },
-          fromCache: false,
-          processingTime: 0,
-        };
+      if (isNaN(pageNum) || isNaN(limitNum)) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Les paramètres 'page' et 'limit' doivent être des nombres valides",
+          code: "INVALID_PAGINATION_PARAMS",
+        });
       }
+
+      // ✅ APPEL DU USE CASE AVEC LES PARAMÈTRES DE PAGINATION
+      const result = await this.getConversationsUseCase.execute(userId, {
+        page: pageNum,
+        limit: limitNum,
+        includeArchived: includeArchived === "true",
+      });
 
       const processingTime = Date.now() - startTime;
 
-      // ✅ STRUCTURE DE RÉPONSE COMPATIBLE AVEC LE FRONTEND
+      // ✅ STRUCTURE DE RÉPONSE
       const response = {
         success: true,
-        message: "Conversations récupérées avec succès",
+        message: `Page ${pageNum} des conversations récupérée avec succès`,
         data: {
           conversations: result.conversations || [],
-          totalCount: result.pagination?.totalCount || 0,
+          totalCount: result.totalCount || 0,
           totalUnreadMessages: result.totalUnreadMessages || 0,
           unreadConversations: result.unreadConversations || 0,
           fromCache: result.fromCache || false,
@@ -75,22 +74,22 @@ class ConversationController {
           processingTime: processingTime,
           timestamp: new Date().toISOString(),
           pagination: result.pagination || {
-            currentPage: parseInt(page),
+            currentPage: pageNum,
             totalPages: 0,
             totalCount: 0,
             hasNext: false,
             hasPrevious: false,
-            limit: parseInt(limit),
+            limit: limitNum,
+            offset: (pageNum - 1) * limitNum,
           },
         },
       };
 
       console.log(
-        `✅ ${
+        `✅ Page ${pageNum}: ${
           result.conversations?.length || 0
-        } conversations retournées pour ${userId}`
+        } conversation(s) récupérée(s)`
       );
-
       res.json(response);
     } catch (error) {
       const processingTime = Date.now() - startTime;
@@ -111,7 +110,6 @@ class ConversationController {
       });
     }
   }
-
   // ✅ RÉCUPÉRER UNE CONVERSATION SPÉCIFIQUE
   async getConversation(req, res) {
     const startTime = Date.now();

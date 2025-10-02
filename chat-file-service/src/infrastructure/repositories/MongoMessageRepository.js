@@ -285,7 +285,7 @@ class MongoMessageRepository {
         throw new Error("receiverId et status sont requis");
       }
 
-      const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED"];
+      const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED", "DELETED"];
       if (!validStatuses.includes(status)) {
         throw new Error(
           `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`
@@ -319,10 +319,12 @@ class MongoMessageRepository {
           ...(status === "DELIVERED" && {
             "metadata.deliveryMetadata.deliveredAt": new Date().toISOString(),
             "metadata.deliveryMetadata.deliveredBy": receiverId,
+            receiveAt: new Date().toISOString(),
           }),
           ...(status === "READ" && {
             "metadata.deliveryMetadata.readAt": new Date().toISOString(),
             "metadata.deliveryMetadata.readBy": receiverId,
+            readAt: new Date().toISOString(),
           }),
         },
       });
@@ -1093,7 +1095,7 @@ class MongoMessageRepository {
       }
 
       // ✅ VALIDATION DU STATUT
-      const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED"];
+      const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED", "DELETED"];
       if (!validStatuses.includes(status)) {
         throw new Error(
           `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`
@@ -1329,6 +1331,17 @@ class MongoMessageRepository {
         `Impossible de mettre à jour le statut: ${error.message}`
       );
     }
+  }
+
+  // Ajouter ces méthodes manquantes
+  async getLastMessage(conversationId) {
+    return await Message.findOne({ conversationId })
+      .sort({ createdAt: -1 })
+      .lean();
+  }
+
+  async getMessageCount(conversationId) {
+    return await Message.countDocuments({ conversationId });
   }
 }
 
