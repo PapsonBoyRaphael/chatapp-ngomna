@@ -109,7 +109,25 @@ else
     # Vérifier si MinIO est installé
     if command -v minio &> /dev/null; then
         # Démarrer MinIO en arrière-plan
-        nohup minio server "/home/papson/minio-data" --console-address ":9001" > /tmp/minio.log 2>&1 &
+         # Définir le répertoire MinIO dans le home
+         MINIO_DATA_DIR="$HOME/minio-data"
+         echo "📁 Création du répertoire MinIO: $MINIO_DATA_DIR"
+    
+        # Créer le répertoire
+        mkdir -p $MINIO_DATA_DIR
+        chmod 755 $MINIO_DATA_DIR
+        
+        # Vérifier que le répertoire a été créé
+        if [ -d "$MINIO_DATA_DIR" ]; then
+            echo "✅ Répertoire MinIO créé: $MINIO_DATA_DIR"
+        else
+            echo "❌ Erreur: impossible de créer $MINIO_DATA_DIR"
+            exit 1
+        fi
+        
+        # Démarrer MinIO
+        echo "🚀 Démarrage de MinIO..."
+        nohup minio server $MINIO_DATA_DIR --console-address ":9001" > /tmp/minio.log 2>&1 &
         sleep 3
         if check_service minio 9000 "MinIO"; then
             MINIO_RUNNING=true
