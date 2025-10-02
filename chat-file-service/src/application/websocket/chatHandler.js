@@ -1357,6 +1357,8 @@ class ChatHandler {
       console.log(
         `👥 Utilisateur ${socket.matricule} a rejoint conversation ${conversationId}`
       );
+
+      handleMarkConversationRead(socket, { conversationId });
     } catch (error) {
       console.error("❌ Erreur handleJoinConversation:", error);
       socket.emit("conversation_error", {
