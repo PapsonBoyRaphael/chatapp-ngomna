@@ -356,6 +356,23 @@ class SendMessage {
       };
 
       console.log(`✅ Message traité avec succès: ${result.message.id}`);
+
+      // Après la sauvegarde du message, incrémenter les compteurs non-lus
+      const otherParticipants = conversation.participants.filter(
+        (p) => p !== messageData.senderId
+      );
+
+      // Incrémenter le compteur pour chaque participant sauf l'expéditeur
+      const updatePromises = otherParticipants.map((participantId) =>
+        this.conversationRepository.incrementUnreadCountInUserMetadata(
+          conversation._id || conversation.id,
+          participantId,
+          1
+        )
+      );
+
+      await Promise.all(updatePromises);
+
       return result;
     } catch (error) {
       console.error("❌ Erreur SendMessage use case:", error);

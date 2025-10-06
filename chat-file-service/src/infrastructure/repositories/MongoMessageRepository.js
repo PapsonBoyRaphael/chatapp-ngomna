@@ -315,16 +315,16 @@ class MongoMessageRepository {
         $set: {
           status: status,
           updatedAt: new Date(),
-          // ✅ AJOUTER LES MÉTADONNÉES DE LIVRAISON
+          // ✅ AJOUTER LES CHAMPS DE DATE
           ...(status === "DELIVERED" && {
             "metadata.deliveryMetadata.deliveredAt": new Date().toISOString(),
             "metadata.deliveryMetadata.deliveredBy": receiverId,
-            receiveAt: new Date().toISOString(),
+            receivedAt: new Date(), // Ajout du champ receivedAt
           }),
           ...(status === "READ" && {
             "metadata.deliveryMetadata.readAt": new Date().toISOString(),
             "metadata.deliveryMetadata.readBy": receiverId,
-            readAt: new Date().toISOString(),
+            readAt: new Date(), // Ajout du champ readAt
           }),
         },
       });

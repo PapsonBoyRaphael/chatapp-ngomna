@@ -111,7 +111,7 @@ const userMetadataSchema = new Schema(
     },
   },
   {
-    _id: true,
+    _id: false,
     timestamps: false,
   }
 );
@@ -193,12 +193,6 @@ const conversationSchema = new Schema(
 
     // ✅ MÉTADONNÉES UTILISATEUR
     userMetadata: [userMetadataSchema],
-
-    // ✅ COMPTEURS NON-LUS - OBJET PLAIN AU LIEU DE MAP
-    unreadCounts: {
-      type: Schema.Types.Mixed, // ✅ ACCEPTER TOUT TYPE D'OBJET
-      default: {},
-    },
 
     // ✅ DERNIER MESSAGE
     lastMessage: {

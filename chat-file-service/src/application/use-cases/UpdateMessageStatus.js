@@ -34,20 +34,15 @@ class UpdateMessageStatus {
 
       // Utiliser la méthode appropriée du repository
       let result;
-      if (messageIds && messageIds.length === 1) {
-        result = await this.messageRepository.updateSingleMessageStatus(
-          messageIds[0],
-          receiverId,
-          status
-        );
-      } else {
-        result = await this.messageRepository.updateMessageStatus(
-          conversationId,
-          receiverId,
-          status,
-          messageIds || []
-        );
-      }
+      // Éviter la double exécution
+      const updatePromise = this.messageRepository.updateMessageStatus(
+        conversationId,
+        receiverId,
+        status,
+        messageIds || []
+      );
+
+      result = await updatePromise;
 
       // Invalidation du cache via CacheService
       if (this.cacheService && result.modifiedCount > 0) {
@@ -97,23 +92,17 @@ class UpdateMessageStatus {
         }
       }
 
-      // Mettre à jour les statistiques de la conversation si nécessaire (inchangé)
-      if (
-        result.modifiedCount > 0 &&
-        status === "READ" &&
-        this.conversationRepository &&
-        typeof this.conversationRepository.updateUnreadCounts === "function"
-      ) {
+      // Si le statut est "READ", réinitialiser le compteur de messages non lus
+      if (status === "READ") {
         try {
-          await this.conversationRepository.updateUnreadCounts(
+          await this.conversationRepository.resetUnreadCountInUserMetadata(
             conversationId,
             receiverId
           );
-        } catch (convError) {
-          console.warn(
-            "⚠️ Erreur mise à jour unreadCounts conversation:",
-            convError.message
-          );
+          console.log(`✅ Compteur non-lus réinitialisé pour ${receiverId}`);
+        } catch (error) {
+          console.error(`❌ Erreur réinitialisation compteur:`, error);
+          // Ne pas faire échouer la mise à jour du statut si la réinitialisation échoue
         }
       }
 
@@ -158,6 +147,19 @@ class UpdateMessageStatus {
             "⚠️ Erreur invalidation cache message unique:",
             cacheError.message
           );
+        }
+      }
+
+      if (status === "READ") {
+        try {
+          await this.conversationRepository.resetUnreadCountInUserMetadata(
+            conversationId,
+            receiverId
+          );
+          console.log(`✅ Compteur non-lus réinitialisé pour ${receiverId}`);
+        } catch (error) {
+          console.error(`❌ Erreur réinitialisation compteur:`, error);
+          // Ne pas faire échouer la mise à jour du statut si la réinitialisation échoue
         }
       }
 

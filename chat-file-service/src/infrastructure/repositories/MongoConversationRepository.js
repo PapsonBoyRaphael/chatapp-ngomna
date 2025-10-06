@@ -1134,6 +1134,145 @@ class MongoConversationRepository {
       throw error;
     }
   }
+
+  async incrementUnreadCountInUserMetadata(conversationId, userId, amount = 1) {
+    try {
+      console.log(`📝 Incrément compteur non-lus userMetadata:`, {
+        conversationId,
+        userId,
+        amount,
+      });
+
+      // 1. Vérifier d'abord si l'entrée existe
+      const conversation = await Conversation.findOne({
+        _id: conversationId,
+        "userMetadata.userId": userId,
+      }).select("userMetadata.$");
+
+      if (conversation) {
+        // 2. Si existe, incrémenter le compteur
+        const updateResult = await Conversation.findOneAndUpdate(
+          {
+            _id: conversationId,
+            "userMetadata.userId": userId,
+          },
+          {
+            $inc: { "userMetadata.$.unreadCount": amount },
+            $set: {
+              updatedAt: new Date(),
+              "userMetadata.$.lastActivity": new Date(),
+            },
+          },
+          {
+            new: true,
+            runValidators: true,
+          }
+        );
+
+        console.log(`✅ Compteur incrémenté pour utilisateur existant:`, {
+          userId,
+          newCount: updateResult?.userMetadata?.find((m) => m.userId === userId)
+            ?.unreadCount,
+        });
+
+        return updateResult;
+      } else {
+        // 3. Si n'existe pas, ajouter une nouvelle entrée
+        const updateResult = await Conversation.findByIdAndUpdate(
+          conversationId,
+          {
+            $push: {
+              userMetadata: {
+                userId,
+                unreadCount: amount,
+                lastReadAt: null,
+                lastActivity: new Date(),
+                isMuted: false,
+                isPinned: false,
+                notificationSettings: {
+                  enabled: true,
+                  sound: true,
+                  vibration: true,
+                },
+              },
+            },
+            $set: { updatedAt: new Date() },
+          },
+          {
+            new: true,
+            runValidators: true,
+          }
+        );
+
+        console.log(`✅ Nouvelle entrée userMetadata créée:`, {
+          userId,
+          initialCount: amount,
+        });
+
+        return updateResult;
+      }
+    } catch (error) {
+      console.error(`❌ Erreur incrément userMetadata:`, {
+        error: error.message,
+        conversationId,
+        userId,
+      });
+      throw error;
+    }
+  }
+
+  async resetUnreadCountInUserMetadata(conversationId, userId) {
+    try {
+      console.log(`🔄 Réinitialisation compteur non-lus userMetadata:`, {
+        conversationId,
+        userId,
+      });
+
+      const updateResult = await Conversation.findOneAndUpdate(
+        {
+          _id: conversationId,
+          "userMetadata.userId": userId,
+        },
+        {
+          $set: {
+            updatedAt: new Date(),
+            "userMetadata.$.unreadCount": 0,
+            "userMetadata.$.lastActivity": new Date(),
+            "userMetadata.$.lastReadAt": new Date(),
+          },
+        },
+        {
+          new: true,
+          runValidators: true,
+        }
+      );
+
+      if (updateResult) {
+        console.log(`✅ Compteur réinitialisé pour l'utilisateur:`, {
+          userId,
+          conversationId,
+        });
+
+        // Invalider les caches Redis associés
+        if (this.cacheService) {
+          try {
+            await this._invalidateConversationCaches(conversationId);
+          } catch (cacheError) {
+            console.warn("⚠️ Erreur invalidation cache:", cacheError.message);
+          }
+        }
+      }
+
+      return updateResult;
+    } catch (error) {
+      console.error(`❌ Erreur réinitialisation userMetadata:`, {
+        error: error.message,
+        conversationId,
+        userId,
+      });
+      throw error;
+    }
+  }
 }
 
 module.exports = MongoConversationRepository;
