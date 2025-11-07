@@ -17,7 +17,7 @@ class UploadFile {
         throw new Error("Données de fichier incomplètes");
       }
 
-      // ✅ CRÉER UNE INSTANCE DE L'ENTITÉ FILE
+      // ✅ CRÉER UNE INSTANCE DE L'ENTITÉ FILE AVEC LES MÉTADONNÉES
       const fileEntity = new File({
         originalName: fileData.originalName,
         fileName: fileData.fileName,
@@ -27,8 +27,17 @@ class UploadFile {
         url: fileData.url,
         uploadedBy: fileData.uploadedBy,
         conversationId: fileData.conversationId,
-        status: "COMPLETED", // ✅ MARQUER COMME COMPLÉTÉ DIRECTEMENT
-        uploadedAt: new Date(),
+        status: "COMPLETED",
+        metadata: {
+          technical: fileData.metadata?.technical,
+          content: fileData.metadata?.content,
+          processing: fileData.metadata?.processing,
+          kafkaMetadata: fileData.metadata?.kafkaMetadata,
+          redisMetadata: fileData.metadata?.redisMetadata,
+          security: fileData.metadata?.security,
+          storage: fileData.metadata?.storage,
+          usage: fileData.metadata?.usage,
+        },
       });
 
       // ✅ SAUVEGARDER VIA LE REPOSITORY

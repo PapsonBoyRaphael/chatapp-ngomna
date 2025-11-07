@@ -1,85 +1,161 @@
+/**
+ * CacheService - Service de cache Redis optimisé pour 500k+ users
+ * Gère UNIQUEMENT le cache stratégique (pas les messages individuels)
+ */
 class CacheService {
-  constructor(redisClient, defaultTTL = 3600) {
+  constructor(redisClient, options = {}) {
     this.redis = redisClient;
-    this.defaultTTL = defaultTTL;
+    this.options = {
+      defaultTTL: options.defaultTTL || 3600,
+      keyPrefix: options.keyPrefix || "chat",
+      maxScanCount: options.maxScanCount || 100,
+      ...options,
+    };
   }
 
+  // ✅ CACHE BASIQUE
   async get(key) {
-    if (!this.redis) return null;
     try {
-      const value = await this.redis.get(key);
+      const cacheKey = `${this.options.keyPrefix}:${this.sanitizeKey(key)}`;
+      const value = await this.redis.get(cacheKey);
       return value ? JSON.parse(value) : null;
     } catch (err) {
-      console.warn("⚠️ Erreur lecture cache:", err.message);
+      console.warn("⚠️ Cache get error:", err.message);
       return null;
     }
   }
 
-  async set(key, value, ttl = this.defaultTTL) {
-    if (!this.redis) return false;
+  async set(key, value, ttl = this.options.defaultTTL) {
     try {
+      const cacheKey = `${this.options.keyPrefix}:${this.sanitizeKey(key)}`;
       const data = JSON.stringify(value);
-      if (typeof this.redis.setex === "function") {
-        await this.redis.setex(key, ttl, data);
-      } else if (typeof this.redis.set === "function") {
-        await this.redis.set(key, data, "EX", ttl);
-      } else {
-        console.warn("⚠️ Méthode set/setex non supportée");
-        return false;
-      }
+      await this.redis.setEx(cacheKey, ttl, data);
       return true;
     } catch (err) {
-      console.warn("⚠️ Erreur écriture cache:", err.message);
+      console.warn("⚠️ Cache set error:", err.message);
       return false;
     }
   }
 
-  async del(keyOrPattern) {
-    if (!this.redis) return 0;
+  async delete(keyOrPattern) {
     try {
-      if (keyOrPattern.includes("*") && typeof this.redis.keys === "function") {
-        const keys = await this.redis.keys(keyOrPattern);
-        if (keys.length > 0) {
-          await this.redis.del(...keys);
-          return keys.length;
-        }
-        return 0;
+      if (keyOrPattern.includes("*")) {
+        return await this._deleteByPattern(keyOrPattern);
       } else {
-        return await this.redis.del(keyOrPattern);
+        const cacheKey = `${this.options.keyPrefix}:${this.sanitizeKey(
+          keyOrPattern
+        )}`;
+        return await this.redis.del(cacheKey);
       }
     } catch (err) {
-      console.warn("⚠️ Erreur suppression cache:", err.message);
+      console.warn("⚠️ Cache delete error:", err.message);
       return 0;
     }
   }
 
-  // ✅ Ajout de la méthode keys pour compatibilité avec les repositories
-  async keys(pattern) {
-    if (!this.redis || typeof this.redis.keys !== "function") {
-      throw new Error("Redis ne supporte pas la méthode keys");
+  async _deleteByPattern(pattern) {
+    let deletedCount = 0;
+    let cursor = 0;
+
+    try {
+      do {
+        const result = await this.redis.scan(cursor, {
+          MATCH: `${this.options.keyPrefix}:${pattern}`,
+          COUNT: this.options.maxScanCount,
+        });
+
+        cursor = result.cursor;
+        if (result.keys.length > 0) {
+          const count = await this.redis.del(result.keys);
+          deletedCount += count;
+        }
+      } while (cursor !== 0);
+
+      return deletedCount;
+    } catch (err) {
+      console.warn("⚠️ Cache deleteByPattern error:", err.message);
+      return deletedCount;
     }
-    return await this.redis.keys(pattern);
   }
 
-  async clearConversationCache(conversationId) {
-    if (!this.redis) return;
+  // Cache des derniers messages d'une room
+  async cacheLastMessages(roomId, messages, ttl = 3600) {
+    try {
+      const key = `last_messages:${roomId}`;
+      const data = {
+        messages: messages.slice(0, 50), // Limiter aux 50 derniers messages
+        cachedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      return await this.set(key, data, ttl);
+    } catch (err) {
+      console.warn("⚠️ Cache lastMessages error:", err.message);
+      return false;
+    }
+  }
 
-    const patterns = [
-      `messages:${conversationId}:*`,
-      `conversation:${conversationId}:*`,
-      `conversations:*`,
-    ];
+  // Récupérer les derniers messages cachés d'une room
+  async getCachedLastMessages(roomId) {
+    try {
+      const key = `last_messages:${roomId}`;
+      const cached = await this.get(key);
 
-    for (const pattern of patterns) {
-      try {
-        const keys = await this.redis.keys(pattern);
-        if (keys.length > 0) {
-          await this.redis.del(keys);
-          console.log(`🗑️ Cache nettoyé pour ${pattern}: ${keys.length} clés`);
+      if (cached) {
+        try {
+          // Vérifier que les données sont valides
+          if (cached.messages && Array.isArray(cached.messages)) {
+            return cached;
+          } else {
+            // Données invalides -> nettoyer et retourner null
+            await this.delete(key);
+            return null;
+          }
+        } catch (parseError) {
+          console.warn(`⚠️ Cache parse error for ${key}:`, parseError.message);
+          await this.delete(key); // Nettoyer les données corrompues
+          return null;
         }
-      } catch (err) {
-        console.warn(`⚠️ Erreur nettoyage cache ${pattern}:`, err.message);
       }
+      return null;
+    } catch (err) {
+      console.warn("⚠️ GetCachedLastMessages error:", err.message);
+      return null;
+    }
+  }
+
+  // Invalider le cache des messages d'une room
+  async invalidateRoomMessages(roomId) {
+    try {
+      const pattern = `last_messages:${roomId}*`;
+      const count = await this.delete(pattern);
+      console.log(`🗑️ Invalidated ${count} cache entries for room ${roomId}`);
+      return count;
+    } catch (err) {
+      console.warn("⚠️ InvalidateRoomMessages error:", err.message);
+      return 0;
+    }
+  }
+
+  // ✅ UTILITAIRES
+  sanitizeKey(key) {
+    if (!key || key === "null" || key === "undefined") return null;
+    return String(key).trim();
+  }
+
+  // ✅ STATISTIQUES
+  async getStats() {
+    try {
+      const info = await this.redis.info("memory");
+      return {
+        memoryUsage:
+          info
+            .split("\n")
+            .find((line) => line.startsWith("used_memory_human"))
+            ?.split(":")[1] || "unknown",
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      return { error: error.message };
     }
   }
 }

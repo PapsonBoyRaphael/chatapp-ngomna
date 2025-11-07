@@ -17,7 +17,7 @@ class GetMessages {
       let cachedMessages = null;
       if (this.cacheService) {
         try {
-          const cacheKey = `messages:${conversationId}:${page}:${limit}`;
+          const cacheKey = `last_message:${conversationId}:${page}:${limit}`;
           cachedMessages = await this.cacheService.get(cacheKey);
           if (cachedMessages) {
             console.log(

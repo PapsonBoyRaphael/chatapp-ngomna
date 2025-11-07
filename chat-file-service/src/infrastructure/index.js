@@ -21,6 +21,7 @@ const MongoFileRepository = require("./repositories/MongoFileRepository");
 const MessageModel = require("./mongodb/models/MessageModel");
 const ConversationModel = require("./mongodb/models/ConversationModel");
 const FileModel = require("./mongodb/models/FileModel");
+const UserPresenceManager = require("./redis/UserPresenceManager");
 
 module.exports = {
   // Connexions
@@ -29,8 +30,7 @@ module.exports = {
   kafkaConfig,
 
   // Gestionnaires
-  OnlineUserManager,
-  RoomManager,
+  UserPresenceManager,
 
   // Kafka
   MessageProducer,

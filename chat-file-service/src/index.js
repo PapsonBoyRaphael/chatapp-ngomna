@@ -24,10 +24,12 @@ const kafkaConfig = require("./infrastructure/kafka/config/kafkaConfig");
 
 const ThumbnailService = require("./infrastructure/services/ThumbnailService");
 const FileStorageService = require("./infrastructure/services/FileStorageService");
+const MediaProcessingService = require("./infrastructure/services/MediaProcessingService");
 
 // Gestionnaires Redis optionnels
-const OnlineUserManager = require("./infrastructure/redis/OnlineUserManager");
+const CacheService = require("./infrastructure/redis/CacheService");
 const RoomManager = require("./infrastructure/redis/RoomManager");
+const OnlineUserManager = require("./infrastructure/redis/OnlineUserManager");
 
 // Use Cases
 const SendMessage = require("./application/use-cases/SendMessage");
@@ -43,6 +45,7 @@ const UpdateMessageContent = require("./application/use-cases/UpdateMessageConte
 const DownloadFile = require("./application/use-cases/DownloadFile");
 const CreateGroup = require("./application/use-cases/CreateGroup");
 const CreateBroadcast = require("./application/use-cases/CreateBroadcast");
+const searchOccurrences = require("./application/use-cases/SearchOccurrences");
 
 // Controllers
 const FileController = require("./application/controllers/FileController");
@@ -150,6 +153,7 @@ const startServer = async () => {
     let redisStatus = "disconnected";
     let onlineUserManager = null;
     let roomManager = null;
+    let cacheServiceInstance = null; // Nouveau nom pour éviter la confusion
 
     try {
       const redisConnected = await redisConfig.connect();
@@ -157,13 +161,21 @@ const startServer = async () => {
         redisClient = redisConfig.getClient();
         redisStatus = "connected";
 
-        onlineUserManager = new OnlineUserManager(redisClient);
-        roomManager = new RoomManager(redisClient);
+        // Initialiser CacheService en premier
+        cacheServiceInstance = new CacheService(redisClient, {
+          defaultTTL: 3600,
+          keyPrefix: "chat",
+          maxScanCount: 1000,
+        });
 
-        console.log("✅ Redis connecté avec gestionnaires");
+        // Puis initialiser RoomManager
+        roomManager = new RoomManager(redisClient);
+        app.locals.roomManager = roomManager;
+
+        console.log("✅ Services Redis initialisés avec succès");
       }
     } catch (error) {
-      console.log("⚠️ Redis non disponible, mode développement activé");
+      console.warn("⚠️ Redis non disponible:", error.message);
     }
 
     // ✅ INITIALISER KAFKA UNE SEULE FOIS
@@ -186,7 +198,6 @@ const startServer = async () => {
 
     app.locals.redisClient = redisClient;
     app.locals.onlineUserManager = onlineUserManager;
-    app.locals.roomManager = roomManager;
 
     if (rateLimitMiddleware && rateLimitMiddleware.apiLimit) {
       app.use(rateLimitMiddleware.apiLimit);
@@ -204,9 +215,6 @@ const startServer = async () => {
         credentials: true,
       },
       transports: ["websocket", "polling"],
-      allowEIO3: true,
-      pingTimeout: 60000,
-      pingInterval: 25000,
     });
 
     if (redisClient) {
@@ -217,11 +225,19 @@ const startServer = async () => {
             redisConfig.createSubClient()
           )
         );
-        console.log("✅ Redis adapter configuré");
+        console.log("✅ Redis adapter Socket.IO configuré");
       } catch (error) {
-        console.warn("⚠️ Erreur configuration Redis adapter:", error.message);
+        console.warn("⚠️ Erreur config Redis adapter:", error.message);
       }
     }
+
+    // Initialiser OnlineUserManager avec config optimisée
+    onlineUserManager = new OnlineUserManager(redisClient, io, {
+      keyPrefix: "chat:online",
+      userTTL: 3600,
+      heartbeatInterval: 30000,
+      maxScanCount: 1000,
+    });
 
     // ===============================
     // 5. DÉMARRER LE CONSUMER UNE SEULE FOIS
@@ -264,6 +280,9 @@ const startServer = async () => {
       },
     });
 
+    // ✅ INITIALISER LE SERVICE DE TRAITEMENT MULTIMÉDIA
+    const mediaProcessingService = new MediaProcessingService();
+
     // ✅ INITIALISER LE SERVICE DE THUMBNAILS
     const thumbnailService = new ThumbnailService(fileStorageService);
 
@@ -273,22 +292,20 @@ const startServer = async () => {
     // 6. INITIALISATION REPOSITORIES
     // ===============================
     // ✅ CORRIGER L'INJECTION DES SERVICES
-    const CacheService = require("./infrastructure/redis/CacheService");
-    const cacheService = new CacheService(redisClient, 3600);
 
     const messageRepository = new MongoMessageRepository(
-      cacheService,
+      cacheServiceInstance,
       kafkaProducers?.messageProducer || null
     );
     const conversationRepository = new MongoConversationRepository(
-      cacheService,
+      cacheServiceInstance,
       kafkaProducers?.messageProducer || null
     );
     const fileRepository = new MongoFileRepository(
       redisClient,
       kafkaProducers?.fileProducer || null,
       thumbnailService,
-      cacheService // Ajouté
+      cacheServiceInstance
     );
 
     // ✅ LOG POUR VÉRIFIER LES OBJETS REDIS
@@ -311,34 +328,37 @@ const startServer = async () => {
       messageRepository,
       conversationRepository,
       kafkaProducers?.messageProducer || null,
-      cacheService
+      cacheServiceInstance
     );
 
-    const getMessagesUseCase = new GetMessages(messageRepository, cacheService);
+    const getMessagesUseCase = new GetMessages(
+      messageRepository,
+      cacheServiceInstance
+    );
 
     const getConversationUseCase = new GetConversation(
       conversationRepository,
       messageRepository,
-      cacheService
+      cacheServiceInstance
     );
 
     const getConversationsUseCase = new GetConversations(
       conversationRepository,
       messageRepository,
-      cacheService
+      cacheServiceInstance
     );
 
     const updateMessageStatusUseCase = new UpdateMessageStatus(
       messageRepository,
       conversationRepository,
       kafkaProducers?.messageProducer || null,
-      cacheService
+      cacheServiceInstance
     );
 
     const updateMessageContentUseCase = new UpdateMessageContent(
       messageRepository,
       kafkaProducers?.messageProducer || null,
-      cacheService
+      cacheServiceInstance
     );
 
     const uploadFileUseCase = new UploadFile(
@@ -346,7 +366,7 @@ const startServer = async () => {
       kafkaProducers?.fileProducer || null
     );
 
-    const getFileUseCase = new GetFile(fileRepository, cacheService);
+    const getFileUseCase = new GetFile(fileRepository, cacheServiceInstance);
 
     const getConversationIdsUseCase = new GetConversationIds(
       conversationRepository
@@ -357,7 +377,7 @@ const startServer = async () => {
     const downloadFileUseCase = new DownloadFile(
       fileRepository,
       fileStorageService,
-      cacheService
+      cacheServiceInstance
     );
 
     const createGroupUseCase = new CreateGroup(
@@ -369,6 +389,29 @@ const startServer = async () => {
       kafkaProducers?.messageProducer || null
     );
 
+    // === INITIALISATION DES USE-CASES DE MARQUAGE (DELIVERED / READ)
+    const MarkMessageDelivered = require("./application/use-cases/MarkMessageDelivered");
+    const MarkMessageRead = require("./application/use-cases/MarkMessageRead");
+
+    const markMessageDeliveredUseCase = new MarkMessageDelivered(
+      messageRepository,
+      conversationRepository,
+      kafkaProducers?.messageProducer || null,
+      cacheServiceInstance
+    );
+
+    const markMessageReadUseCase = new MarkMessageRead(
+      messageRepository,
+      conversationRepository,
+      kafkaProducers?.messageProducer || null,
+      cacheServiceInstance
+    );
+
+    // Rendre disponibles globalement (injection simple pour controllers / handlers)
+    app.locals.useCases = app.locals.useCases || {};
+    app.locals.useCases.markMessageDelivered = markMessageDeliveredUseCase;
+    app.locals.useCases.markMessageRead = markMessageReadUseCase;
+
     // ===============================
     // 8. INITIALISATION CONTROLLERS
     // ===============================
@@ -378,7 +421,8 @@ const startServer = async () => {
       redisClient,
       kafkaProducers?.fileProducer || null,
       fileStorageService,
-      downloadFileUseCase // <-- AJOUTE CET ARGUMENT
+      downloadFileUseCase,
+      mediaProcessingService
     );
 
     const messageController = new MessageController(
@@ -427,7 +471,6 @@ const startServer = async () => {
       kafkaProducers?.messageProducer || null,
       redisClient,
       onlineUserManager,
-      roomManager,
       getConversationIdsUseCase,
       getConversationUseCase,
       getConversationsUseCase,
@@ -436,6 +479,11 @@ const startServer = async () => {
       createGroupUseCase,
       createBroadcastUseCase
     );
+
+    // Injecter roomManager dans le chatHandler si présent
+    if (roomManager) {
+      chatHandler.roomManager = roomManager;
+    }
 
     // Gestionnaire d'utilisateurs Kafka
     const UserConsumerManager = require("./infrastructure/kafka/consumers/UserConsumerManager");
@@ -983,10 +1031,10 @@ const gracefulShutdown = async (signal) => {
     }
 
     // Fermer Redis
-    if (redisConfig && redisConfig.disconnect) {
-      console.log("🔌 Fermeture Redis...");
-      await redisConfig.disconnect();
-    }
+    // if (redisConfig && redisConfig.disconnect) {
+    //   console.log("🔌 Fermeture Redis...");
+    //   await redisConfig.disconnect();
+    // }
 
     console.log("✅ Arrêt propre terminé");
     process.exit(0);

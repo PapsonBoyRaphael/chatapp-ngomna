@@ -2,8 +2,8 @@ class RoomManager {
   constructor(redis) {
     this.redis = redis;
     this.roomPrefix = "rooms";
-    this.roomUsersPrefix = "room_users";
-    this.userRoomsPrefix = "user_rooms";
+    this.roomUsersPrefix = "room_users"; 
+    this.userRoomsPrefix = "user_rooms"; 
     this.roomDataPrefix = "room_data";
   }
 

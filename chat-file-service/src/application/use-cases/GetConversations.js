@@ -73,18 +73,12 @@ class GetConversations {
           try {
             const userMetadata = conversation.userMetadata?.find(
               (meta) => meta.userId === userId
-            ) || {
-              userId: userId,
-              unreadCount: 0,
-              lastReadAt: null,
-              isMuted: false,
-              isPinned: false,
-            };
+            );
 
             const unreadCount =
-              conversation.unreadCounts?.[userId] ||
-              userMetadata.unreadCount ||
-              0;
+              userMetadata && typeof userMetadata.unreadCount === "number"
+                ? userMetadata.unreadCount
+                : conversation.unreadCounts?.[userId] || 0;
 
             let lastMessage = conversation.lastMessage;
             if (!lastMessage && this.messageRepository.getLastMessage) {

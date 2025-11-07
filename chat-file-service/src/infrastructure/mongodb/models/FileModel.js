@@ -225,7 +225,7 @@ const fileSchema = new mongoose.Schema(
       storage: {
         provider: {
           type: String,
-          enum: ["local", "s3", "gcs", "azure"],
+          enum: ["local", "s3", "gcs", "azure", "sftp"],
           default: "local",
         },
         bucket: String,

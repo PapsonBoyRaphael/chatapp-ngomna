@@ -13,14 +13,13 @@ class ChatHandler {
     messageProducer = null,
     redisClient = null,
     onlineUserManager = null,
-    roomManager = null,
     getConversationIdsUseCase = null,
     getConversationUseCase = null,
     getConversationsUseCase = null,
     getMessageByIdUseCase = null,
     updateMessageContentUseCase = null,
-    createGroupUseCase = null, // <-- Ajouté
-    createBroadcastUseCase = null // <-- Ajouté
+    createGroupUseCase = null,
+    createBroadcastUseCase = null
   ) {
     this.io = io;
     this.sendMessageUseCase = sendMessageUseCase;
@@ -29,29 +28,17 @@ class ChatHandler {
     this.messageProducer = messageProducer;
     this.redisClient = redisClient;
     this.onlineUserManager = onlineUserManager;
-    this.roomManager = roomManager;
     this.getConversationIdsUseCase = getConversationIdsUseCase;
     this.getConversationUseCase = getConversationUseCase;
     this.getConversationsUseCase = getConversationsUseCase;
     this.getMessageByIdUseCase = getMessageByIdUseCase;
     this.updateMessageContentUseCase = updateMessageContentUseCase;
-    this.createGroupUseCase = createGroupUseCase; // <-- Ajouté
-    this.createBroadcastUseCase = createBroadcastUseCase; // <-- Ajouté
+    this.createGroupUseCase = createGroupUseCase;
+    this.createBroadcastUseCase = createBroadcastUseCase;
     this.userConsumerManager = null;
 
-    // Collections pour gérer les connexions
-    this.connectedUsers = new Map();
-    this.userSockets = new Map();
-
-    console.log("🔌 ChatHandler initialisé avec:", {
-      hasIO: !!io,
-      hasSendMessage: !!sendMessageUseCase,
-      hasUpdateMessageStatus: !!updateMessageStatusUseCase, // ✅ NOUVEAU
-      hasMessageProducer: !!messageProducer,
-      hasRedis: !!redisClient,
-      hasUserManager: !!onlineUserManager,
-      hasRoomManager: !!roomManager,
-    });
+    // ✅ SUPPRESSION des collections locales
+    // this.connectedUsers et this.userSockets sont supprimés
   }
 
   // ✅ MÉTHODE SETUPSOCKETHANDLERS CORRIGÉE
@@ -61,6 +48,13 @@ class ChatHandler {
 
       this.io.on("connection", (socket) => {
         console.log(`🔗 Nouvelle connexion WebSocket: ${socket.id}`);
+
+        // ✅ ÉVÉNEMENT DE BATTEMENT DE CŒUR
+        socket.on("heartbeat", () => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId);
+          }
+        });
 
         // ✅ ÉVÉNEMENTS D'AUTHENTIFICATION
         socket.on("authenticate", (data) => {
@@ -178,192 +172,46 @@ class ChatHandler {
     }
   }
 
-  // ✅ MÉTHODE DE DÉCONNEXION CORRIGÉE - GESTION SÉCURISÉE DU ROOMANAGER
-  handleDisconnection(socket, reason = "unknown") {
+  // ✅ MÉTHODE DE DÉCONNEXION OPTIMISÉE
+  async handleDisconnection(socket, reason = "unknown") {
     const userId = socket.userId;
     const matricule = socket.matricule;
-    const socketId = socket.id;
-
-    console.log(`🔌 Déconnexion utilisateur:`, {
-      socketId: socketId,
-      userId: userId,
-      matricule: matricule,
-      reason: reason,
-      wasAuthenticated: !!userId,
-    });
 
     try {
-      // ✅ NETTOYAGE DES COLLECTIONS LOCALES
-      if (userId) {
-        // Supprimer de la collection des utilisateurs connectés
-        const userData = this.connectedUsers.get(userId);
-        if (userData) {
-          console.log(
-            `👤 Suppression utilisateur connecté: ${matricule} (${userId})`
-          );
-          this.connectedUsers.delete(userId);
-        }
+      if (userId && this.onlineUserManager) {
+        // Déconnexion via Redis
+        await this.onlineUserManager.setUserOffline(userId);
 
-        // ✅ NETTOYAGE REDIS AVEC GESTION D'ERREURS
-        if (this.onlineUserManager) {
-          this.onlineUserManager
-            .setUserOffline(userId)
-            .then(() => {
-              console.log(
-                `✅ Utilisateur ${matricule} marqué hors ligne dans Redis`
-              );
-            })
-            .catch((error) => {
-              console.warn(
-                `⚠️ Erreur nettoyage Redis pour ${userId}:`,
-                error.message
-              );
-            });
-        }
-
-        // ✅ PUBLIER ÉVÉNEMENT KAFKA SEULEMENT SI MESSAGEPRODUCER DISPONIBLE
-        if (
-          this.messageProducer &&
-          typeof this.messageProducer.publishMessage === "function"
-        ) {
-          const disconnectEvent = {
+        // Notification Kafka si disponible
+        if (this.messageProducer?.publishMessage) {
+          await this.messageProducer.publishMessage({
             eventType: "USER_DISCONNECTED",
-            userId: userId,
-            matricule: matricule,
-            socketId: socketId,
-            reason: reason,
+            userId,
+            matricule,
+            socketId: socket.id,
+            reason,
             timestamp: new Date().toISOString(),
-            source: "chat-handler",
-          };
-
-          this.messageProducer
-            .publishMessage(disconnectEvent)
-            .then(() => {
-              console.log(`✅ Événement déconnexion publié pour ${matricule}`);
-            })
-            .catch((error) => {
-              console.warn(
-                `⚠️ Erreur publication événement déconnexion:`,
-                error.message
-              );
-            });
+          });
         }
 
-        // ✅ NOTIFIER LES AUTRES UTILISATEURS
+        // Notification broadcast
         socket.broadcast.emit("user_disconnected", {
-          userId: userId,
-          matricule: matricule,
+          userId,
+          matricule,
           timestamp: new Date().toISOString(),
-          reason: reason,
+          reason,
         });
 
-        console.log(
-          `👋 Utilisateur ${matricule} (${userId}) déconnecté et nettoyé`
-        );
-      } else {
-        console.log(`🔌 Socket ${socketId} déconnecté sans authentification`);
-      }
-
-      // ✅ NETTOYAGE FINAL DE LA SOCKET
-      this.userSockets.delete(socketId);
-
-      // ✅ NETTOYAGE DES SALLES - AVEC VÉRIFICATION DE LA MÉTHODE
-      if (this.roomManager && userId) {
-        // ✅ VÉRIFIER QUE LA MÉTHODE EXISTE AVANT DE L'APPELER
-        if (typeof this.roomManager.removeUserFromAllRooms === "function") {
-          this.roomManager.removeUserFromAllRooms(userId).catch((error) => {
-            console.warn(
-              `⚠️ Erreur nettoyage salles pour ${userId}:`,
-              error.message
-            );
-          });
-        } else if (typeof this.roomManager.getUserRooms === "function") {
-          // ✅ FALLBACK: NETTOYER MANUELLEMENT LES ROOMS
-          this.cleanupUserRoomsManually(userId).catch((error) => {
-            console.warn(
-              `⚠️ Erreur nettoyage manuel salles pour ${userId}:`,
-              error.message
-            );
-          });
-        } else {
-          console.warn(
-            `⚠️ RoomManager disponible mais méthodes de nettoyage manquantes pour ${userId}`
-          );
+        // Nettoyage consumer Kafka
+        if (this.userConsumerManager) {
+          await this.userConsumerManager.removeUserConsumer(userId);
         }
-      }
 
-      // Supprimer le consumer utilisateur si présent
-      if (this.userConsumerManager && userId) {
-        this.userConsumerManager.removeUserConsumer(userId);
+        console.log(`👋 Utilisateur ${matricule} (${userId}) déconnecté`);
       }
     } catch (error) {
-      console.error(`❌ Erreur lors de la déconnexion de ${socketId}:`, error);
+      console.error("❌ Erreur déconnexion:", error);
     }
-  }
-
-  // ✅ MÉTHODE DE NETTOYAGE MANUEL DES ROOMS (FALLBACK)
-  async cleanupUserRoomsManually(userId) {
-    if (!this.roomManager) return;
-
-    try {
-      // Si getUserRooms existe, l'utiliser
-      if (typeof this.roomManager.getUserRooms === "function") {
-        const userRooms = await this.roomManager.getUserRooms(userId);
-
-        if (userRooms && userRooms.length > 0) {
-          console.log(
-            `🏠 Nettoyage manuel: ${userRooms.length} room(s) pour utilisateur ${userId}`
-          );
-
-          for (const roomName of userRooms) {
-            if (typeof this.roomManager.removeUserFromRoom === "function") {
-              try {
-                await this.roomManager.removeUserFromRoom(roomName, userId);
-              } catch (error) {
-                console.warn(
-                  `⚠️ Erreur suppression room ${roomName}:`,
-                  error.message
-                );
-              }
-            }
-          }
-        }
-      } else {
-        console.warn(
-          `⚠️ Méthode getUserRooms non disponible pour nettoyage ${userId}`
-        );
-      }
-    } catch (error) {
-      console.error(`❌ Erreur nettoyage manuel rooms pour ${userId}:`, error);
-    }
-  }
-
-  // ✅ MÉTHODE DE DIAGNOSTIC DU ROOMANAGER
-  diagnoseRoomManager() {
-    if (!this.roomManager) {
-      console.log("🔍 RoomManager: Non initialisé");
-      return false;
-    }
-
-    const methods = [
-      "removeUserFromAllRooms",
-      "removeUserFromRoom",
-      "getUserRooms",
-      "getRooms",
-      "getRoomsCount",
-    ];
-
-    const availableMethods = methods.filter(
-      (method) => typeof this.roomManager[method] === "function"
-    );
-
-    console.log("🔍 RoomManager diagnostic:", {
-      isInitialized: !!this.roomManager,
-      availableMethods: availableMethods,
-      missingMethods: methods.filter((m) => !availableMethods.includes(m)),
-    });
-
-    return availableMethods.length > 0;
   }
 
   // ✅ MÉTHODE D'AUTHENTIFICATION CORRIGÉE
@@ -426,7 +274,6 @@ class ChatHandler {
       socket.nom = userPayload.nom || "";
       socket.prenom = userPayload.prenom || "";
       socket.ministere = userPayload.ministere || "";
-      socket.userToken = data.token || null;
       socket.isAuthenticated = true;
 
       // ✅ DONNÉES UTILISATEUR POUR LES COLLECTIONS
@@ -434,20 +281,13 @@ class ChatHandler {
       const matriculeString = socket.matricule;
 
       const userData = {
-        // socketId: socket.id,
-        socketId: socket.matriculeString,
+        socketId: socket.id,
+        // socketId: socket.matriculeString,
         matricule: matriculeString,
         connectedAt: new Date(),
         lastActivity: new Date(),
         token: data.token,
       };
-
-      // ✅ AJOUTER AUX COLLECTIONS LOCALES
-      this.connectedUsers.set(userIdString, userData);
-      this.userSockets.set(socket.id, {
-        userId: matriculeString,
-        matricule: matriculeString,
-      });
 
       // ✅ REJOINDRE UNE SALLE UTILISATEUR
       socket.join(`user_${userIdString}`);
@@ -460,11 +300,43 @@ class ChatHandler {
           );
           if (Array.isArray(conversationIds)) {
             for (const convId of conversationIds) {
+              // 1. D'abord rejoindre la room
               const roomName = `conversation_${convId}`;
               socket.join(roomName);
               console.log(
                 `👥 Utilisateur ${userIdString} rejoint room ${roomName}`
               );
+
+              // 2. Puis marquer les messages comme DELIVERED
+              if (this.updateMessageStatusUseCase) {
+                try {
+                  const result = await this.updateMessageStatusUseCase.execute({
+                    conversationId: convId,
+                    receiverId: userIdString,
+                    status: "DELIVERED",
+                    messageIds: null, // tous les messages non lus
+                  });
+
+                  if (result?.modifiedCount > 0) {
+                    console.log(
+                      `✅ ${result.modifiedCount} messages marqués comme DELIVERED dans conversation ${convId}`
+                    );
+
+                    // Notifier la conversation
+                    this.io.to(roomName).emit("messagesAutoDelivered", {
+                      userId: userIdString,
+                      deliveredCount: result.modifiedCount,
+                      conversationId: convId,
+                      timestamp: new Date().toISOString(),
+                    });
+                  }
+                } catch (error) {
+                  console.warn(
+                    `⚠️ Erreur marquage delivered pour conversation ${convId}:`,
+                    error.message
+                  );
+                }
+              }
 
               // ✅ Gérer la room dans Redis via RoomManager
               if (
@@ -604,54 +476,6 @@ class ChatHandler {
 
       const userId = socket.userId;
 
-      // 1. Récupérer toutes les conversations de l'utilisateur (optionnel, ou faire la requête sur tous les messages)
-      if (this.updateMessageStatusUseCase) {
-        try {
-          // 2. Mettre à jour tous les messages "SENT" destinés à cet utilisateur en "DELIVERED"
-          const result = await this.updateMessageStatusUseCase.execute({
-            conversationId: null, // null = toutes conversations
-            receiverId: userId,
-            status: "DELIVERED",
-            messageIds: null, // null = tous les messages concernés
-          });
-
-          if (result && result.modifiedCount > 0) {
-            console.log(
-              `✅ ${result.modifiedCount} messages marqués comme DELIVERED pour l'utilisateur ${userId} à la connexion`
-            );
-            // 3. Notifier le client connecté (optionnel)
-            this.io.to(`user_${userId}`).emit("messagesAutoDelivered", {
-              deliveredCount: result.modifiedCount,
-              timestamp: new Date().toISOString(),
-            });
-
-            // ✅ NOUVEAU: NOTIFIER TOUS LES CONVERSATIONS DE L'UTILISATEUR
-            if (
-              this.messageRepository &&
-              typeof this.messageRepository.getUserConversations === "function"
-            ) {
-              const conversationIds =
-                this.messageRepository.getUserConversations(userId);
-              for (const convId of conversationIds) {
-                this.io
-                  .to(`conversation_${convId}`)
-                  .emit("messagesAutoDelivered", {
-                    userId: userId,
-                    deliveredCount: result.modifiedCount,
-                    conversationId: convId,
-                    timestamp: new Date().toISOString(),
-                  });
-              }
-            }
-          }
-        } catch (err) {
-          console.warn(
-            "⚠️ Erreur auto-delivery messages à la connexion:",
-            err.message
-          );
-        }
-      }
-
       // Si le consumer utilisateur est disponible, le créer
       if (this.userConsumerManager) {
         try {
@@ -667,113 +491,6 @@ class ChatHandler {
           );
         }
       }
-
-      // ✅ 1. RÉCUPÉRER TOUTES LES CONVERSATIONS DE L'UTILISATEUR
-      // if (this.updateMessageStatusUseCase && this.getConversationIdsUseCase) {
-      //   try {
-      //     // 1.1 Récupérer les IDs des conversations
-      //     console.log(
-      //       `🔍 Récupération conversations pour utilisateur ${userId}`
-      //     );
-      //     const conversationIds = await this.getConversationIdsUseCase.execute(
-      //       userId
-      //     );
-
-      //     if (conversationIds && conversationIds.length > 0) {
-      //       console.log(
-      //         `📋 ${conversationIds.length} conversations trouvées pour ${userId}`
-      //       );
-
-      //       let totalUpdated = 0;
-
-      //       // ✅ 1.2 TRAITER CHAQUE CONVERSATION INDIVIDUELLEMENT
-      //       for (const conversationId of conversationIds) {
-      //         try {
-      //           const result = await this.updateMessageStatusUseCase.execute({
-      //             conversationId: conversationId, // ✅ CONVERSATION SPÉCIFIQUE
-      //             receiverId: userId,
-      //             status: "DELIVERED",
-      //             messageIds: null, // null = tous les messages de cette conversation
-      //           });
-
-      //           if (result && result.modifiedCount > 0) {
-      //             totalUpdated += result.modifiedCount;
-      //             console.log(
-      //               `✅ ${result.modifiedCount} messages mis à jour dans conversation ${conversationId}`
-      //             );
-
-      //             // ✅ NOTIFIER LES AUTRES PARTICIPANTS DE CETTE CONVERSATION
-      //             this.io
-      //               .to(`conversation_${conversationId}`)
-      //               .emit("messagesStatusChanged", {
-      //                 conversationId: conversationId,
-      //                 status: "DELIVERED",
-      //                 userId: userId,
-      //                 updatedCount: result.modifiedCount,
-      //                 timestamp: new Date().toISOString(),
-      //                 reason: "user_connected",
-      //               });
-      //           }
-      //         } catch (convError) {
-      //           console.warn(
-      //             `⚠️ Erreur mise à jour conversation ${conversationId}:`,
-      //             convError.message
-      //           );
-      //           // Continue avec les autres conversations
-      //         }
-      //       }
-
-      //       // ✅ 1.3 RÉSUMÉ GLOBAL
-      //       if (totalUpdated > 0) {
-      //         console.log(
-      //           `✅ TOTAL: ${totalUpdated} messages marqués comme DELIVERED pour ${userId} à la connexion`
-      //         );
-
-      //         // Notifier l'utilisateur connecté
-      //         this.io.to(`user_${userId}`).emit("messagesAutoDelivered", {
-      //           deliveredCount: totalUpdated,
-      //           conversationsCount: conversationIds.length,
-      //           timestamp: new Date().toISOString(),
-      //         });
-      //       } else {
-      //         console.log(
-      //           `ℹ️ Aucun nouveau message à marquer comme DELIVERED pour ${userId}`
-      //         );
-      //       }
-      //     } else {
-      //       console.log(
-      //         `ℹ️ Aucune conversation trouvée pour utilisateur ${userId}`
-      //       );
-      //     }
-      //   } catch (conversationsError) {
-      //     console.warn(
-      //       `⚠️ Erreur récupération conversations pour ${userId}:`,
-      //       conversationsError.message
-      //     );
-
-      //     // ✅ FALLBACK : mise à jour globale si la récupération des conversations échoue
-      //     try {
-      //       console.log(`🔄 Fallback: mise à jour globale pour ${userId}`);
-      //       const result = await this.updateMessageStatusUseCase.execute({
-      //         conversationId: null, // null = toutes conversations
-      //         receiverId: userId,
-      //         status: "DELIVERED",
-      //         messageIds: null,
-      //       });
-
-      //       if (result && result.modifiedCount > 0) {
-      //         console.log(
-      //           `✅ Fallback réussi: ${result.modifiedCount} messages mis à jour`
-      //         );
-      //       }
-      //     } catch (fallbackError) {
-      //       console.error(
-      //         `❌ Erreur fallback mise à jour statut:`,
-      //         fallbackError.message
-      //       );
-      //     }
-      //   }
-      // }
     } catch (error) {
       console.error("❌ Erreur authentification WebSocket:", error);
       socket.emit("auth_error", {
@@ -818,11 +535,10 @@ class ChatHandler {
 
   // ✅ MÉTHODES PUBLIQUES POUR INDEX.JS
   async getConnectedUserCount() {
-    if (this.onlineUserManager) {
-      return await this.onlineUserManager.getOnlineUsersCount();
+    if (this.userPresenceManager) {
+      return await this.userPresenceManager.getOnlineUsersCount();
     }
-    // Fallback local si Redis indisponible
-    return this.connectedUsers.size;
+    return 0;
   }
 
   async getStats() {
@@ -841,21 +557,58 @@ class ChatHandler {
     };
   }
 
-  async getConnectedUsers(userId) {
-    if (this.onlineUserManager) {
-      return await this.onlineUserManager.getOnlineUsers();
+  async getConnectedUsers() {
+    if (this.userPresenceManager) {
+      return await this.userPresenceManager.getOnlineUsers({
+        withDetails: true,
+        limit: 1000,
+      });
     }
-    // Fallback local
-    return this.connectedUsers.has(userId);
+    return [];
   }
 
-  sendToUser(userId, event, data) {
+  async sendToUser(userId, event, data) {
     try {
-      this.io.to(`user_${userId}`).emit(event, data);
-      return true;
-    } catch (error) {
-      console.error(`❌ Erreur envoi à l'utilisateur ${userId}:`, error);
+      if (!this.userPresenceManager) {
+        throw new Error("UserPresenceManager non disponible");
+      }
+
+      const isOnline = await this.userPresenceManager.isUserOnline(userId);
+
+      if (isOnline) {
+        this.io.to(`user_${userId}`).emit(event, data);
+        return true;
+      }
+
+      // Gestion messages offline
+      await this.handleOfflineMessage(userId, event, data);
       return false;
+    } catch (error) {
+      console.error(`❌ Erreur envoi à ${userId}:`, error);
+      return false;
+    }
+  }
+
+  async handleOfflineMessage(userId, event, data) {
+    if (event === "newMessage" && data) {
+      try {
+        // Stocker dans Redis avec TTL
+        const offlineKey = `offline:${userId}:messages`;
+        const message = {
+          ...data,
+          event,
+          timestamp: new Date().toISOString(),
+        };
+
+        if (this.redisClient) {
+          await this.redisClient.lPush(offlineKey, JSON.stringify(message));
+          await this.redisClient.expire(offlineKey, 7 * 24 * 3600); // 7 jours
+        }
+
+        console.log(`💾 Message offline stocké pour ${userId}`);
+      } catch (error) {
+        console.error("❌ Erreur stockage message offline:", error);
+      }
     }
   }
 
@@ -1075,7 +828,9 @@ class ChatHandler {
         conversationId: conversation.id,
         content: message.content,
         senderId: message.senderId,
+        type: message.type,
         timestamp: message.timestamp,
+        fileData: { fileId, fileUrl, fileName, fileSize, mimeType },
       });
 
       // Logique pour chaque type de conversation
@@ -1358,7 +1113,7 @@ class ChatHandler {
         `👥 Utilisateur ${socket.matricule} a rejoint conversation ${conversationId}`
       );
 
-      handleMarkConversationRead(socket, { conversationId });
+      this.handleMarkConversationRead(socket, { conversationId });
     } catch (error) {
       console.error("❌ Erreur handleJoinConversation:", error);
       socket.emit("conversation_error", {
@@ -1789,9 +1544,14 @@ class ChatHandler {
           userId,
         });
 
-        if (messages && messages.messages.length > 0) {
+        // Vérifier si messages est un tableau ou un objet avec .messages
+        const messagesList = Array.isArray(messages)
+          ? messages
+          : messages.messages;
+
+        if (messagesList && messagesList.length > 0) {
           // 2. Mettre à jour chaque message en tant que "LU"
-          const messageIds = messages.messages.map((msg) => msg.id);
+          const messageIds = messagesList.map((msg) => msg.id || msg._id);
           const result = await this.updateMessageStatusUseCase.execute({
             conversationId,
             receiverId: userId,
@@ -1979,38 +1739,6 @@ class ChatHandler {
       if (result && result.modifiedCount > 0) {
         socket.emit("messageDeleted", {
           messageId,
-          status: "DELETED",
-          timestamp: new Date().toISOString(),
-        });
-        // Notifier la conversation si besoin
-        // this.io.to(`conversation_${conversationId}`).emit("messageDeleted", {...});
-      } else {
-        socket.emit("status_error", {
-          message: "Message déjà supprimé ou introuvable",
-          code: "ALREADY_DELETED",
-          type: "delete_message",
-        });
-      }
-    } catch (error) {
-      console.error("❌ Erreur handleDeleteMessage:", error);
-      socket.emit("status_error", {
-        message: "Erreur lors de la suppression du message",
-        code: "DELETE_MESSAGE_ERROR",
-        error:
-          process.env.NODE_ENV === "development" ? error.message : undefined,
-      });
-    }
-  }
-
-  // ✅ GESTIONNAIRE DE SUPPRESSION LOGIQUE DE FICHIER
-  async handleDeleteFile(socket, data) {
-    try {
-      const { fileId } = data;
-      const userId = socket.userId;
-
-      if (!fileId || !userId) {
-        socket.emit("status_error", {
-          message: "ID fichier ou utilisateur manquant",
           code: "MISSING_DATA",
           type: "delete_file",
         });

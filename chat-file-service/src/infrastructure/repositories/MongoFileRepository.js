@@ -50,11 +50,35 @@ class MongoFileRepository {
       file.validate();
       this.metrics.dbQueries++;
 
+      // Valider et nettoyer les métadonnées audio si nécessaire
+      if (file.mimeType.startsWith("audio/")) {
+        file.metadata.content = {
+          duration: file.metadata.content?.duration || null,
+          bitrate: file.metadata.content?.bitrate || null,
+          sampleRate: file.metadata.content?.sampleRate || null,
+          channels: file.metadata.content?.channels || null,
+          codec: file.metadata.content?.codec || null,
+        };
+      }
+
+      console.log("💾 Sauvegarde fichier:", file.metadata);
+
       // ✅ CRÉER LE FICHIER EN BASE AVEC CREATE AU LIEU DE FINDBRIDANDUPDATE
       const savedFile = await FileModel.create(file.toObject());
 
       if (!savedFile) {
         throw new Error("Échec de la sauvegarde en base de données");
+      }
+
+      // Mise à jour des métadonnées audio après sauvegarde si nécessaire
+      if (savedFile.mimeType.startsWith("audio/") && file.metadata.content) {
+        await FileModel.findByIdAndUpdate(
+          savedFile._id,
+          {
+            "metadata.content": file.metadata.content,
+          },
+          { new: true }
+        );
       }
 
       const processingTime = Date.now() - startTime;

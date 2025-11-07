@@ -13,7 +13,8 @@ class FileController {
     kafkaProducer = null,
     fileStorageService = null,
     downloadFileUseCase = null,
-    searchOccurrencesUseCase = null // Ajout du use-case
+    mediaProcessingService = null,
+    searchOccurrencesUseCase = null
   ) {
     this.uploadFileUseCase = uploadFileUseCase;
     this.getFileUseCase = getFileUseCase;
@@ -22,13 +23,17 @@ class FileController {
     this.fileStorageService = fileStorageService;
     this.downloadFileUseCase = downloadFileUseCase;
     this.searchOccurrencesUseCase = searchOccurrencesUseCase;
+    this.mediaProcessingService = mediaProcessingService;
 
     console.log("✅ FileController initialisé avec:", {
       uploadFileUseCase: !!this.uploadFileUseCase,
       getFileUseCase: !!this.getFileUseCase,
       redisClient: !!this.redisClient,
       kafkaProducer: !!this.kafkaProducer,
-      fileStorageService: !!this.fileStorageService, // ✅ VÉRIFIER LE SERVICE
+      fileStorageService: !!this.fileStorageService,
+      downloadFileUseCase: !!this.downloadFileUseCase,
+      searchOccurrencesUseCase: !!this.searchOccurrencesUseCase,
+      mediaProcessingService: !!this.mediaProcessingService,
     });
   }
 
@@ -44,9 +49,13 @@ class FileController {
         });
       }
 
-      // ✅ VÉRIFIER QUE LE SERVICE EST DISPONIBLE
+      // ✅ VÉRIFIER QUE LES SERVICES SONT DISPONIBLES
       if (!this.fileStorageService) {
         throw new Error("Service de stockage de fichiers non disponible");
+      }
+
+      if (!this.mediaProcessingService) {
+        throw new Error("Service de traitement des médias non disponible");
       }
 
       const userId = req.user?.id || req.user?.userId || req.headers["user-id"];
@@ -60,15 +69,43 @@ class FileController {
 
       const remoteFileName = `${Date.now()}_${req.file.originalname}`;
 
-      // ✅ UTILISER LE SERVICE INJECTÉ
+      // ✅ UPLOAD VERS LE STOCKAGE
       const remotePath = await this.fileStorageService.uploadFromBuffer(
         req.file.buffer,
         remoteFileName,
         req.file.mimetype
       );
 
-      const duration = req.body.duration || 0;
+      // ✅ EXTRACTION DES MÉTADONNÉES AVEC LE SERVICE
+      let fileMetadata = {};
+      try {
+        fileMetadata = await this.mediaProcessingService.processFile(
+          req.file.buffer,
+          req.file.originalname, // Correction: originalname au lieu de originalName
+          req.file.mimetype
+        );
+        console.log(`✅ Métadonnées extraites pour: ${req.file.originalname}`);
+      } catch (metadataError) {
+        console.warn(
+          `⚠️ Erreur extraction métadonnées:`,
+          metadataError.message
+        );
+        // Continuer avec des métadonnées basiques même en cas d'erreur
+        fileMetadata = {
+          technical: {
+            extension: path.extname(req.file.originalname).toLowerCase(),
+            fileType: this.mediaProcessingService.getFileType(
+              req.file.mimetype,
+              req.file.originalname
+            ),
+            category: "other",
+            encoding: "binary",
+          },
+          content: {}, // Supprimer la référence à duration qui n'est pas définie
+        };
+      }
 
+      // ✅ CONSTRUCTION COMPLÈTE DU FILEDATA AVEC MÉTADONNÉES
       const fileData = {
         originalName: req.file.originalname,
         fileName: remoteFileName,
@@ -79,17 +116,91 @@ class FileController {
         conversationId: req.body.conversationId
           ? String(req.body.conversationId)
           : null,
-        url: remotePath, // ou une URL publique si besoin
+        url: remotePath,
+        status: "UPLOADING",
         metadata: {
+          technical: {
+            ...fileMetadata.technical,
+            extension: path.extname(req.file.originalname).toLowerCase(),
+            fileType: fileMetadata.technical?.fileType || "AUDIO",
+            category: fileMetadata.technical?.category || "media",
+            encoding: "binary",
+          },
           content: {
-            duration: duration,
+            duration: fileMetadata.content?.duration || null,
+            bitrate: fileMetadata.content?.bitrate || null,
+            sampleRate: fileMetadata.content?.sampleRate || null,
+            channels: fileMetadata.content?.channels || null,
+            codec: fileMetadata.content?.codec || null,
+            title: fileMetadata.content?.title || null,
+            artist: fileMetadata.content?.artist || null,
+            album: fileMetadata.content?.album || null,
+            genre: fileMetadata.content?.genre || null,
+            year: fileMetadata.content?.year || null,
+          },
+
+          // ✅ MÉTADONNÉES DE TRAITEMENT
+          processing: {
+            status: "pending",
+            thumbnailGenerated: false,
+            compressed: false,
+            processed: false,
+          },
+
+          // ✅ MÉTADONNÉES KAFKA
+          kafkaMetadata: {
+            topic: "chat.files",
+            events: [],
+            lastPublished: null,
+          },
+
+          // ✅ MÉTADONNÉES REDIS
+          redisMetadata: {
+            cacheKey: `file:${Date.now()}`,
+            ttl: 7200,
+            cachedAt: new Date(),
+            cacheHits: 0,
+          },
+
+          // ✅ MÉTADONNÉES DE SÉCURITÉ
+          security: {
+            encrypted: false,
+            accessLevel: "private",
+            scanStatus: "pending",
+          },
+
+          // ✅ MÉTADONNÉES DE STOCKAGE
+          storage: {
+            provider: this.fileStorageService.constructor.name.includes("S3")
+              ? "s3"
+              : "sftp",
+            bucket: process.env.S3_BUCKET || "default",
+            region: process.env.S3_REGION || "us-east-1",
+            storageClass: "standard",
+            backupStatus: "pending",
+          },
+
+          // ✅ STATISTIQUES D'UTILISATION
+          usage: {
+            downloadCount: 0,
+            firstDownload: null,
+            lastDownload: null,
+            downloadHistory: [],
+            shareCount: 0,
+            viewCount: 0,
           },
         },
+        downloadCount: 0,
+        isPublic: false,
+        tags: req.body.tags
+          ? req.body.tags.split(",").map((tag) => tag.trim())
+          : [],
       };
 
       let result;
       if (this.uploadFileUseCase) {
         result = await this.uploadFileUseCase.execute(fileData);
+        console.log(`✅ Fichier enregistré en base: ${result}`);
       } else {
         result = {
           id: Date.now().toString(),
@@ -100,20 +211,65 @@ class FileController {
 
       const processingTime = Date.now() - startTime;
 
-      // Publier événement Kafka
+      // ✅ PUBLIER ÉVÉNEMENT KAFKA AVEC MÉTADONNÉES COMPLÈTES
       if (this.kafkaProducer) {
         try {
-          await this.kafkaProducer.publishMessage({
+          const kafkaMessage = {
             eventType: "FILE_UPLOADED",
-            fileId: String(result.id),
+            fileId: String(result.id || result._id),
             userId: String(userId),
             filename: fileData.originalName,
-            size: String(fileData.size),
+            size: fileData.size,
             mimeType: fileData.mimeType,
+            fileType: fileMetadata.technical?.fileType || "UNKNOWN",
             conversationId: fileData.conversationId || "",
-            processingTime: String(processingTime),
+
+            // ✅ MÉTADONNÉES TECHNIQUES DANS KAFKA
+            metadata: {
+              technical: {
+                fileType: fileMetadata.technical?.fileType,
+                extension: fileMetadata.technical?.extension,
+                category: fileMetadata.technical?.category,
+                checksums: fileMetadata.technical?.checksums || {},
+              },
+              content: {
+                duration: fileMetadata.content?.duration,
+                dimensions: fileMetadata.content?.dimensions,
+                bitrate: fileMetadata.content?.bitrate,
+                sampleRate: fileMetadata.content?.sampleRate,
+                codec: fileMetadata.content?.codec,
+                title: fileMetadata.content?.title,
+                artist: fileMetadata.content?.artist,
+                pageCount: fileMetadata.content?.pageCount,
+                wordCount: fileMetadata.content?.wordCount,
+              },
+            },
+
+            // ✅ INFORMATIONS DE TRAITEMENT
+            processing: {
+              status: "completed",
+              processingTime: processingTime,
+              hasThumbnails: false, // Seront générés plus tard par ThumbnailService
+              requiresThumbnails: fileMetadata.technical?.fileType === "IMAGE",
+            },
+
+            // ✅ INFORMATIONS DE STOCKAGE
+            storage: {
+              provider: fileData.metadata.storage.provider,
+              path: remotePath,
+              bucket: fileData.metadata.storage.bucket,
+              size: fileData.size,
+            },
+
+            processingTime: processingTime,
             timestamp: new Date().toISOString(),
-          });
+            source: "file-controller",
+          };
+
+          await this.kafkaProducer.publishMessage(kafkaMessage);
+          console.log(
+            `📤 Événement Kafka FILE_UPLOADED publié pour ${fileData.originalName}`
+          );
         } catch (kafkaError) {
           console.warn(
             "⚠️ Erreur publication upload fichier:",
@@ -122,18 +278,40 @@ class FileController {
         }
       }
 
+      // ✅ RÉPONSE AVEC MÉTADONNÉES ENRICHIES
       res.status(201).json({
         success: true,
-        data: result,
+        data: {
+          ...result,
+          // ✅ INCLURE LES MÉTADONNÉES EXTRACTES DANS LA RÉPONSE
+          metadata: {
+            ...result.metadata,
+            extracted: fileMetadata, // Métadonnées brutes extraites
+          },
+        },
         metadata: {
           processingTime: `${processingTime}ms`,
           kafkaPublished: !!this.kafkaProducer,
+          fileType: fileMetadata.technical?.fileType || "UNKNOWN",
+          hasMetadata: !!fileMetadata.technical,
           timestamp: new Date().toISOString(),
         },
       });
     } catch (error) {
       const processingTime = Date.now() - startTime;
       console.error("❌ Erreur upload fichier:", error);
+
+      // ✅ NETTOYAGE EN CAS D'ERREUR
+      if (req.file?.path) {
+        try {
+          await fs.unlink(req.file.path);
+        } catch (cleanupError) {
+          console.warn(
+            "⚠️ Erreur nettoyage après erreur:",
+            cleanupError.message
+          );
+        }
+      }
 
       res.status(500).json({
         success: false,
@@ -150,7 +328,7 @@ class FileController {
     }
   }
 
-  // GET /files/:fileId - Métadonnées d'un fichier
+  // GET /files/:fileId - Métadonnées d'un fichier (AMÉLIORÉ)
   async getFile(req, res) {
     const startTime = Date.now();
     try {
@@ -160,14 +338,45 @@ class FileController {
       if (!this.getFileUseCase) {
         throw new Error("Service de récupération de fichiers non disponible");
       }
+
       const file = await this.getFileUseCase.execute(fileId, String(userId));
       if (!file) {
-        return res
-          .status(404)
-          .json({ success: false, message: "Fichier non trouvé" });
+        return res.status(404).json({
+          success: false,
+          message: "Fichier non trouvé",
+          code: "FILE_NOT_FOUND",
+        });
       }
-      res.json({ success: true, data: file });
+
+      // ✅ FORMATAGE DES MÉTADONNÉES POUR LA RÉPONSE
+      const formattedFile = {
+        ...file,
+        // ✅ INFORMATIONS FORMATÉES POUR LE CLIENT
+        displayInfo: {
+          formattedSize: this._formatFileSize(file.size),
+          type: file.metadata?.technical?.fileType || "UNKNOWN",
+          category: file.metadata?.technical?.category || "other",
+          canDownload: file.status === "COMPLETED",
+          canPreview: this._canPreviewFile(file),
+          previewUrl: file.metadata?.processing?.thumbnailUrl || file.url,
+        },
+      };
+
+      const processingTime = Date.now() - startTime;
+
+      res.json({
+        success: true,
+        data: formattedFile,
+        metadata: {
+          processingTime: `${processingTime}ms`,
+          fromCache: file.fromCache || false,
+          timestamp: new Date().toISOString(),
+        },
+      });
     } catch (error) {
+      const processingTime = Date.now() - startTime;
+      console.error("❌ Erreur récupération fichier:", error);
+
       res.status(500).json({
         success: false,
         message: "Erreur lors de la récupération des métadonnées",
@@ -175,6 +384,10 @@ class FileController {
           process.env.NODE_ENV === "development"
             ? error.message
             : "Erreur interne",
+        metadata: {
+          processingTime: `${processingTime}ms`,
+          timestamp: new Date().toISOString(),
+        },
       });
     }
   }
@@ -184,7 +397,7 @@ class FileController {
     try {
       const userId = req.user?.id || req.user?.userId;
       const { page = 1, limit = 20, type, conversationId } = req.query;
-      // Utiliser le repository pour récupérer les fichiers
+
       const result = await this.uploadFileUseCase.fileRepository.findByUploader(
         userId,
         {
@@ -194,7 +407,28 @@ class FileController {
           conversationId,
         }
       );
-      res.json({ success: true, data: result });
+
+      // ✅ ENRICHIR LES FICHIERS AVEC DES INFORMATIONS DE FORMATAGE
+      if (result.files) {
+        result.files = result.files.map((file) => ({
+          ...file,
+          displayInfo: {
+            formattedSize: this._formatFileSize(file.size),
+            type: file.metadata?.technical?.fileType || "UNKNOWN",
+            previewUrl: file.metadata?.processing?.thumbnailUrl || file.url,
+            canDownload: file.status === "COMPLETED",
+          },
+        }));
+      }
+
+      res.json({
+        success: true,
+        data: result,
+        metadata: {
+          timestamp: new Date().toISOString(),
+          user: userId,
+        },
+      });
     } catch (error) {
       res.status(500).json({
         success: false,
@@ -212,6 +446,7 @@ class FileController {
     try {
       const { conversationId } = req.params;
       const { page = 1, limit = 20, type } = req.query;
+
       const result =
         await this.uploadFileUseCase.fileRepository.findByConversation(
           conversationId,
@@ -221,7 +456,28 @@ class FileController {
             type,
           }
         );
-      res.json({ success: true, data: result });
+
+      // ✅ ENRICHIR LES FICHIERS
+      if (result.files) {
+        result.files = result.files.map((file) => ({
+          ...file,
+          displayInfo: {
+            formattedSize: this._formatFileSize(file.size),
+            type: file.metadata?.technical?.fileType || "UNKNOWN",
+            previewUrl: file.metadata?.processing?.thumbnailUrl || file.url,
+            uploadedBy: file.uploadedBy, // Inclure l'uploader pour le contexte
+          },
+        }));
+      }
+
+      res.json({
+        success: true,
+        data: result,
+        metadata: {
+          conversationId,
+          timestamp: new Date().toISOString(),
+        },
+      });
     } catch (error) {
       res.status(500).json({
         success: false,
@@ -239,9 +495,36 @@ class FileController {
     try {
       const { fileId } = req.params;
       const userId = req.user?.id || req.user?.userId;
+
       const deletedFile =
         await this.uploadFileUseCase.fileRepository.deleteFile(fileId, true);
-      res.json({ success: true, data: deletedFile });
+
+      // ✅ PUBLIER ÉVÉNEMENT KAFKA POUR SUPPRESSION
+      if (this.kafkaProducer && deletedFile) {
+        try {
+          await this.kafkaProducer.publishMessage({
+            eventType: "FILE_DELETED",
+            fileId: String(fileId),
+            userId: String(userId),
+            filename: deletedFile.originalName,
+            fileType: deletedFile.metadata?.technical?.fileType,
+            softDelete: true,
+            timestamp: new Date().toISOString(),
+            source: "file-controller",
+          });
+        } catch (kafkaError) {
+          console.warn(
+            "⚠️ Erreur publication suppression:",
+            kafkaError.message
+          );
+        }
+      }
+
+      res.json({
+        success: true,
+        data: deletedFile,
+        message: "Fichier supprimé avec succès",
+      });
     } catch (error) {
       res.status(500).json({
         success: false,
@@ -277,11 +560,30 @@ class FileController {
         String(userId)
       );
 
+      // ✅ PUBLIER ÉVÉNEMENT KAFKA POUR TÉLÉCHARGEMENT
+      if (this.kafkaProducer) {
+        try {
+          await this.kafkaProducer.publishMessage({
+            eventType: "FILE_DOWNLOADED",
+            fileId: String(fileId),
+            userId: String(userId),
+            filename: file.originalName,
+            fileType: file.metadata?.technical?.fileType,
+            size: file.size,
+            timestamp: new Date().toISOString(),
+            source: "file-controller",
+          });
+        } catch (kafkaError) {
+          console.warn("⚠️ Erreur publication download:", kafkaError.message);
+        }
+      }
+
       res.setHeader(
         "Content-Disposition",
         `attachment; filename="${file.originalName || file.fileName}"`
       );
       res.setHeader("Content-Type", file.mimeType);
+      res.setHeader("Content-Length", file.size);
 
       fileStream.pipe(res);
     } catch (error) {
@@ -324,6 +626,26 @@ class FileController {
       const { zipStream, files } =
         await this.downloadFileUseCase.executeMultiple(fileIds, String(userId));
 
+      // ✅ PUBLIER ÉVÉNEMENT KAFKA POUR TÉLÉCHARGEMENT MULTIPLE
+      if (this.kafkaProducer) {
+        try {
+          await this.kafkaProducer.publishMessage({
+            eventType: "FILES_BULK_DOWNLOADED",
+            userId: String(userId),
+            fileIds: fileIds,
+            fileCount: files.length,
+            totalSize: files.reduce((sum, file) => sum + file.size, 0),
+            timestamp: new Date().toISOString(),
+            source: "file-controller",
+          });
+        } catch (kafkaError) {
+          console.warn(
+            "⚠️ Erreur publication bulk download:",
+            kafkaError.message
+          );
+        }
+      }
+
       res.setHeader(
         "Content-Disposition",
         `attachment; filename="fichiers_${Date.now()}.zip"`
@@ -361,6 +683,7 @@ class FileController {
         scope = "files",
       } = req.query;
       const userId = req.user?.id || req.headers["user-id"];
+
       if (!query || query.length < 2) {
         return res.status(400).json({
           success: false,
@@ -369,6 +692,7 @@ class FileController {
           code: "INVALID_QUERY",
         });
       }
+
       const result = await this.searchOccurrencesUseCase.execute(query, {
         userId,
         page: parseInt(page),
@@ -376,12 +700,15 @@ class FileController {
         useLike,
         scope,
       });
+
       res.json({
         success: true,
         data: result,
         metadata: {
           processingTime: Date.now() - startTime,
           timestamp: new Date().toISOString(),
+          query,
+          scope,
         },
       });
     } catch (error) {
@@ -391,6 +718,23 @@ class FileController {
         error: error.message,
       });
     }
+  }
+
+  // ================================
+  // MÉTHODES PRIVÉES
+  // ================================
+
+  _formatFileSize(bytes) {
+    if (bytes === 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
+  }
+
+  _canPreviewFile(file) {
+    const previewableTypes = ["IMAGE", "PDF", "TEXT"];
+    return previewableTypes.includes(file.metadata?.technical?.fileType);
   }
 }
 
