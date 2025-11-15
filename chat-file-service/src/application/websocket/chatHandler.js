@@ -36,12 +36,10 @@ class ChatHandler {
     this.createGroupUseCase = createGroupUseCase;
     this.createBroadcastUseCase = createBroadcastUseCase;
     this.userConsumerManager = null;
-
-    // ✅ SUPPRESSION des collections locales
-    // this.connectedUsers et this.userSockets sont supprimés
+    this.roomManager = null; // ✅ AJOUT : Initialiser à null
   }
 
-  // ✅ MÉTHODE SETUPSOCKETHANDLERS CORRIGÉE
+  // ✅ MÉTHODE SETUPSOCKETHANDLERS CORRIGÉE AVEC SOCKET PASSÉ À updateLastActivity
   setupSocketHandlers() {
     try {
       console.log("🔌 Configuration des gestionnaires Socket.IO...");
@@ -50,77 +48,160 @@ class ChatHandler {
         console.log(`🔗 Nouvelle connexion WebSocket: ${socket.id}`);
 
         // ✅ ÉVÉNEMENT DE BATTEMENT DE CŒUR
-        socket.on("heartbeat", () => {
-          if (this.onlineUserManager && socket.userId) {
-            this.onlineUserManager.updateLastActivity(socket.userId);
-          }
-        });
+        // socket.on("heartbeat", () => {
+        //   if (this.onlineUserManager && socket.userId) {
+        //     this.onlineUserManager.updateLastActivity(socket.userId, socket);
+        //   }
+        // });
 
         // ✅ ÉVÉNEMENTS D'AUTHENTIFICATION
         socket.on("authenticate", (data) => {
-          // console.log("🔐 Demande d'authentification:", data);
           this.handleAuthentication(socket, data);
         });
 
-        // ✅ ÉVÉNEMENTS DE CHAT
+        // ✅ ÉVÉNEMENTS DE CHAT AVEC RENEW ACTIVITY (socket passé)
         socket.on("sendMessage", (data) => {
           console.log("💬 Envoi message:", data);
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
           this.handleSendMessage(socket, data);
         });
 
         socket.on("joinConversation", (data) => {
           console.log("👥 Rejoindre conversation:", data);
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
           this.handleJoinConversation(socket, data);
         });
 
         socket.on("leaveConversation", (data) => {
           console.log("👋 Quitter conversation:", data);
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
           this.handleLeaveConversation(socket, data);
         });
 
-        // ✅ ÉVÉNEMENTS DE FRAPPE
+        // ✅ ÉVÉNEMENTS DE FRAPPE AVEC RENEW (socket passé)
         socket.on("typing", (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
           this.handleTyping(socket, data);
         });
 
         socket.on("stopTyping", (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
           this.handleStopTyping(socket, data);
         });
 
-        // ✅ ÉVÉNEMENTS DE GESTION
+        // ✅ ÉVÉNEMENTS DE GESTION (socket passé)
         socket.on("getOnlineUsers", (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
           this.handleGetOnlineUsers(socket, data);
         });
 
         socket.on("ping", () => {
+          // if (this.onlineUserManager && socket.userId) {
+          //   this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          // }
           socket.emit("pong");
         });
 
-        // ✅ NOUVEAUX ÉVÉNEMENTS POUR STATUTS DE MESSAGES
+        // ✅ ÉVÉNEMENTS DE STATUTS DE MESSAGES AVEC RENEW (socket passé)
         socket.on("markMessageDelivered", (data) => {
           console.log("📬 Marquer message comme livré:", data);
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
           this.handleMarkMessageDelivered(socket, data);
         });
 
         socket.on("markMessageRead", (data) => {
           console.log("📖 Marquer message comme lu:", data);
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
           this.handleMarkMessageRead(socket, data);
         });
 
         socket.on("markConversationRead", (data) => {
           console.log("📚 Marquer conversation comme lue:", data);
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
           this.handleMarkConversationRead(socket, data);
         });
 
         socket.on("getMessageStatus", (data) => {
           console.log("📊 Demande statut message:", data);
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
           this.handleGetMessageStatus(socket, data);
         });
 
-        // ✅ ÉVÉNEMENT POUR ACCUSÉ DE RÉCEPTION AUTOMATIQUE
         socket.on("messageReceived", (data) => {
           console.log("✅ Accusé de réception:", data);
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
           this.handleMessageReceived(socket, data);
+        });
+
+        // ✅ ÉVÉNEMENTS DE SUPPRESSION/ÉDITION AVEC RENEW (socket passé)
+        socket.on("deleteMessage", (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          this.handleDeleteMessage(socket, data);
+        });
+
+        socket.on("deleteFile", (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          this.handleDeleteFile(socket, data);
+        });
+
+        socket.on("editMessage", (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          this.handleEditMessage(socket, data);
+        });
+
+        // ✅ ÉVÉNEMENTS DE RÉCUPÉRATION DE DONNÉES AVEC RENEW (socket passé)
+        socket.on("getMessages", (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          this.handleGetMessages(socket, data);
+        });
+
+        socket.on("getConversations", (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          this.handleGetConversations(socket, data);
+        });
+
+        socket.on("getConversation", (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          this.handleGetConversation(socket, data);
+        });
+
+        // ✅ ÉVÉNEMENTS D'ERREUR
+        socket.on("error", (error) => {
+          console.error(`❌ Erreur Socket ${socket.id}:`, error);
         });
 
         // ✅ ÉVÉNEMENT DE DÉCONNEXION - CORRECTEMENT CONFIGURÉ
@@ -129,40 +210,6 @@ class ChatHandler {
             `🔌 Déconnexion détectée: ${socket.id}, raison: ${reason}`
           );
           this.handleDisconnection(socket, reason);
-        });
-
-        // ✅ ÉVÉNEMENTS D'ERREUR
-        socket.on("error", (error) => {
-          console.error(`❌ Erreur Socket ${socket.id}:`, error);
-        });
-
-        // ✅ AJOUTER LES ÉVÉNEMENTS DE SUPPRESSION LOGIQUE
-        socket.on("deleteMessage", (data) => {
-          this.handleDeleteMessage(socket, data);
-        });
-
-        socket.on("deleteFile", (data) => {
-          this.handleDeleteFile(socket, data);
-        });
-
-        // Dans setupSocketHandlers()
-        socket.on("editMessage", (data) => {
-          this.handleEditMessage(socket, data);
-        });
-
-        // ✅ Récupération des messages d'une conversation
-        socket.on("getMessages", (data) => {
-          this.handleGetMessages(socket, data);
-        });
-
-        // ✅ Récupération de toutes les conversations de l'utilisateur
-        socket.on("getConversations", (data) => {
-          this.handleGetConversations(socket, data);
-        });
-
-        // ✅ Récupération d'une conversation spécifique
-        socket.on("getConversation", (data) => {
-          this.handleGetConversation(socket, data);
         });
       });
 
@@ -178,6 +225,13 @@ class ChatHandler {
     const matricule = socket.matricule;
 
     try {
+      if (userId && this.roomManager) {
+        await this.roomManager.removeUserFromAllRooms(userId);
+        console.log(
+          `🧹 Utilisateur ${matricule} (${userId}) retiré de toutes les rooms`
+        );
+      }
+
       if (userId && this.onlineUserManager) {
         // Déconnexion via Redis
         await this.onlineUserManager.setUserOffline(userId);
@@ -292,10 +346,12 @@ class ChatHandler {
       // ✅ REJOINDRE UNE SALLE UTILISATEUR
       socket.join(`user_${userIdString}`);
 
+      let conversationIds = null;
+
       // 1. Rejoindre toutes les rooms de conversations de l'utilisateur
       if (this.getConversationIdsUseCase) {
         try {
-          const conversationIds = await this.getConversationIdsUseCase.execute(
+          conversationIds = await this.getConversationIdsUseCase.execute(
             userIdString
           );
           if (Array.isArray(conversationIds)) {
@@ -454,8 +510,8 @@ class ChatHandler {
         nom: socket.nom,
         prenom: socket.prenom,
         ministere: socket.ministere,
+        autoJoinedConversations: conversationIds.length,
         timestamp: new Date().toISOString(),
-        method: data.token ? "token" : "credentials",
       });
 
       console.log(
@@ -1090,35 +1146,64 @@ class ChatHandler {
         return;
       }
 
-      // Rejoindre la room de la conversation
-      socket.join(`conversation_${conversationId}`);
+      const roomName = `conversation_${conversationId}`;
 
-      // Notifier les autres participants
-      socket
-        .to(`conversation_${conversationId}`)
-        .emit("user_joined_conversation", {
-          userId: userId,
-          matricule: socket.matricule,
-          conversationId: conversationId,
-          timestamp: new Date().toISOString(),
-        });
+      // 3. Mark read (seulement cette conv)
+      if (this.updateMessageStatusUseCase) {
+        try {
+          const result = await this.updateMessageStatusUseCase.execute({
+            conversationId,
+            receiverId: userId,
+            status: "READ",
+            messageIds: null, // Tous non lus
+          });
+          console.log(
+            `✅ ${
+              result?.modifiedCount || 0
+            } messages marqués lus dans conversation ${conversationId}`
+          );
+        } catch (deliveredError) {
+          console.warn(`⚠️ Erreur marquage delivered:`, deliveredError.message);
+        }
+      }
 
-      // Confirmer à l'utilisateur
+      // 4. Renew presence (déjà fait via socket.on, mais double safety)
+      if (this.onlineUserManager) {
+        try {
+          await this.onlineUserManager.updateLastActivity(userId);
+          console.log(`✅ Présence renouvelée pour ${userId}`);
+        } catch (presenceError) {
+          console.warn(
+            `⚠️ Erreur renouvellement présence:`,
+            presenceError.message
+          );
+        }
+      }
+
+      // 5. Notifier les participants
+      this.io.to(roomName).emit("messagesRead", {
+        conversationId,
+        userId,
+        count: result.modifiedCount,
+        timestamp: new Date().toISOString(),
+      });
+
+      // 6. Confirmer à l'utilisateur
       socket.emit("conversation_joined", {
-        conversationId: conversationId,
+        conversationId,
         timestamp: new Date().toISOString(),
       });
 
       console.log(
-        `👥 Utilisateur ${socket.matricule} a rejoint conversation ${conversationId}`
+        `✅ ${socket.matricule} a rejoint la conversation ${conversationId}`
       );
-
-      this.handleMarkConversationRead(socket, { conversationId });
     } catch (error) {
       console.error("❌ Erreur handleJoinConversation:", error);
       socket.emit("conversation_error", {
         message: "Erreur lors de la connexion à la conversation",
         code: "JOIN_ERROR",
+        error:
+          process.env.NODE_ENV === "development" ? error.message : undefined,
       });
     }
   }
@@ -1381,22 +1466,6 @@ class ChatHandler {
       console.log(
         `📖 Marquage lu: message ${messageId} par utilisateur ${userId}`
       );
-
-      // ✅ VÉRIFIER QUE LE USE CASE EST DISPONIBLE
-      // if (
-      //   !this.updateMessageStatusUseCase ||
-      //   typeof this.updateMessageStatusUseCase.markSingleMessage !== "function"
-      // ) {
-      //   console.warn(
-      //     "⚠️ UpdateMessageStatusUseCase non disponible - mode dégradé"
-      //   );
-      //   this._handleReadDegradedMode(socket, {
-      //     messageId,
-      //     conversationId,
-      //     userId,
-      //   });
-      //   return;
-      // }
 
       try {
         const result = await this.updateMessageStatusUseCase.markSingleMessage({

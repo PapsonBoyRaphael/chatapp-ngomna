@@ -3,12 +3,13 @@
  * Optimisé pour gérer les compteurs de messages non lus par conversation et par utilisateur
  */
 class UnreadMessageManager {
-  constructor(redis) {
+  constructor(redis, messageRepository) {
     this.redis = redis;
+    this.primaryStore = messageRepository; // ← nouveau
     this.keyPrefix = "unread";
     this.userUnreadPrefix = "user_unread";
     this.conversationUnreadPrefix = "conversation_unread";
-    this.defaultTTL = 7 * 24 * 3600; // 7 jours
+    this.defaultTTL = 3 * 24 * 3600; // 3 jours
   }
 
   // Incrémenter le compteur de messages non lus
@@ -64,11 +65,33 @@ class UnreadMessageManager {
   async getUnreadCount(conversationId, userId) {
     try {
       const userKey = `${this.userUnreadPrefix}:${userId}:${conversationId}`;
-      const count = await this.redis.get(userKey);
-      return parseInt(count) || 0;
+      const cached = await this.redis.get(userKey);
+
+      // 1. Si on a un compteur Redis → on le renvoie (rapide)
+      if (cached !== null) {
+        const count = parseInt(cached) || 0;
+        console.log(`Hit Redis unread: ${count}`);
+        return count;
+      }
+
+      // 2. CACHE MISS ou EXPIRED → on recalcule depuis MongoDB
+      console.log(
+        `Miss Redis → recalcul depuis MongoDB pour ${userId} dans ${conversationId}`
+      );
+
+      // DEMANDE AU REPOSITORY DE RECALCULER
+      const realCount = await this.recalculateFromDB(conversationId, userId);
+
+      // 3. On recrée le compteur Redis avec le bon TTL
+      if (realCount > 0) {
+        await this.redis.set(userKey, realCount, { EX: this.defaultTTL });
+      }
+
+      return realCount;
     } catch (error) {
-      console.error("❌ Erreur getUnreadCount:", error);
-      return 0;
+      console.error("Erreur getUnreadCount:", error);
+      // En cas d'erreur → fallback sur MongoDB
+      return await this.recalculateFromDB(conversationId, userId);
     }
   }
 
@@ -98,9 +121,34 @@ class UnreadMessageManager {
         }
       } while (cursor !== 0);
 
+      // 2. Si Redis vide → recalcul depuis MongoDB
+      if (total === 0) {
+        console.log(`Total Redis = 0 → recalcul global depuis MongoDB`);
+        total = await this.primaryStore.countAllUnreadMessages(userId);
+
+        // Optionnel : recréer les clés Redis pour les conversations actives
+        // (tu peux le faire en arrière-plan)
+      }
+
       return total;
     } catch (error) {
       console.error("❌ Erreur getTotalUnreadCount:", error);
+      return await this.primaryStore.countAllUnreadMessages(userId);
+    }
+  }
+
+  async recalculateFromDB(conversationId, userId) {
+    try {
+      // Appelle ton CachedMessageRepository ou MessageRepository
+      // pour compter les messages non lus
+      const count = await this.primaryStore.countUnreadMessages(
+        conversationId,
+        userId
+      );
+      console.log(`Recalculé depuis MongoDB: ${count} non-lus`);
+      return count;
+    } catch (error) {
+      console.error("Erreur recalcul MongoDB:", error);
       return 0;
     }
   }

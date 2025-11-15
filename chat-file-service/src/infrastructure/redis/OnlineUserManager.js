@@ -3,10 +3,10 @@ class OnlineUserManager {
     this.redis = redis;
     this.io = io;
     this.presencePrefix = "presence"; // Clé avec TTL pour détecter l'inactivité
-    this.userDataPrefix = "user_data"; // // Données sans TTL initial
+    this.userDataPrefix = "user_data"; // Données sans TTL initial
     this.userSocketPrefix = "user_sockets";
     this.defaultTTL = 5; // 5 minutes pour test
-    this.idleTTL = 3600; // 1 heure idle
+    this.idleTTL = 10; // 1 heure idle
     this.subscriber = null;
 
     if (this.redis) {
@@ -41,51 +41,53 @@ class OnlineUserManager {
               const userData = await this.getUserData(userId);
 
               if (userData) {
-                // Déconnecter le socket
-                // if (this.io && userData.socketId) {
-                //   const socket = this.io.sockets.sockets.get(userData.socketId);
-                //   if (socket) {
-                //     console.log(`🔌 Déconnexion socket ${userData.socketId}`);
-                //     socket.disconnect(true);
-                //   }
-                // }
-
-                // Notifier avant de nettoyer les données
-                // if (this.io) {
-                //   this.io.emit("user_disconnected", {
-                //     userId,
-                //     matricule: userData.matricule,
-                //     reason: "session_expired",
-                //     timestamp: new Date().toISOString(),
-                //   });
-                // }
-
-                // Nettoyer les données après utilisation
-                // await this.setUserOffline(userId);
-
-                // Passage en mode idle au lieu de déconnexion
-
-                await this.redis.set(
-                  `${this.presencePrefix}:${userId}`,
-                  "idle",
-                  { EX: this.idleTTL } // Format object pour compatibilité
+                // 2. Vérifier l'état actuel
+                const currentStatus = userData.status || "offline";
+                console.log(
+                  `🔍 État actuel de l'utilisateur ${userId}:`,
+                  currentStatus
                 );
 
-                await this.redis.hSet(
-                  `${this.userDataPrefix}:${userId}`,
-                  "status",
-                  "idle"
-                );
+                if (currentStatus === "idle") {
+                  // 3a. Si déjà idle qui expire -> nettoyage complet
+                  console.log(`🧹 Nettoyage utilisateur inactif: ${userId}`);
+                  await this.setUserOffline(userId);
 
-                if (this.io) {
-                  this.io.emit("user_idle", {
-                    userId,
-                    matricule: userData.matricule,
-                    timestamp: new Date().toISOString(),
-                  });
+                  if (this.io) {
+                    this.io.emit("user_offline", {
+                      userId,
+                      matricule: userData.matricule,
+                      reason: "idle_timeout",
+                      timestamp: new Date().toISOString(),
+                    });
+                  }
+                } else if (currentStatus === "online") {
+                  // 3b. Si online qui expire -> passage en idle
+                  console.log(`💤 Passage en idle: ${userId}`);
+                  await this.redis.set(
+                    `${this.presencePrefix}:${userId}`,
+                    "idle",
+                    { EX: this.idleTTL }
+                  );
+
+                  await this.redis.hSet(
+                    `${this.userDataPrefix}:${userId}`,
+                    "status",
+                    "idle"
+                  );
+                  if (this.io) {
+                    this.io.emit("user_idle", {
+                      userId,
+                      matricule: userData.matricule,
+                      timestamp: new Date().toISOString(),
+                    });
+                  }
+                } else {
+                  console.warn(
+                    `⚠️ État inconnu pour ${userId}: ${currentStatus}`
+                  );
                 }
               }
-              await this.getUserData(userId);
             }
           } catch (err) {
             console.error("❌ Erreur traitement expiration:", err);
@@ -106,7 +108,7 @@ class OnlineUserManager {
         throw new Error("userId invalide");
       }
 
-      // Stocker uniquement les données utilisateur avec TTL
+      // Stocker les données utilisateur sans TTL
       const userInfo = {
         userId: userIdString,
         socketId: userData.socketId ? String(userData.socketId) : null,
@@ -123,7 +125,6 @@ class OnlineUserManager {
         `${this.userDataPrefix}:${userIdString}`,
         this._sanitizeData(userInfo)
       );
-      // await this.redis.expire(`${this.userDataPrefix}:${userIdString}`);
 
       // Vérifier si idle
       const currentStatus = await this.redis.get(
@@ -140,7 +141,7 @@ class OnlineUserManager {
         { EX: this.defaultTTL } // Format object pour compatibilité
       );
 
-      // Mapping bidirectionnel socket<->user si socketId présent
+      // Mapping socket->user si socketId présent
       if (userInfo.socketId) {
         await this.redis.set(
           `${this.userSocketPrefix}:${userInfo.socketId}`,
@@ -162,18 +163,19 @@ class OnlineUserManager {
       const userIdString = String(userId);
       if (!this._validateUserId(userIdString)) return false;
 
-      const userData = await this.getUserData(userId);
+      const userData = await this.getUserData(userIdString);
       if (!userData) return false;
 
       console.log(`⏰ Déconnexion utilisateur: ${userIdString}`);
 
-      // Nettoyer les données et mappings
+      // Nettoyer toutes les clés
       await this.redis.del(`${this.userDataPrefix}:${userIdString}`);
       if (userData.socketId) {
         await this.redis.del(`${this.userSocketPrefix}:${userData.socketId}`);
       }
-
       await this.redis.del(`${this.presencePrefix}:${userIdString}`);
+
+      console.log(`✅ Utilisateur ${userIdString} déconnecté`);
 
       return true;
     } catch (error) {
@@ -195,41 +197,90 @@ class OnlineUserManager {
     }
   }
 
-  async updateLastActivity(userId) {
+  async updateLastActivity(userId, socket = null) {
     try {
       const userIdString = String(userId);
-      const status = await this.redis.get(
-        `${this.presencePrefix}:${userIdString}`
-      );
+      if (!this._validateUserId(userIdString)) return false;
 
-      if (!status) return false;
+      // ✅ RACE CONDITION FIX : Récupérer les données actuelles
+      let userData = await this.getUserData(userIdString);
 
-      if (status === "idle") {
-        // Retour à online si activité
+      // Si les données ont été nettoyées, les recréer
+      if (!userData) {
+        console.log(
+          `🔄 Recréation données Redis pour ${userIdString} (race fix)`
+        );
+        userData = {
+          userId: userIdString,
+          socketId: socket?.id || null,
+          matricule: socket?.matricule || "Unknown",
+          status: "online",
+          lastActivity: new Date().toISOString(),
+          connectedAt: new Date().toISOString(),
+        };
+        await this.redis.hSet(
+          `${this.userDataPrefix}:${userIdString}`,
+          this._sanitizeData(userData)
+        );
+
+        // 2. Marquer présence avec TTL
+        await this.redis.set(
+          `${this.presencePrefix}:${userIdString}`,
+          "online",
+          { EX: this.defaultTTL } // Format object pour compatibilité
+        );
+
+        // Mapping socket->user si socketId présent
+        if (userData.socketId) {
+          await this.redis.set(
+            `${this.userSocketPrefix}:${userData.socketId}`,
+            userIdString,
+            "EX",
+            this.defaultTTL
+          );
+        }
+
+        console.log();
+      }
+
+      const currentStatus = userData.status || "offline";
+
+      // ✅ Upgrade ou renew selon l'état
+      if (currentStatus === "idle" || currentStatus === "offline") {
+        // Upgrade to online
         await this.redis.set(
           `${this.presencePrefix}:${userIdString}`,
           "online",
           { EX: this.defaultTTL }
         );
-
         await this.redis.hSet(
           `${this.userDataPrefix}:${userIdString}`,
           "status",
           "online"
         );
+        console.log(`✅ Upgraded to online: ${userIdString}`);
       } else {
-        // Renouveler TTL si déjà online
+        // Renew online TTL
         await this.redis.expire(
           `${this.presencePrefix}:${userIdString}`,
           this.defaultTTL
         );
       }
 
+      // Update lastActivity
       await this.redis.hSet(
         `${this.userDataPrefix}:${userIdString}`,
         "lastActivity",
         new Date().toISOString()
       );
+
+      // ✅ Notification optionnelle
+      if (this.io && currentStatus !== "online") {
+        this.io.emit("user_online", {
+          userId: userIdString,
+          matricule: userData.matricule,
+        });
+      }
 
       return true;
     } catch (error) {
@@ -251,7 +302,7 @@ class OnlineUserManager {
     return sanitized;
   }
 
-  // Version optimisée pour la pagination
+  // Récupérer les utilisateurs en ligne
   async getOnlineUsers(options = { offset: 0, limit: 100 }) {
     try {
       const pattern = `${this.userDataPrefix}:*`;
@@ -289,7 +340,19 @@ class OnlineUserManager {
     }
   }
 
-  // Méthode pour récupérer les données utilisateur
+  // Compter les utilisateurs en ligne
+  async getOnlineUsersCount() {
+    try {
+      const pattern = `${this.presencePrefix}:*`;
+      const keys = await this.redis.keys(pattern);
+      return keys.length;
+    } catch (error) {
+      console.error("❌ Erreur getOnlineUsersCount:", error);
+      return 0;
+    }
+  }
+
+  // Récupérer les données utilisateur
   async getUserData(userId) {
     try {
       const data = await this.redis.hGetAll(`${this.userDataPrefix}:${userId}`);
@@ -298,6 +361,29 @@ class OnlineUserManager {
     } catch (error) {
       console.error("❌ Erreur getUserData:", error);
       return null;
+    }
+  }
+
+  // Nettoyer les utilisateurs inactifs
+  async cleanupInactiveUsers() {
+    try {
+      let cleanedCount = 0;
+      const pattern = `${this.presencePrefix}:*`;
+      const keys = await this.redis.keys(pattern);
+
+      for (const key of keys) {
+        const exists = await this.redis.exists(key);
+        if (!exists) {
+          const userId = key.replace(`${this.presencePrefix}:`, "");
+          await this.setUserOffline(userId);
+          cleanedCount++;
+        }
+      }
+
+      return cleanedCount;
+    } catch (error) {
+      console.error("❌ Erreur cleanupInactiveUsers:", error);
+      return 0;
     }
   }
 }

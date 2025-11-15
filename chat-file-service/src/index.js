@@ -46,6 +46,8 @@ const DownloadFile = require("./application/use-cases/DownloadFile");
 const CreateGroup = require("./application/use-cases/CreateGroup");
 const CreateBroadcast = require("./application/use-cases/CreateBroadcast");
 const searchOccurrences = require("./application/use-cases/SearchOccurrences");
+const MarkMessageDelivered = require("./application/use-cases/MarkMessageDelivered");
+const MarkMessageRead = require("./application/use-cases/MarkMessageRead");
 
 // Controllers
 const FileController = require("./application/controllers/FileController");

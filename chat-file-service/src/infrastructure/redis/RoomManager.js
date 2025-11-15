@@ -2,9 +2,137 @@ class RoomManager {
   constructor(redis) {
     this.redis = redis;
     this.roomPrefix = "rooms";
-    this.roomUsersPrefix = "room_users"; 
-    this.userRoomsPrefix = "user_rooms"; 
+    this.roomUsersPrefix = "room_users";
+    this.userRoomsPrefix = "user_rooms";
     this.roomDataPrefix = "room_data";
+    this.roomStatePrefix = "room_state"; // "active" | "idle" | "archived"
+    this.defaultRoomTTL = 3600; // 1 heure active
+    this.idleRoomTTL = 7200; // 2 heures idle
+    this.archivedRoomTTL = 86400; // 24h avant suppression définitive
+  }
+
+  // APPELER ÇA DANS addUserToRoom ET updateRoomActivity
+  async setRoomActive(roomName) {
+    try {
+      const roomNameString = String(roomName);
+
+      await this.redis.set(
+        `${this.roomStatePrefix}:${roomNameString}`,
+        "active",
+        { EX: this.defaultRoomTTL }
+      );
+
+      await this.redis.hSet(`${this.roomPrefix}:${roomNameString}`, {
+        lastActivity: new Date().toISOString(),
+        status: "active",
+      });
+
+      console.log(
+        `Room ${roomNameString} → active (TTL ${this.defaultRoomTTL}s)`
+      );
+      return true;
+    } catch (error) {
+      console.error("Erreur setRoomActive:", error);
+      return false;
+    }
+  }
+
+  // LISTENER D'EXPIRATION (comme OnlineUserManager)
+  async setupRoomExpirationListener() {
+    try {
+      this.roomSubscriber = this.redis.duplicate();
+      await this.roomSubscriber.connect();
+
+      await this.redis.sendCommand([
+        "CONFIG",
+        "SET",
+        "notify-keyspace-events",
+        "KEx",
+      ]);
+
+      await this.roomSubscriber.subscribe(
+        `__keyevent@0__:expired`,
+        async (message) => {
+          if (!message.startsWith(`${this.roomStatePrefix}:`)) return;
+
+          const roomName = message.split(":").slice(1).join(":");
+          console.log(`Expiration room détectée: ${roomName}`);
+
+          const currentState = await this.redis.get(
+            `${this.roomStatePrefix}:${roomName}`
+          );
+
+          if (currentState === "active") {
+            console.log(`Room ${roomName} → idle`);
+            await this.redis.set(
+              `${this.roomStatePrefix}:${roomName}`,
+              "idle",
+              { EX: this.idleRoomTTL }
+            );
+            await this.redis.hSet(
+              `${this.roomPrefix}:${roomName}`,
+              "status",
+              "idle"
+            );
+          } else if (currentState === "idle") {
+            console.log(`Room ${roomName} → archived`);
+            await this.redis.set(
+              `${this.roomStatePrefix}:${roomName}`,
+              "archived",
+              { EX: this.archivedRoomTTL }
+            );
+            await this.redis.hSet(
+              `${this.roomPrefix}:${roomName}`,
+              "status",
+              "archived"
+            );
+          } else if (currentState === "archived") {
+            console.log(`SUPPRESSION DÉFINITIVE room: ${roomName}`);
+            await this.cleanupRoomCompletely(roomName);
+          }
+        }
+      );
+
+      console.log("Listener expiration rooms configuré");
+    } catch (error) {
+      console.error("Erreur setupRoomExpirationListener:", error);
+    }
+  }
+
+  async cleanupRoomCompletely(roomName) {
+    try {
+      const roomNameString = String(roomName);
+
+      await this.redis.del(`${this.roomPrefix}:${roomNameString}`);
+      await this.redis.del(`${this.roomUsersPrefix}:${roomNameString}`);
+      await this.redis.del(`${this.roomStatePrefix}:${roomNameString}`);
+
+      const userDataKeys = await this.redis.keys(
+        `${this.roomDataPrefix}:${roomNameString}:*`
+      );
+      if (userDataKeys.length > 0) await this.redis.del(userDataKeys);
+
+      const userIds = await this.redis.sMembers(
+        `${this.roomUsersPrefix}:${roomNameString}`
+      );
+      for (const userId of userIds) {
+        await this.redis.sRem(
+          `${this.userRoomsPrefix}:${userId}`,
+          roomNameString
+        );
+      }
+
+      console.log(`Room ${roomNameString} SUPPRIMÉE COMPLÈTEMENT`);
+
+      if (this.io) {
+        this.io.emit("room_deleted", { roomName: roomNameString });
+      }
+
+      return true;
+    } catch (error) {
+      console.error("Erreur cleanupRoomCompletely:", error);
+      return false;
+    }
   }
 
   // ✅ CORRIGER addUserToRoom AVEC VALIDATION DES TYPES
@@ -25,24 +153,11 @@ class RoomManager {
         );
       }
 
-      // ✅ PRÉPARER LES DONNÉES AVEC SÉRIALISATION
       const userInfo = {
         userId: userIdString,
-        matricule: userData.matricule
-          ? String(userData.matricule)
-          : userData.nom
-          ? String(userData.nom)
-          : "Unknown",
-        joinedAt: userData.joinedAt
-          ? userData.joinedAt instanceof Date
-            ? userData.joinedAt.toISOString()
-            : String(userData.joinedAt)
-          : new Date().toISOString(),
-        lastActivity: userData.lastActivity
-          ? userData.lastActivity instanceof Date
-            ? userData.lastActivity.toISOString()
-            : String(userData.lastActivity)
-          : new Date().toISOString(),
+        matricule: userData.matricule ? String(userData.matricule) : "Unknown",
+        joinedAt: new Date().toISOString(),
+        lastActivity: new Date().toISOString(),
         conversationId: userData.conversationId
           ? String(userData.conversationId)
           : null,
@@ -85,6 +200,9 @@ class RoomManager {
         7200
       ); // 2 heures
       await this.redis.expire(`${this.roomPrefix}:${roomNameString}`, 7200);
+
+      // CRITIQUE : activer la room
+      await this.setRoomActive(roomNameString);
 
       console.log(
         `🏠 Utilisateur ${userIdString} (${userInfo.matricule}) ajouté à la room ${roomNameString}`
@@ -131,15 +249,28 @@ class RoomManager {
       const usersCount = await this.redis.sCard(
         `${this.roomUsersPrefix}:${roomNameString}`
       );
+
       if (usersCount === 0) {
-        // Supprimer la room si elle est vide
-        await this.redis.del(`${this.roomPrefix}:${roomNameString}`);
-        console.log(`🏠 Room ${roomNameString} supprimée (vide)`);
+        // Room vide → archived
+        await this.redis.set(
+          `${this.roomStatePrefix}:${roomNameString}`,
+          "archived",
+          { EX: this.archivedRoomTTL }
+        );
+        await this.redis.hSet(
+          `${this.roomPrefix}:${roomNameString}`,
+          "status",
+          "archived"
+        );
+        console.log(`Room ${roomNameString} vide → archived`);
       }
 
       console.log(
         `👋 Utilisateur ${userIdString} retiré de la room ${roomNameString}`
       );
+
+      // console.log(`🏠 Room ${roomNameString} supprimée (vide)`);
+
       return true;
     } catch (error) {
       console.error("❌ Erreur removeUserFromRoom:", error);
@@ -354,6 +485,7 @@ class RoomManager {
         "lastActivity",
         new Date().toISOString()
       );
+      await this.setRoomActive(roomNameString); // ← CRITIQUE
       return true;
     } catch (error) {
       console.error("❌ Erreur updateRoomActivity:", error);
