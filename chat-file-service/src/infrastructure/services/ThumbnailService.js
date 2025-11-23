@@ -11,6 +11,14 @@ class ThumbnailService {
       { name: "medium", width: 300, height: 300 },
       { name: "large", width: 600, height: 600 },
     ];
+    this.maxRetries = 3;
+    this.timeout = 10000; // 10s max per thumbnail
+    this.metrics = { generated: 0, errors: 0 };
+  }
+
+  // Vérif si processable (ajoutée)
+  isProcessable(mimeType) {
+    return this.isImageFile(mimeType); // Conserve ta méthode
   }
 
   async generateThumbnails(originalFilePath, originalFileName, fileId) {
@@ -21,25 +29,24 @@ class ThumbnailService {
 
       for (const size of this.thumbnailSizes) {
         const thumbnailFileName = `thumbnail_${size.name}_${fileId}_${baseFileName}.webp`;
-        const tempThumbnailPath = path.join(
-          require("os").tmpdir(),
-          thumbnailFileName
-        );
 
-        // Générer le thumbnail avec Sharp
-        await sharp(originalFilePath)
+        // Sharp avec buffer in-memory (évite /tmp)
+        const inputBuffer = await fs.readFile(originalFilePath);
+        const thumbnailBuffer = await sharp(inputBuffer)
           .resize(size.width, size.height, {
             fit: "cover",
             position: "center",
           })
           .webp({ quality: 80 })
-          .toFile(tempThumbnailPath);
+          .toBuffer();
 
-        // Upload vers MinIO/SFTP
-        const remoteThumbnailPath = await this.fileStorageService.upload(
-          tempThumbnailPath,
-          `thumbnails/${thumbnailFileName}`
-        );
+        // Upload buffer direct
+        const remoteThumbnailPath =
+          await this.fileStorageService.uploadFromBuffer(
+            thumbnailBuffer,
+            `thumbnails/${thumbnailFileName}`,
+            "image/webp"
+          );
 
         thumbnails.push({
           size: size.name,
@@ -49,16 +56,15 @@ class ThumbnailService {
           url: this.generateThumbnailUrl(remoteThumbnailPath),
           fileName: thumbnailFileName,
         });
-
-        // Nettoyer le fichier temporaire
-        await fs.unlink(tempThumbnailPath);
       }
 
       console.log(
         `✅ ${thumbnails.length} thumbnails générés pour ${originalFileName}`
       );
+      this.metrics.generated += thumbnails.length;
       return thumbnails;
     } catch (error) {
+      this.metrics.errors++;
       console.error(
         `❌ Erreur génération thumbnails pour ${originalFileName}:`,
         error
@@ -71,12 +77,10 @@ class ThumbnailService {
     const config = require("../../config/envValidator");
 
     if (config.env === "development") {
-      // MinIO URL
       return `${config.s3Endpoint}/${config.s3Bucket}/${path.basename(
         remotePath
       )}`;
     } else {
-      // SFTP - URL via le service
       return `/api/files/thumbnail/${path.basename(remotePath)}`;
     }
   }
@@ -84,32 +88,33 @@ class ThumbnailService {
   isImageFile(mimeType) {
     return (
       mimeType && mimeType.startsWith("image/") && !mimeType.includes("svg")
-    ); // SVG ne peut pas être redimensionné avec Sharp
+    );
   }
 
   async downloadImageForProcessing(remotePath) {
     try {
-      // Télécharger le fichier depuis MinIO/SFTP vers un fichier temporaire
-      const tempFilePath = path.join(
-        require("os").tmpdir(),
-        `temp_${uuidv4()}.tmp`
-      );
-      const stream = await this.fileStorageService.download(
-        remotePath,
-        path.basename(remotePath)
-      );
-
-      const writeStream = fs.createWriteStream(tempFilePath);
-      stream.pipe(writeStream);
-
-      return new Promise((resolve, reject) => {
-        writeStream.on("finish", () => resolve(tempFilePath));
-        writeStream.on("error", reject);
-      });
+      const stream = await this.fileStorageService.download(null, remotePath); // null pour localName si pas needed
+      const buffer = await streamToBuffer(stream); // Helper pour convertir stream à buffer
+      return buffer; // Retourne buffer pour processing in-memory
     } catch (error) {
       console.error("❌ Erreur téléchargement image pour traitement:", error);
       throw error;
     }
+  }
+
+  // Helper pour stream to buffer (ajouté)
+  async streamToBuffer(stream) {
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      stream.on("data", (chunk) => chunks.push(chunk));
+      stream.on("error", reject);
+      stream.on("end", () => resolve(Buffer.concat(chunks)));
+    });
+  }
+
+  // Get metrics pour monitoring (ajouté)
+  getMetrics() {
+    return this.metrics;
   }
 }
 

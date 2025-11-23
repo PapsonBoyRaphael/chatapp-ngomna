@@ -1,62 +1,41 @@
 class GetMessages {
-  constructor(messageRepository, cacheService = null) {
+  constructor(messageRepository) {
+    // ✅ SUPPRESSION : cacheService n'est pas nécessaire
+    // Le repository (CachedMessageRepository) gère tout le cache
     this.messageRepository = messageRepository;
-    this.cacheService = cacheService;
-    this.defaultTTL = 300; // 5 minutes
   }
 
   async execute(conversationId, options = {}) {
     try {
-      const { page = 1, limit = 50, userId } = options;
+      const { page = 1, limit = 50, userId, useCache = true } = options;
 
       if (!conversationId) {
         throw new Error("ID de conversation requis");
       }
 
-      // Vérifier le cache Redis via CacheService
-      let cachedMessages = null;
-      if (this.cacheService) {
-        try {
-          const cacheKey = `last_message:${conversationId}:${page}:${limit}`;
-          cachedMessages = await this.cacheService.get(cacheKey);
-          if (cachedMessages) {
-            console.log(
-              "✅ Messages récupérés depuis le cache:",
-              cachedMessages
-            );
-            return {
-              ...cachedMessages,
-              fromCache: true,
-            };
-          }
-        } catch (redisError) {
-          console.warn("⚠️ Erreur cache Redis:", redisError.message);
-        }
-      }
+      console.log(
+        `🔍 GetMessages: conversation=${conversationId}, page=${page}, limit=${limit}`
+      );
 
-      // Récupérer depuis la base
-      const messages = await this.messageRepository.findByConversation(
+      // ✅ DÉLÉGATION AU REPO : CachedMessageRepository gère cache/invalidation
+      // Le repo retourne { messages, fromCache }
+      const result = await this.messageRepository.findByConversation(
         conversationId,
         {
           page: parseInt(page),
           limit: parseInt(limit),
           userId,
+          useCache: useCache, // Option pour forcer lecture MongoDB si needed
         }
       );
 
-      console.log(messages);
+      console.log(
+        `✅ Messages récupérés: ${result.messages?.length || 0} (${
+          result.fromCache ? "cache" : "MongoDB"
+        })`
+      );
 
-      // Mettre en cache le résultat
-      if (this.cacheService) {
-        try {
-          const cacheKey = `messages:${conversationId}:${page}:${limit}`;
-          await this.cacheService.set(cacheKey, messages, this.defaultTTL);
-        } catch (redisError) {
-          console.warn("⚠️ Erreur mise en cache Redis:", redisError.message);
-        }
-      }
-
-      return messages;
+      return result;
     } catch (error) {
       console.error("❌ Erreur GetMessages use case:", error);
       throw error;

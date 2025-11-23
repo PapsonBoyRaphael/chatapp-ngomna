@@ -1,18 +1,8 @@
 const Conversation = require("../mongodb/models/ConversationModel");
 
 class MongoConversationRepository {
-  constructor(cacheService = null, kafkaProducer = null) {
-    this.cacheService = cacheService;
+  constructor(kafkaProducer = null) {
     this.kafkaProducer = kafkaProducer;
-    this.cachePrefix = "conv:";
-    this.defaultTTL = 3600;
-    this.metrics = {
-      cacheHits: 0,
-      cacheMisses: 0,
-      errors: 0,
-      kafkaEvents: 0,
-      kafkaErrors: 0,
-    };
   }
 
   async save(conversationData) {
@@ -221,19 +211,6 @@ class MongoConversationRepository {
 
       const processingTime = Date.now() - startTime;
 
-      // ✅ CACHE REDIS AVEC GESTION D'ERREUR
-      if (this.cacheService) {
-        try {
-          await this._cacheConversation(savedConversation);
-          console.log(
-            `💾 Conversation mise en cache: ${savedConversation._id}`
-          );
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur cache conversation:", cacheError.message);
-          // ✅ NE PAS FAIRE ÉCHOUER LA SAUVEGARDE SI LE CACHE ÉCHOUE
-        }
-      }
-
       // ✅ KAFKA AVEC GESTION D'ERREUR
       if (this.kafkaProducer) {
         try {
@@ -294,29 +271,6 @@ class MongoConversationRepository {
     const startTime = Date.now();
 
     try {
-      // Cache Redis
-      if (this.cacheService && useCache) {
-        try {
-          const cached = await this._getCachedConversation(conversationId);
-          if (cached) {
-            this.metrics.cacheHits++;
-            console.log(
-              `📦 Conversation depuis cache: ${conversationId} (${
-                Date.now() - startTime
-              }ms)`
-            );
-            return cached;
-          } else {
-            this.metrics.cacheMisses++;
-          }
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur lecture cache conversation:",
-            cacheError.message
-          );
-        }
-      }
-
       this.metrics.dbQueries++;
       const conversation = await Conversation.findById(conversationId).lean();
 
@@ -355,26 +309,8 @@ class MongoConversationRepository {
   async findByParticipant(userId, options = {}) {
     const { page = 1, limit = 20, type = null, useCache = true } = options;
     const startTime = Date.now();
-    const cacheKey = `${this.cachePrefix}participant:${userId}:p${page}:l${limit}:t${type}`;
 
     try {
-      if (this.cacheService && useCache) {
-        try {
-          const cached = await this.cacheService.get(cacheKey);
-          if (cached) {
-            this.metrics.cacheHits++;
-            return { ...cached, fromCache: true };
-          } else {
-            this.metrics.cacheMisses++;
-          }
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur lecture cache conversations:",
-            cacheError.message
-          );
-        }
-      }
-
       // Correction ici : matcher string et number
       const filter = {
         participants: {
@@ -466,15 +402,6 @@ class MongoConversationRepository {
 
       const processingTime = Date.now() - startTime;
 
-      // Invalider cache
-      if (this.cacheService) {
-        try {
-          await this._invalidateConversationCaches(conversationId);
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur invalidation cache:", cacheError.message);
-        }
-      }
-
       // Kafka
       if (this.kafkaProducer) {
         try {
@@ -499,69 +426,6 @@ class MongoConversationRepository {
       this.metrics.errors++;
       console.error(`❌ Erreur update last message ${conversationId}:`, error);
       throw error;
-    }
-  }
-
-  // ===============================
-  // MÉTHODES PRIVÉES - CACHE
-  // ===============================
-
-  async _cacheConversation(conversation) {
-    if (!this.cacheService) return false;
-    try {
-      await this.cacheService.set(
-        `${this.cachePrefix}${conversation._id}`,
-        conversation,
-        this.defaultTTL
-      );
-      return true;
-    } catch (error) {
-      console.warn(
-        `⚠️ Erreur cache conversation ${conversation._id}:`,
-        error.message
-      );
-      return false;
-    }
-  }
-
-  async _getCachedConversation(conversationId) {
-    if (!this.cacheService) return null;
-    try {
-      const data = await this.cacheService.get(
-        `${this.cachePrefix}${conversationId}`
-      );
-      return data;
-    } catch (error) {
-      console.warn(`⚠️ Erreur lecture cache ${conversationId}:`, error.message);
-      return null;
-    }
-  }
-
-  async _invalidateConversationCache(conversationId) {
-    if (!this.cacheService) return false;
-    try {
-      await this.cacheService.del(`${this.cachePrefix}${conversationId}`);
-      console.log(`🗑️ Cache conversation invalidé: ${conversationId}`);
-      return true;
-    } catch (error) {
-      console.warn(`⚠️ Erreur invalidation ${conversationId}:`, error.message);
-      return false;
-    }
-  }
-
-  async _invalidateParticipantConversationsCache(userId) {
-    if (!this.cacheService) return false;
-    try {
-      const pattern = `${this.cachePrefix}participant:${userId}:*`;
-      await this.cacheService.del(pattern);
-      console.log(`🗑️ Cache participant invalidé: ${userId}`);
-      return true;
-    } catch (error) {
-      console.warn(
-        `⚠️ Erreur invalidation participant ${userId}:`,
-        error.message
-      );
-      return false;
     }
   }
 
@@ -657,37 +521,6 @@ class MongoConversationRepository {
       // ✅ NE PAS FAIRE ÉCHOUER L'OPÉRATION PRINCIPALE
       return false;
     }
-  }
-
-  // ✅ AJOUTER UNE MÉTHODE POUR TESTER L'API KAFKA
-  _testKafkaAPI() {
-    if (!this.kafkaProducer) {
-      console.log("❌ Pas de producer Kafka");
-      return false;
-    }
-
-    const methods = {
-      // API MessageProducer (wrapper)
-      publishMessage: typeof this.kafkaProducer.publishMessage === "function",
-      healthCheck: typeof this.kafkaProducer.healthCheck === "function",
-      ensureConnected: typeof this.kafkaProducer.ensureConnected === "function",
-
-      // API KafkaJS native
-      send: typeof this.kafkaProducer.send === "function",
-      connect: typeof this.kafkaProducer.connect === "function",
-      disconnect: typeof this.kafkaProducer.disconnect === "function",
-
-      // Propriétés
-      isConnected: this.kafkaProducer.isConnected,
-      isEnabled: this.kafkaProducer.isEnabled,
-      topicName: this.kafkaProducer.topicName,
-
-      // Informations
-      constructorName: this.kafkaProducer.constructor?.name || "unknown",
-    };
-
-    console.log("🔍 API Kafka disponible:", methods);
-    return methods;
   }
 
   async findById(conversationId) {
@@ -1020,32 +853,6 @@ class MongoConversationRepository {
     return fixed;
   }
 
-  async _invalidateConversationCaches(conversationId) {
-    if (!this.cacheService) return;
-
-    const patterns = [
-      `${this.cachePrefix}${conversationId}`,
-      `${this.cachePrefix}conv:${conversationId}:*`,
-      `${this.cachePrefix}stats:${conversationId}`,
-      `messages:${conversationId}:*`,
-      `unread:*:${conversationId}`,
-    ];
-
-    for (const pattern of patterns) {
-      try {
-        const keys = await this.cacheService.keys(pattern);
-        if (keys && keys.length > 0) {
-          await this.cacheService.del(keys);
-        }
-      } catch (error) {
-        console.warn(
-          `⚠️ Erreur invalidation conversation ${pattern}:`,
-          error.message
-        );
-      }
-    }
-  }
-
   async searchConversations(query, options = {}) {
     const {
       userId,
@@ -1057,26 +864,8 @@ class MongoConversationRepository {
     } = options;
 
     const startTime = Date.now();
-    const cacheKey = `${this.cachePrefix}searchConv:${JSON.stringify({
-      query,
-      options,
-    })}`;
 
     try {
-      if (this.cacheService && useCache) {
-        try {
-          const cached = await this.cacheService.get(cacheKey);
-          if (cached) {
-            return JSON.parse(cached);
-          }
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur cache recherche conversation:",
-            cacheError.message
-          );
-        }
-      }
-
       // Filtre principal
       let filter = {};
       if (userId) filter.participants = userId;
@@ -1116,17 +905,6 @@ class MongoConversationRepository {
         query,
         searchTime: Date.now() - startTime,
       };
-
-      if (this.cacheService && useCache) {
-        try {
-          await this.cacheService.setex(cacheKey, 600, JSON.stringify(result));
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur cache recherche conversation:",
-            cacheError.message
-          );
-        }
-      }
 
       return result;
     } catch (error) {
@@ -1252,15 +1030,6 @@ class MongoConversationRepository {
           userId,
           conversationId,
         });
-
-        // Invalider les caches Redis associés
-        if (this.cacheService) {
-          try {
-            await this._invalidateConversationCaches(conversationId);
-          } catch (cacheError) {
-            console.warn("⚠️ Erreur invalidation cache:", cacheError.message);
-          }
-        }
       }
 
       return updateResult;

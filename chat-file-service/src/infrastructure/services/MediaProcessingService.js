@@ -20,12 +20,23 @@ class MediaProcessingService {
       VIDEO: ["mp4", "avi", "mov", "mkv", "webm", "flv", "wmv", "mpeg"],
       DOCUMENT: ["pdf", "doc", "docx", "txt", "rtf", "odt"],
     };
+    this.metrics = { processed: 0, errors: 0 };
+  }
+
+  // Validation buffer/MIME
+  validateBuffer(buffer, mimeType) {
+    if (buffer.length > this.maxBufferSize)
+      throw new Error("Buffer trop grand");
+    if (!this.isSupportedMimeType(mimeType))
+      throw new Error("Type MIME non supporté");
   }
 
   /**
    * Traite un fichier et extrait ses métadonnées (SANS thumbnails)
    */
   async processFile(buffer, originalName, mimeType) {
+    this.validateBuffer(buffer, mimeType);
+
     try {
       console.log(`🔍 Traitement du fichier: ${originalName}`);
       const fileType = this.getFileType(mimeType, originalName);
@@ -40,7 +51,11 @@ class MediaProcessingService {
         content: {},
       };
 
-      // Traitement spécifique selon le type
+      // Traitement spécifique selon le type avec timeout
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("Timeout processing")), this.timeout)
+      );
+
       switch (fileType) {
         case "AUDIO":
           metadata = await this.processAudio(buffer, metadata);
@@ -58,6 +73,8 @@ class MediaProcessingService {
           metadata = await this.processOtherFile(buffer, metadata);
       }
 
+      metadata = await Promise.race([timeoutPromise, processingPromise]);
+
       // Générer les checksums depuis le buffer
       metadata.technical.checksums = {
         md5: crypto.createHash("md5").update(buffer).digest("hex"),
@@ -65,10 +82,12 @@ class MediaProcessingService {
         sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
       };
 
+      this.metrics.processed++;
       return metadata;
     } catch (error) {
       console.error(`❌ Erreur traitement fichier ${originalName}:`, error);
-      throw error;
+      this.metrics.errors++;
+      return { error: error.message, technical: {}, content: {} }; // Fallback metadata vide
     }
   }
 
@@ -622,6 +641,10 @@ class MediaProcessingService {
         `Impossible d'obtenir les infos du fichier: ${error.message}`
       );
     }
+  }
+
+  getMetrics() {
+    return this.metrics;
   }
 }
 

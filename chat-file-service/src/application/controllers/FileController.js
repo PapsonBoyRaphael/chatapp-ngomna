@@ -25,6 +25,8 @@ class FileController {
     this.searchOccurrencesUseCase = searchOccurrencesUseCase;
     this.mediaProcessingService = mediaProcessingService;
 
+    this.maxListLimit = 50; // Limit pour lists/multiple
+
     console.log("✅ FileController initialisé avec:", {
       uploadFileUseCase: !!this.uploadFileUseCase,
       getFileUseCase: !!this.getFileUseCase,
@@ -720,6 +722,32 @@ class FileController {
     }
   }
 
+  async getThumbnail(req, res) {
+    const { fileId } = req.params;
+    const { size = "medium" } = req.query;
+    const userId = req.user?.id;
+
+    const file = await this.getFileUseCase.execute(fileId, userId);
+    if (!file || !file.metadata.processing.thumbnailGenerated) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Thumbnail non disponible" });
+    }
+
+    const thumbnailUrl = file.metadata.processing.thumbnails.find(
+      (t) => t.size === size
+    )?.url;
+    if (!thumbnailUrl) throw new Error("Taille thumbnail invalide");
+
+    // Stream le thumbnail
+    const thumbnailStream = await this.fileStorageService.download(
+      null,
+      thumbnailUrl
+    );
+    res.setHeader("Content-Type", "image/webp");
+    thumbnailStream.pipe(res);
+  }
+
   // ================================
   // MÉTHODES PRIVÉES
   // ================================
@@ -735,6 +763,10 @@ class FileController {
   _canPreviewFile(file) {
     const previewableTypes = ["IMAGE", "PDF", "TEXT"];
     return previewableTypes.includes(file.metadata?.technical?.fileType);
+  }
+
+  _addE2EENote(res) {
+    res.setHeader("X-E2EE", "encrypted"); // Ou note in JSON si needed
   }
 }
 

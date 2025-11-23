@@ -6,20 +6,14 @@ class MongoFileRepository {
   constructor(
     redisClient = null,
     kafkaProducer = null,
-    thumbnailService = null,
-    cacheService = null // ✅ Injection du cacheService
+    thumbnailService = null
   ) {
     this.redisClient = redisClient;
     this.kafkaProducer = kafkaProducer;
     this.thumbnailService = thumbnailService;
-    this.cacheService = cacheService;
-    this.cachePrefix = "file:";
-    this.defaultTTL = 7200;
     this.maxRetries = 3;
 
     this.metrics = {
-      cacheHits: 0,
-      cacheMisses: 0,
       kafkaEvents: 0,
       kafkaErrors: 0,
       dbQueries: 0,
@@ -95,50 +89,14 @@ class MongoFileRepository {
             error
           );
         });
-      }
 
-      // ✅ CACHE REDIS AVEC CacheService
-      if (this.cacheService) {
-        try {
-          await this.cacheService.set(
-            `${this.cachePrefix}${savedFile._id}`,
-            savedFile,
-            this.defaultTTL
-          );
-          console.log(`💾 Fichier mis en cache: ${savedFile._id}`);
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur cache fichier:", cacheError.message);
-        }
-      } else {
-        console.log(`💾 Fichier sauvegardé sans cache: ${savedFile._id}`);
-      }
-
-      // ✅ Invalider le cache de la liste des fichiers de l'uploader
-      if (this.cacheService && savedFile.uploadedBy) {
-        try {
-          await this.cacheService.del(
-            `file:uploader:${savedFile.uploadedBy}:*`
-          );
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur invalidation cache liste fichiers uploader:",
-            cacheError.message
-          );
-        }
-      }
-
-      // ✅ Invalider le cache de la liste des fichiers de la conversation
-      if (this.cacheService && savedFile.conversationId) {
-        try {
-          await this.cacheService.del(
-            `file:conv:${savedFile.conversationId}:*`
-          );
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur invalidation cache liste fichiers conversation:",
-            cacheError.message
-          );
-        }
+        await this.kafkaProducer.publishMessage({
+          eventType: "GENERATE_THUMBNAILS",
+          fileId: savedFile._id.toString(),
+          originalPath: savedFile.path, // Ou remotePath
+          mimeType: savedFile.mimeType,
+          originalName: savedFile.originalName,
+        });
       }
 
       // ✅ KAFKA AVEC VÉRIFICATION DE LA MÉTHODE
@@ -176,26 +134,6 @@ class MongoFileRepository {
     const startTime = Date.now();
 
     try {
-      // 🚀 CACHE REDIS
-      if (this.cacheService && useCache) {
-        try {
-          const cached = await this.cacheService.get(
-            `${this.cachePrefix}${fileId}`
-          );
-          if (cached) {
-            this.metrics.cacheHits++;
-            console.log(
-              `📦 Fichier depuis cache: ${fileId} (${Date.now() - startTime}ms)`
-            );
-            return cached;
-          } else {
-            this.metrics.cacheMisses++;
-          }
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur lecture cache fichier:", cacheError.message);
-        }
-      }
-
       this.metrics.dbQueries++;
       const file = await FileModel.findById(fileId).lean();
 
@@ -204,19 +142,6 @@ class MongoFileRepository {
       }
 
       const processingTime = Date.now() - startTime;
-
-      // Mettre en cache
-      if (this.cacheService && useCache) {
-        try {
-          await this.cacheService.set(
-            `${this.cachePrefix}${fileId}`,
-            file,
-            this.defaultTTL
-          );
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur mise en cache fichier:", cacheError.message);
-        }
-      }
 
       console.log(`🔍 Fichier trouvé: ${fileId} (${processingTime}ms)`);
       return file;
@@ -230,26 +155,8 @@ class MongoFileRepository {
   async findByConversation(conversationId, options = {}) {
     const { page = 1, limit = 20, type = null, useCache = true } = options;
     const startTime = Date.now();
-    const cacheKey = `${this.cachePrefix}conv:${conversationId}:p${page}:l${limit}:t${type}`;
 
     try {
-      if (this.cacheService && useCache) {
-        try {
-          const cached = await this.cacheService.get(cacheKey);
-          if (cached) {
-            this.metrics.cacheHits++;
-            return { ...cached, fromCache: true };
-          } else {
-            this.metrics.cacheMisses++;
-          }
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur cache fichiers conversation:",
-            cacheError.message
-          );
-        }
-      }
-
       const filter = {
         conversationId,
         status: "COMPLETED",
@@ -289,17 +196,6 @@ class MongoFileRepository {
 
       const processingTime = Date.now() - startTime;
 
-      if (this.cacheService && useCache) {
-        try {
-          await this.cacheService.set(cacheKey, result, this.defaultTTL);
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur cache fichiers conversation:",
-            cacheError.message
-          );
-        }
-      }
-
       console.log(
         `🔍 Fichiers conversation: ${conversationId} (${files.length} files, ${processingTime}ms)`
       );
@@ -320,23 +216,6 @@ class MongoFileRepository {
     const cacheKey = `${this.cachePrefix}uploader:${uploaderId}:p${page}:l${limit}:t${type}`;
 
     try {
-      if (this.cacheService && useCache) {
-        try {
-          const cached = await this.cacheService.get(cacheKey);
-          if (cached) {
-            this.metrics.cacheHits++;
-            return { ...cached, fromCache: true };
-          } else {
-            this.metrics.cacheMisses++;
-          }
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur cache fichiers utilisateur:",
-            cacheError.message
-          );
-        }
-      }
-
       const filter = {
         uploadedBy: uploaderId,
         status: { $ne: "DELETED" },
@@ -380,17 +259,6 @@ class MongoFileRepository {
       };
 
       const processingTime = Date.now() - startTime;
-
-      if (this.cacheService && useCache) {
-        try {
-          await this.cacheService.set(cacheKey, result, this.defaultTTL);
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur cache fichiers utilisateur:",
-            cacheError.message
-          );
-        }
-      }
 
       console.log(
         `🔍 Fichiers utilisateur: ${uploaderId} (${files.length} files, ${processingTime}ms)`
@@ -448,28 +316,6 @@ class MongoFileRepository {
       }
 
       const processingTime = Date.now() - startTime;
-
-      // 🗑️ INVALIDER CACHE
-      if (this.cacheService) {
-        try {
-          await this.cacheService.del(`${this.cachePrefix}${fileId}`);
-          if (file.conversationId) {
-            await this.cacheService.del(
-              `${this.cachePrefix}conv:${file.conversationId}:*`
-            );
-          }
-          if (userId) {
-            await this.cacheService.del(
-              `${this.cachePrefix}uploader:${userId}:*`
-            );
-          }
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur invalidation download count:",
-            cacheError.message
-          );
-        }
-      }
 
       // 🚀 KAFKA
       if (this.kafkaProducer) {
@@ -536,23 +382,6 @@ class MongoFileRepository {
 
       const processingTime = Date.now() - startTime;
 
-      // 🗑️ INVALIDER CACHE
-      if (this.cacheService) {
-        try {
-          await this.cacheService.del(`${this.cachePrefix}${fileId}`);
-          if (file.conversationId) {
-            await this.cacheService.del(
-              `${this.cachePrefix}conv:${file.conversationId}:*`
-            );
-          }
-          await this.cacheService.del(
-            `${this.cachePrefix}uploader:${file.uploadedBy}`
-          );
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur invalidation completed:", cacheError.message);
-        }
-      }
-
       // 🚀 KAFKA
       if (this.kafkaProducer) {
         try {
@@ -607,23 +436,6 @@ class MongoFileRepository {
       }
 
       const processingTime = Date.now() - startTime;
-
-      // 🗑️ INVALIDER CACHE
-      if (this.cacheService) {
-        try {
-          await this.cacheService.del(`${this.cachePrefix}${fileId}`);
-          if (file.conversationId) {
-            await this.cacheService.del(
-              `${this.cachePrefix}conv:${file.conversationId}:*`
-            );
-          }
-          await this.cacheService.del(
-            `${this.cachePrefix}uploader:${file.uploadedBy}`
-          );
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur invalidation failed:", cacheError.message);
-        }
-      }
 
       // 🚀 KAFKA
       if (this.kafkaProducer) {
@@ -680,23 +492,6 @@ class MongoFileRepository {
 
       const processingTime = Date.now() - startTime;
 
-      // 🗑️ INVALIDER TOUS LES CACHES LIÉS
-      if (this.cacheService) {
-        try {
-          await this.cacheService.del(`${this.cachePrefix}${fileId}`);
-          if (file.conversationId) {
-            await this.cacheService.del(
-              `${this.cachePrefix}conv:${file.conversationId}:*`
-            );
-          }
-          await this.cacheService.del(
-            `${this.cachePrefix}uploader:${file.uploadedBy}`
-          );
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur invalidation delete:", cacheError.message);
-        }
-      }
-
       // 🚀 KAFKA
       if (this.kafkaProducer) {
         try {
@@ -735,25 +530,8 @@ class MongoFileRepository {
     } = options;
 
     const startTime = Date.now();
-    const cacheKey = `${this.cachePrefix}search:${JSON.stringify(
-      query
-    )}:p${page}:l${limit}:s${sortBy}${sortOrder}`;
 
     try {
-      if (this.cacheService && useCache) {
-        try {
-          const cached = await this.cacheService.get(cacheKey);
-          if (cached) {
-            this.metrics.cacheHits++;
-            return cached;
-          } else {
-            this.metrics.cacheMisses++;
-          }
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur cache recherche:", cacheError.message);
-        }
-      }
-
       let filter = { status: { $ne: "DELETED" } };
       if (query && typeof query === "string") {
         filter.$text = { $search: query };
@@ -789,14 +567,6 @@ class MongoFileRepository {
         searchTime: Date.now() - startTime,
       };
 
-      if (this.cacheService && useCache) {
-        try {
-          await this.cacheService.set(cacheKey, result, 3600);
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur cache recherche:", cacheError.message);
-        }
-      }
-
       console.log(
         `🔍 Recherche fichiers: ${files.length} résultats (${result.searchTime}ms)`
       );
@@ -810,23 +580,8 @@ class MongoFileRepository {
 
   async getFileStatistics(filter = {}) {
     const startTime = Date.now();
-    const cacheKey = `${this.cachePrefix}stats:${JSON.stringify(filter)}`;
 
     try {
-      if (this.cacheService) {
-        try {
-          const cached = await this.cacheService.get(cacheKey);
-          if (cached) {
-            this.metrics.cacheHits++;
-            return cached;
-          } else {
-            this.metrics.cacheMisses++;
-          }
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur cache stats:", cacheError.message);
-        }
-      }
-
       this.metrics.dbQueries++;
       const stats = await FileModel.aggregate([
         { $match: { status: { $ne: "DELETED" }, ...filter } },
@@ -918,14 +673,6 @@ class MongoFileRepository {
       result.generatedAt = new Date().toISOString();
       result.processingTime = `${processingTime}ms`;
 
-      if (this.cacheService) {
-        try {
-          await this.cacheService.set(cacheKey, result, 3600);
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur cache stats:", cacheError.message);
-        }
-      }
-
       console.log(`📊 Statistiques calculées (${processingTime}ms)`);
       return result;
     } catch (error) {
@@ -952,17 +699,6 @@ class MongoFileRepository {
       );
 
       const processingTime = Date.now() - startTime;
-
-      // 🗑️ INVALIDER CACHES
-      if (this.cacheService) {
-        try {
-          for (const fileId of fileIds) {
-            await this.cacheService.del(`${this.cachePrefix}${fileId}`);
-          }
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur invalidation bulk:", cacheError.message);
-        }
-      }
 
       // 🚀 KAFKA
       if (this.kafkaProducer) {
@@ -992,76 +728,6 @@ class MongoFileRepository {
   // ================================
   // MÉTHODES PRIVÉES (UTILITAIRES)
   // ================================
-
-  async _cacheFile(file) {
-    if (!this.cacheService) return false;
-    try {
-      await this.cacheService.set(
-        `${this.cachePrefix}${file._id}`,
-        file,
-        this.defaultTTL
-      );
-      return true;
-    } catch (error) {
-      console.warn(`⚠️ Erreur cache fichier ${file._id}:`, error.message);
-      return false;
-    }
-  }
-
-  async _getCachedFile(fileId) {
-    if (!this.cacheService) return null;
-    try {
-      const data = await this.cacheService.get(`${this.cachePrefix}${fileId}`);
-      return data;
-    } catch (error) {
-      console.warn(`⚠️ Erreur lecture cache ${fileId}:`, error.message);
-      return null;
-    }
-  }
-
-  async _invalidateFileCache(fileId) {
-    if (!this.cacheService) return false;
-    try {
-      await this.cacheService.del(`${this.cachePrefix}${fileId}`);
-      console.log(`🗑️ Cache invalidé: ${fileId}`);
-      return true;
-    } catch (error) {
-      console.warn(`⚠️ Erreur invalidation ${fileId}:`, error.message);
-      return false;
-    }
-  }
-
-  async _invalidateConversationFilesCache(conversationId) {
-    if (!this.cacheService) return false;
-    try {
-      const pattern = `${this.cachePrefix}conv:${conversationId}:*`;
-      await this.cacheService.del(pattern);
-      console.log(`🗑️ Cache conversation invalidé: ${conversationId}`);
-      return true;
-    } catch (error) {
-      console.warn(
-        `⚠️ Erreur invalidation conversation ${conversationId}:`,
-        error.message
-      );
-      return false;
-    }
-  }
-
-  async _invalidateUserFilesCache(userId) {
-    if (!this.cacheService) return false;
-    try {
-      const pattern = `${this.cachePrefix}uploader:${userId}:*`;
-      await this.cacheService.del(pattern);
-      console.log(`🗑️ Cache utilisateur invalidé: ${userId}`);
-      return true;
-    } catch (error) {
-      console.warn(
-        `⚠️ Erreur invalidation utilisateur ${userId}:`,
-        error.message
-      );
-      return false;
-    }
-  }
 
   _formatFileSize(bytes) {
     if (bytes === 0) return "0 B";
@@ -1117,14 +783,6 @@ class MongoFileRepository {
   getMetrics() {
     return {
       ...this.metrics,
-      cacheHitRate:
-        this.metrics.cacheHits + this.metrics.cacheMisses > 0
-          ? (
-              (this.metrics.cacheHits /
-                (this.metrics.cacheHits + this.metrics.cacheMisses)) *
-              100
-            ).toFixed(2) + "%"
-          : "0%",
       kafkaSuccessRate:
         this.metrics.kafkaEvents + this.metrics.kafkaErrors > 0
           ? (
@@ -1139,8 +797,6 @@ class MongoFileRepository {
 
   resetMetrics() {
     this.metrics = {
-      cacheHits: 0,
-      cacheMisses: 0,
       kafkaEvents: 0,
       kafkaErrors: 0,
       dbQueries: 0,
@@ -1154,32 +810,6 @@ class MongoFileRepository {
       timestamp: new Date().toISOString(),
       checks: {},
     };
-
-    // Test Redis
-    if (this.redisClient) {
-      try {
-        await this.redisClient.ping();
-        health.checks.redis = "healthy";
-      } catch (error) {
-        health.checks.redis = "unhealthy";
-        health.status = "degraded";
-      }
-    } else {
-      health.checks.redis = "disabled";
-    }
-
-    // Test Kafka
-    if (this.kafkaProducer) {
-      try {
-        // Test basique de connectivité
-        health.checks.kafka = "healthy"; // Améliorer avec un vrai test
-      } catch (error) {
-        health.checks.kafka = "unhealthy";
-        health.status = "degraded";
-      }
-    } else {
-      health.checks.kafka = "disabled";
-    }
 
     // Test MongoDB
     try {
@@ -1248,11 +878,6 @@ class MongoFileRepository {
         { $set: updateData },
         { new: true }
       );
-
-      // Invalider le cache
-      if (this.cacheService) {
-        await this.cacheService.del(`${this.cachePrefix}${fileId}`);
-      }
 
       // Publier événement Kafka
       if (this.kafkaProducer) {

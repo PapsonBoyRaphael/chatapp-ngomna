@@ -2,10 +2,25 @@ const Minio = require("minio");
 const Client = require("ssh2-sftp-client");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
+const sharp = require("sharp");
+const ffmpeg = require("fluent-ffmpeg");
 
 class FileStorageService {
   constructor(config) {
     this.env = config.env || "development";
+    this.encrypt = config.encrypt || false; // Active chiffrement (assume client-side primary)
+    this.encryptionKey = config.encryptionKey || crypto.randomBytes(32); // Clé si server-side fallback
+    this.compression = config.compression || true; // Active compression
+    this.maxFileSize = config.maxFileSize || 100 * 1024 * 1024; // 100MB limit
+    this.allowedMimes = config.allowedMimes || [
+      "image/*",
+      "video/*",
+      "audio/*",
+      "application/pdf",
+    ];
+    this.maxRetries = 3;
+
     if (this.env === "development") {
       this.minioClient = new Minio.Client({
         endPoint: config.s3Endpoint.replace(/^https?:\/\//, "").split(":")[0],
@@ -16,137 +31,186 @@ class FileStorageService {
       });
       this.bucket = config.s3Bucket;
     } else if (this.env === "production") {
-      this.sftpConfig = config.sftpConfig;
+      this.sftpConfig = config.sftpConfig; // Gardé comme demandé
     }
+
+    this.metrics = { uploads: 0, downloads: 0, deletes: 0, errors: 0 };
   }
 
-  // Upload vers MinIO
-  async uploadToMinio(localFilePath, remoteFileName) {
-    // S'assurer que le bucket existe
-    const exists = await this.minioClient.bucketExists(this.bucket);
-    if (!exists) {
-      await this.minioClient.makeBucket(this.bucket);
-    }
-    await this.minioClient.fPutObject(
-      this.bucket,
-      remoteFileName,
-      localFilePath
-    );
-    return `${this.bucket}/${remoteFileName}`;
+  // Validation générique
+  async validateFile(buffer, mimeType) {
+    if (buffer.length > this.maxFileSize) throw new Error("Fichier trop grand");
+    if (
+      !this.allowedMimes.some((m) =>
+        mimeType.match(new RegExp(m.replace("*", ".*")))
+      )
+    )
+      throw new Error("Type MIME non autorisé");
   }
 
-  // Upload via SFTP (inchangé)
-  async uploadToSFTP(localFilePath, remoteFileName) {
-    const sftp = new Client();
+  // Chiffrement buffer (server-side fallback ; prefer client-side)
+  encryptBuffer(buffer) {
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv("aes-256-gcm", this.encryptionKey, iv);
+    const encrypted = Buffer.concat([cipher.update(buffer), cipher.final()]);
+    return Buffer.concat([iv, cipher.getAuthTag(), encrypted]);
+  }
+
+  // Déchiffrement stream (server-side fallback)
+  decryptStream(stream) {
+    // Logique pour extraire IV/tag du stream (assume prefixed)
+    // Implémente avec ReadableStream pour full async
+    // Ex. simplifié :
+    const decipher = crypto.createDecipheriv(
+      "aes-256-gcm",
+      this.encryptionKey,
+      iv
+    ); // iv from metadata or prefix
+    return stream.pipe(decipher);
+  }
+
+  // Compression si needed
+  async compressBuffer(buffer, mimeType) {
+    if (!this.compression) return buffer;
+    if (mimeType.startsWith("image/"))
+      return await sharp(buffer).webp({ quality: 80 }).toBuffer();
+    if (mimeType.startsWith("video/")) {
+      return new Promise((resolve, reject) => {
+        const inputPath = path.join("/tmp", `input-${Date.now()}`);
+        fs.writeFile(inputPath, buffer, (err) => {
+          if (err) return reject(err);
+          ffmpeg(inputPath)
+            .format("mp4")
+            .videoBitrate(1000)
+            .on("end", (stdout, stderr) => {
+              fs.readFile(outputPath, (err, compressed) => {
+                fs.unlink(inputPath);
+                fs.unlink(outputPath);
+                if (err) reject(err);
+                resolve(compressed);
+              });
+            })
+            .on("error", reject)
+            .save((outputPath = path.join("/tmp", `output-${Date.now()}.mp4`)));
+        });
+      });
+    }
+    return buffer;
+  }
+
+  // Upload générique avec retries
+  async upload(localFilePath, remoteFileName, retry = 0) {
     try {
-      await sftp.connect(this.sftpConfig);
-      await sftp.put(
-        localFilePath,
-        path.posix.join(this.sftpConfig.remotePath, remoteFileName)
-      );
-      await sftp.end();
-      return `${this.sftpConfig.remotePath}/${remoteFileName}`;
+      if (this.env === "development") {
+        const exists = await this.minioClient.bucketExists(this.bucket);
+        if (!exists) await this.minioClient.makeBucket(this.bucket);
+        await this.minioClient.fPutObject(
+          this.bucket,
+          remoteFileName,
+          localFilePath
+        );
+      } else if (this.env === "production") {
+        const sftp = new Client();
+        await sftp.connect(this.sftpConfig);
+        await sftp.put(
+          localFilePath,
+          path.posix.join(this.sftpConfig.remotePath, remoteFileName)
+        );
+        await sftp.end();
+      }
+      this.metrics.uploads++;
+      return this.env === "development"
+        ? `${this.bucket}/${remoteFileName}`
+        : `${this.sftpConfig.remotePath}/${remoteFileName}`;
     } catch (err) {
-      await sftp.end();
+      this.metrics.errors++;
+      if (retry < this.maxRetries)
+        return this.upload(localFilePath, remoteFileName, retry + 1);
       throw err;
     }
   }
 
-  // Méthode générique
-  async upload(localFilePath, remoteFileName) {
-    if (this.env === "development") {
-      return this.uploadToMinio(localFilePath, remoteFileName);
-    } else if (this.env === "production") {
-      return this.uploadToSFTP(localFilePath, remoteFileName);
+  // Upload from buffer avec validation/chiffrement/compression
+  async uploadFromBuffer(buffer, remoteFileName, mimeType) {
+    await this.validateFile(buffer, mimeType);
+    buffer = await this.compressBuffer(buffer, mimeType);
+    if (this.encrypt) buffer = this.encryptBuffer(buffer);
+
+    try {
+      if (this.env === "development") {
+        const exists = await this.minioClient.bucketExists(this.bucket);
+        if (!exists) await this.minioClient.makeBucket(this.bucket);
+        await this.minioClient.putObject(
+          this.bucket,
+          remoteFileName,
+          buffer,
+          buffer.length,
+          { "Content-Type": mimeType }
+        );
+        return `${this.bucket}/${remoteFileName}`;
+      } else if (this.env === "production") {
+        const sftp = new Client();
+        await sftp.connect(this.sftpConfig);
+        await sftp.put(
+          buffer,
+          path.posix.join(this.sftpConfig.remotePath, remoteFileName)
+        ); // Buffer direct !
+        await sftp.end();
+        return `${this.sftpConfig.remotePath}/${remoteFileName}`;
+      }
+    } catch (err) {
+      throw err;
     }
-    throw new Error("Environnement inconnu");
   }
 
-  // Télécharger un fichier (retourne un stream)
+  // Download avec déchiffrement
   async download(localFileName, remoteFileName) {
-    if (this.env === "development") {
-      // MinIO
-      return await this.minioClient.getObject(this.bucket, remoteFileName);
-    } else if (this.env === "production") {
-      // SFTP
-      const sftp = new Client();
-      try {
+    try {
+      let stream;
+      if (this.env === "development") {
+        stream = await this.minioClient.getObject(this.bucket, remoteFileName);
+      } else if (this.env === "production") {
+        const sftp = new Client();
         await sftp.connect(this.sftpConfig);
-        const tmpPath = path.join("/tmp", remoteFileName);
-        await sftp.fastGet(
-          path.posix.join(this.sftpConfig.remotePath, remoteFileName),
-          tmpPath
+        stream = await sftp.createReadStream(
+          path.posix.join(this.sftpConfig.remotePath, remoteFileName)
         );
         await sftp.end();
-        return fs.createReadStream(tmpPath);
-      } catch (err) {
-        await sftp.end();
-        throw err;
       }
+      if (this.encrypt) stream = this.decryptStream(stream);
+      this.metrics.downloads++;
+      return stream;
+    } catch (err) {
+      this.metrics.errors++;
+      throw err;
     }
-    throw new Error("Environnement inconnu");
   }
 
-  // Supprimer un fichier distant
-  async delete(remoteFileName) {
-    if (this.env === "development") {
-      // MinIO
-      await this.minioClient.removeObject(this.bucket, remoteFileName);
-      return true;
-    } else if (this.env === "production") {
-      // SFTP
-      const sftp = new Client();
-      try {
+  // Delete avec retries
+  async delete(remoteFileName, retry = 0) {
+    try {
+      if (this.env === "development") {
+        await this.minioClient.removeObject(this.bucket, remoteFileName);
+      } else if (this.env === "production") {
+        const sftp = new Client();
         await sftp.connect(this.sftpConfig);
         await sftp.delete(
           path.posix.join(this.sftpConfig.remotePath, remoteFileName)
         );
         await sftp.end();
-        return true;
-      } catch (err) {
-        await sftp.end();
-        throw err;
       }
+      this.metrics.deletes++;
+      return true;
+    } catch (err) {
+      if (retry < this.maxRetries)
+        return this.delete(remoteFileName, retry + 1);
+      throw err;
     }
-    throw new Error("Environnement inconnu");
   }
 
-  async uploadFromBuffer(buffer, remoteFileName, mimeType) {
-    if (this.env === "development") {
-      // MinIO
-      const exists = await this.minioClient.bucketExists(this.bucket);
-      if (!exists) {
-        await this.minioClient.makeBucket(this.bucket);
-      }
-      await this.minioClient.putObject(
-        this.bucket,
-        remoteFileName,
-        buffer,
-        undefined,
-        { "Content-Type": mimeType }
-      );
-      return `${this.bucket}/${remoteFileName}`;
-    } else if (this.env === "production") {
-      // SFTP
-      const sftp = new Client();
-      try {
-        await sftp.connect(this.sftpConfig);
-        // Créer un fichier temporaire en RAM (pas possible), donc obligé d'écrire sur /tmp, puis supprimer après
-        const tmpPath = path.join("/tmp", remoteFileName);
-        await fs.promises.writeFile(tmpPath, buffer);
-        await sftp.put(
-          tmpPath,
-          path.posix.join(this.sftpConfig.remotePath, remoteFileName)
-        );
-        await sftp.end();
-        await fs.promises.unlink(tmpPath); // Nettoyer le fichier temporaire
-        return `${this.sftpConfig.remotePath}/${remoteFileName}`;
-      } catch (err) {
-        await sftp.end();
-        throw err;
-      }
-    }
-    throw new Error("Environnement inconnu");
+  // Get metrics pour monitoring
+  getMetrics() {
+    return this.metrics;
   }
 }
 

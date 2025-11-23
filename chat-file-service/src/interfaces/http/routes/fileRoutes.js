@@ -144,50 +144,25 @@ function createFileRoutes(fileController) {
       }
     );
 
-    // ✅ AJOUTER CETTE ROUTE
-    // GET /files/:fileId/thumbnail/:size - Récupérer un thumbnail
+    // ✅ AJOUTER CETTE ROUTE POUR LES THUMBNAILS
     router.get(
-      "/:fileId/thumbnail/:size?",
+      "/:fileId/thumbnail",
       validationMiddleware.validateMongoId("fileId"),
       async (req, res) => {
         try {
-          const { fileId, size = "medium" } = req.params;
-
-          // Récupérer les métadonnées du fichier
-          const file = await fileController.getFileMetadata(req, res);
-
-          if (!file.metadata.processing.thumbnailGenerated) {
-            return res.status(404).json({
-              success: false,
-              message: "Thumbnail non disponible",
-            });
-          }
-
-          // Trouver le thumbnail de la taille demandée
-          const thumbnail = file.metadata.processing.thumbnails?.find(
-            (t) => t.size === size
-          );
-
-          if (!thumbnail) {
-            return res.status(404).json({
-              success: false,
-              message: `Thumbnail taille ${size} non trouvé`,
-            });
-          }
-
-          // Rediriger vers l'URL du thumbnail
-          res.redirect(thumbnail.url);
+          await fileController.getThumbnail(req, res);
         } catch (error) {
-          console.error("❌ Erreur récupération thumbnail:", error);
+          console.error("❌ Erreur route GET /files/:fileId/thumbnail:", error);
           res.status(500).json({
             success: false,
             message: "Erreur lors de la récupération du thumbnail",
+            error: error.message,
           });
         }
       }
     );
 
-    // GET /files/:fileId/download - Télécharger un fichier (nouvelle route)
+    // GET /files/:fileId/download - Télécharger un fichier
     router.get(
       "/:fileId/download",
       validationMiddleware.validateMongoId("fileId"),

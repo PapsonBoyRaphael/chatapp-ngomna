@@ -2,18 +2,8 @@ const Message = require("../mongodb/models/MessageModel");
 const mongoose = require("mongoose");
 
 class MongoMessageRepository {
-  constructor(cacheService = null, kafkaProducer = null) {
-    this.cacheService = cacheService;
+  constructor(kafkaProducer = null) {
     this.kafkaProducer = kafkaProducer;
-    this.cachePrefix = "msg:";
-    this.defaultTTL = 3600;
-    this.metrics = {
-      cacheHits: 0,
-      cacheMisses: 0,
-      errors: 0,
-      kafkaEvents: 0,
-      kafkaErrors: 0,
-    };
   }
 
   // ===============================
@@ -124,16 +114,6 @@ class MongoMessageRepository {
 
       const processingTime = Date.now() - startTime;
 
-      // ✅ CACHE ET KAFKA AVEC GESTION D'ERREUR
-      if (this.cacheService) {
-        try {
-          await this._cacheMessage(savedMessage);
-          await this._invalidateRelatedCaches(savedMessage);
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur cache message:", cacheError.message);
-        }
-      }
-
       if (this.kafkaProducer) {
         try {
           await this._publishMessageEvent("MESSAGE_SAVED", savedMessage, {
@@ -184,30 +164,10 @@ class MongoMessageRepository {
     }
   }
 
-  async findById(messageId, useCache = true) {
+  async findById(messageId) {
     const startTime = Date.now();
 
     try {
-      // Cache Redis
-      if (this.cacheService && useCache) {
-        try {
-          const cached = await this._getCachedMessage(messageId);
-          if (cached) {
-            this.metrics.cacheHits++;
-            console.log(
-              `📦 Message depuis cache: ${messageId} (${
-                Date.now() - startTime
-              }ms)`
-            );
-            return cached;
-          } else {
-            this.metrics.cacheMisses++;
-          }
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur lecture cache message:", cacheError.message);
-        }
-      }
-
       this.metrics.dbQueries++;
       const message = await Message.findById(messageId).lean();
 
@@ -216,15 +176,6 @@ class MongoMessageRepository {
       }
 
       const processingTime = Date.now() - startTime;
-
-      // Mettre en cache
-      if (this.cacheService && useCache) {
-        try {
-          await this._cacheMessage(message);
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur mise en cache message:", cacheError.message);
-        }
-      }
 
       console.log(`🔍 Message trouvé: ${messageId} (${processingTime}ms)`);
       return message;
@@ -339,41 +290,6 @@ class MongoMessageRepository {
         processingTime: `${processingTime}ms`,
       });
 
-      // ✅ INVALIDER LES CACHES LIÉS SI DES MESSAGES ONT ÉTÉ MODIFIÉS
-      if (this.cacheService && updateResult.modifiedCount > 0) {
-        try {
-          // Invalider toutes les variantes de cache pour cette conversation
-          const patterns = [
-            `msg:conv:${conversationId}:*`,
-            `messages:${conversationId}:*`,
-            `conversation:${conversationId}:*`,
-            `conversation:${conversationId}`,
-            `conversations:*`,
-          ];
-          for (const pattern of patterns) {
-            if (
-              pattern.includes("*") &&
-              typeof this.cacheService.keys === "function"
-            ) {
-              const keys = await this.cacheService.keys(pattern);
-              if (keys.length > 0) {
-                await this.cacheService.del(keys);
-              }
-            } else {
-              await this.cacheService.del(pattern);
-            }
-          }
-          console.log(
-            `🗑️ Caches invalidés pour conversation ${conversationId || "[all]"}`
-          );
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur invalidation cache statut:",
-            cacheError.message
-          );
-        }
-      }
-
       // ✅ PUBLIER ÉVÉNEMENT KAFKA
       if (this.kafkaProducer && updateResult.modifiedCount > 0) {
         try {
@@ -421,19 +337,6 @@ class MongoMessageRepository {
 
       const processingTime = Date.now() - startTime;
 
-      // 🗑️ INVALIDER LES CACHES
-      if (this.cacheService) {
-        try {
-          await this._invalidateMessageCaches(messageId);
-          await this._invalidateConversationCaches(message.conversationId);
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur invalidation cache suppression:",
-            cacheError.message
-          );
-        }
-      }
-
       // 🚀 PUBLIER ÉVÉNEMENT KAFKA
       if (this.kafkaProducer) {
         try {
@@ -460,27 +363,6 @@ class MongoMessageRepository {
     const startTime = Date.now();
 
     try {
-      const cacheKey = conversationId
-        ? `${this.cachePrefix}unread:${userId}:${conversationId}`
-        : `${this.cachePrefix}unread:${userId}:total`;
-
-      // 🚀 VÉRIFIER LE CACHE
-      if (this.cacheService) {
-        try {
-          const cached = await this.cacheService.get(cacheKey);
-          if (cached !== null) {
-            console.log(
-              `📦 Compteur non-lus depuis cache: ${userId} (${
-                Date.now() - startTime
-              }ms)`
-            );
-            return parseInt(cached);
-          }
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur lecture cache compteur:", cacheError.message);
-        }
-      }
-
       // Compter depuis MongoDB
       const filter = {
         receiverId: userId,
@@ -493,15 +375,6 @@ class MongoMessageRepository {
 
       const count = await Message.countDocuments(filter);
       const processingTime = Date.now() - startTime;
-
-      // Mettre en cache
-      if (this.cacheService) {
-        try {
-          await this.cacheService.setex(cacheKey, 300, count.toString()); // 5 minutes
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur cache compteur:", cacheError.message);
-        }
-      }
 
       console.log(
         `🔢 Compteur non-lus: ${userId} = ${count} (${processingTime}ms)`
@@ -525,31 +398,12 @@ class MongoMessageRepository {
       dateFrom,
       dateTo,
       limit = 20,
-      useCache = true,
       useLike = true, // Ajout d'une option pour activer %like%
     } = options;
 
     const startTime = Date.now();
-    const cacheKey = `${this.cachePrefix}search:${JSON.stringify({
-      query,
-      options,
-    })}`;
 
     try {
-      if (this.cacheService && useCache) {
-        try {
-          const cached = await this.cacheService.get(cacheKey);
-          if (cached) {
-            console.log(
-              `📦 Recherche depuis cache (${Date.now() - startTime}ms)`
-            );
-            return JSON.parse(cached);
-          }
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur cache recherche:", cacheError.message);
-        }
-      }
-
       // Filtre principal
       let filter = {
         $text: { $search: query },
@@ -609,14 +463,6 @@ class MongoMessageRepository {
         searchTime: Date.now() - startTime,
       };
 
-      if (this.cacheService && useCache) {
-        try {
-          await this.cacheService.setex(cacheKey, 600, JSON.stringify(result));
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur cache recherche:", cacheError.message);
-        }
-      }
-
       console.log(
         `🔍 Recherche: "${query}" = ${messages.length} résultats (${result.searchTime}ms)`
       );
@@ -629,26 +475,8 @@ class MongoMessageRepository {
 
   async getStatistics(conversationId) {
     const startTime = Date.now();
-    const cacheKey = `${this.cachePrefix}stats:${conversationId}`;
 
     try {
-      // Vérifier le cache
-      if (this.cacheService) {
-        try {
-          const cached = await this.cacheService.get(cacheKey);
-          if (cached) {
-            console.log(
-              `📦 Statistiques depuis cache: ${conversationId} (${
-                Date.now() - startTime
-              }ms)`
-            );
-            return JSON.parse(cached);
-          }
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur cache statistiques:", cacheError.message);
-        }
-      }
-
       // Calculer les statistiques
       const stats = await Message.aggregate([
         { $match: { conversationId } },
@@ -699,15 +527,6 @@ class MongoMessageRepository {
       result.calculatedAt = new Date().toISOString();
       result.processingTime = processingTime;
 
-      // Mettre en cache
-      if (this.cacheService) {
-        try {
-          await this.cacheService.setex(cacheKey, 1800, JSON.stringify(result)); // 30 minutes
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur cache statistiques:", cacheError.message);
-        }
-      }
-
       console.log(
         `📊 Statistiques calculées: ${conversationId} (${processingTime}ms)`
       );
@@ -716,229 +535,6 @@ class MongoMessageRepository {
       console.error(`❌ Erreur statistiques ${conversationId}:`, error);
       throw error;
     }
-  }
-
-  // ===============================
-  // MÉTHODES PRIVÉES - CACHE
-  // ===============================
-
-  async _cacheMessage(message) {
-    if (!this.cacheService) return false;
-
-    try {
-      const cacheKey = `message:${message._id}`;
-      const messageData = JSON.stringify({
-        id: message._id,
-        conversationId: message.conversationId,
-        senderId: message.senderId,
-        content: message.content,
-        type: message.type,
-        status: message.status,
-        timestamp: message.timestamp,
-        createdAt: message.createdAt,
-        updatedAt: message.updatedAt,
-      });
-
-      // ✅ GÉRER LES DIFFÉRENTES API REDIS
-      if (typeof this.cacheService.setex === "function") {
-        // Redis classique
-        await this.cacheService.setex(cacheKey, this.defaultTTL, messageData);
-      } else if (typeof this.cacheService.setEx === "function") {
-        // Redis v4+ (méthode avec majuscule)
-        await this.cacheService.setEx(cacheKey, this.defaultTTL, messageData);
-      } else if (typeof this.cacheService.set === "function") {
-        // ✅ FALLBACK avec set + expire séparé
-        await this.cacheService.set(cacheKey, messageData);
-
-        if (typeof this.cacheService.expire === "function") {
-          await this.cacheService.expire(cacheKey, this.defaultTTL);
-        } else if (typeof this.cacheService.expireAt === "function") {
-          const expireTime = Math.floor(Date.now() / 1000) + this.defaultTTL;
-          await this.cacheService.expireAt(cacheKey, expireTime);
-        }
-      } else {
-        console.warn(
-          "⚠️ Aucune méthode Redis compatible trouvée pour la mise en cache"
-        );
-        return false;
-      }
-
-      console.log(`💾 Message mis en cache: ${message._id}`);
-      return true;
-    } catch (error) {
-      console.warn(`⚠️ Erreur cache message ${message._id}:`, error.message);
-      return false;
-    }
-  }
-
-  async _getCachedMessage(messageId) {
-    try {
-      const cacheKey = `${this.cachePrefix}${messageId}`;
-      const cached = await this.cacheService.get(cacheKey);
-
-      if (!cached) {
-        return null;
-      }
-
-      const data = JSON.parse(cached);
-      return data;
-    } catch (error) {
-      console.warn(`⚠️ Erreur lecture cache ${messageId}:`, error.message);
-      return null;
-    }
-  }
-
-  async _invalidateMessageCaches(messageId, conversationId) {
-    try {
-      const patterns = [
-        `${this.cachePrefix}${messageId}`,
-        `${this.cachePrefix}conv:${conversationId}:*`,
-        `conversations:*`,
-      ];
-
-      for (const pattern of patterns) {
-        if (pattern.includes("*")) {
-          const keys = await this.cacheService.keys(pattern);
-          if (keys.length > 0) {
-            await this.cacheService.del(keys);
-          }
-        } else {
-          await this.cacheService.del(pattern);
-        }
-      }
-
-      console.log(`🗑️ Cache message invalidé: ${messageId}`);
-      return true;
-    } catch (error) {
-      console.warn(`⚠️ Erreur invalidation ${messageId}:`, error.message);
-      return false;
-    }
-  }
-
-  async _invalidateRelatedCaches(message) {
-    if (!this.cacheService) return false;
-
-    try {
-      const keysToInvalidate = [
-        `messages:${message.conversationId}:*`,
-        `conversation:${message.conversationId}`,
-        `unread:${message.receiverId || "unknown"}:*`,
-        `user:messages:${message.senderId}:*`,
-      ];
-
-      for (const keyPattern of keysToInvalidate) {
-        try {
-          // ✅ GÉRER LES DIFFÉRENTES API REDIS POUR LA SUPPRESSION
-          if (keyPattern.includes("*")) {
-            // Pattern avec wildcard
-            if (
-              typeof this.cacheService.keys === "function" &&
-              typeof this.cacheService.del === "function"
-            ) {
-              const keys = await this.cacheService.keys(keyPattern);
-              if (keys.length > 0) {
-                await this.cacheService.del(...keys);
-              }
-            } else if (typeof this.cacheService.scanStream === "function") {
-              // Scanner et supprimer avec stream
-              const keys = [];
-              const stream = this.cacheService.scanStream({
-                match: keyPattern,
-                count: 100,
-              });
-
-              stream.on("data", (resultKeys) => {
-                keys.push(...resultKeys);
-              });
-
-              stream.on("end", async () => {
-                if (
-                  keys.length > 0 &&
-                  typeof this.cacheService.del === "function"
-                ) {
-                  await this.cacheService.del(...keys);
-                }
-              });
-            }
-          } else {
-            // Clé simple
-            if (typeof this.cacheService.del === "function") {
-              await this.cacheService.del(keyPattern);
-            } else if (typeof this.cacheService.unlink === "function") {
-              await this.cacheService.unlink(keyPattern);
-            }
-          }
-        } catch (keyError) {
-          console.warn(
-            `⚠️ Erreur invalidation clé ${keyPattern}:`,
-            keyError.message
-          );
-        }
-      }
-
-      console.log(`🗑️ Caches invalidés pour message: ${message._id}`);
-      return true;
-    } catch (error) {
-      console.warn(`⚠️ Erreur invalidation caches:`, error.message);
-      return false;
-    }
-  }
-
-  async _invalidateConversationCaches(conversationId) {
-    if (!this.cacheService) return;
-
-    const patterns = [
-      `${this.cachePrefix}conv:${conversationId}:*`,
-      `${this.cachePrefix}stats:${conversationId}`,
-    ];
-
-    for (const pattern of patterns) {
-      try {
-        const keys = await this.cacheService.keys(pattern);
-        if (keys.length > 0) {
-          await this.cacheService.del(keys);
-        }
-      } catch (error) {
-        console.warn(
-          `⚠️ Erreur invalidation conversation ${pattern}:`,
-          error.message
-        );
-      }
-    }
-  }
-
-  async _invalidateUserCaches(userId) {
-    if (!this.cacheService) return;
-
-    const patterns = [`${this.cachePrefix}unread:${userId}:*`];
-
-    for (const pattern of patterns) {
-      try {
-        const keys = await this.cacheService.keys(pattern);
-        if (keys.length > 0) {
-          await this.cacheService.del(keys);
-        }
-      } catch (error) {
-        console.warn(
-          `⚠️ Erreur invalidation utilisateur ${pattern}:`,
-          error.message
-        );
-      }
-    }
-  }
-
-  _calculateTTL(message) {
-    // TTL selon le type de message
-    const ttlMap = {
-      TEXT: 3600, // 1 heure
-      IMAGE: 7200, // 2 heures
-      VIDEO: 1800, // 30 minutes (plus lourd)
-      AUDIO: 3600, // 1 heure
-      FILE: 7200, // 2 heures
-      SYSTEM: 300, // 5 minutes (moins important)
-    };
-
-    return ttlMap[message.type] || this.defaultTTL;
   }
 
   // ===============================
@@ -994,25 +590,6 @@ class MongoMessageRepository {
         };
       }
 
-      // Test Redis
-      if (this.cacheService) {
-        const redisStart = Date.now();
-        try {
-          await this.cacheService.ping();
-          healthData.redis = {
-            status: "connected",
-            responseTime: Date.now() - redisStart,
-          };
-        } catch (error) {
-          healthData.redis = {
-            status: "disconnected",
-            error: error.message,
-          };
-        }
-      } else {
-        healthData.redis.status = "disabled";
-      }
-
       // Kafka status
       healthData.kafka.status = this.kafkaProducer ? "enabled" : "disabled";
 
@@ -1021,59 +598,6 @@ class MongoMessageRepository {
       console.error("❌ Erreur health check repository:", error);
       throw error;
     }
-  }
-
-  async clearCache(pattern = null) {
-    if (!this.cacheService) {
-      return { cleared: 0, message: "Redis non disponible" };
-    }
-
-    try {
-      const searchPattern = pattern || `${this.cachePrefix}*`;
-      const keys = await this.cacheService.keys(searchPattern);
-
-      if (keys.length > 0) {
-        await this.cacheService.del(keys);
-      }
-
-      console.log(`🗑️ Cache nettoyé: ${keys.length} clés supprimées`);
-      return { cleared: keys.length, pattern: searchPattern };
-    } catch (error) {
-      console.error("❌ Erreur nettoyage cache:", error);
-      throw error;
-    }
-  }
-
-  _testRedisAPI() {
-    if (!this.cacheService) {
-      console.log("❌ Pas de client Redis");
-      return false;
-    }
-
-    const methods = {
-      // Méthodes de base
-      get: typeof this.cacheService.get === "function",
-      set: typeof this.cacheService.set === "function",
-      del: typeof this.cacheService.del === "function",
-
-      // Méthodes avec expiration
-      setex: typeof this.cacheService.setex === "function",
-      setEx: typeof this.cacheService.setEx === "function", // Redis v4+
-      expire: typeof this.cacheService.expire === "function",
-      expireAt: typeof this.cacheService.expireAt === "function",
-
-      // Méthodes de recherche
-      keys: typeof this.cacheService.keys === "function",
-      scan: typeof this.cacheService.scan === "function",
-      scanStream: typeof this.cacheService.scanStream === "function",
-
-      // Méthodes avancées
-      unlink: typeof this.cacheService.unlink === "function",
-      exists: typeof this.cacheService.exists === "function",
-    };
-
-    console.log("🔍 API Redis disponible:", methods);
-    return methods;
   }
 
   /**
@@ -1247,19 +771,6 @@ class MongoMessageRepository {
               });
               console.log(`✅ Conversation vidée - aucun message restant`);
             }
-
-            // 4. Invalider le cache de la conversation
-            if (this.cacheService) {
-              try {
-                await this.cacheService.del(`conversation:${conversation._id}`);
-                await this.cacheService.del(`conversations:*`);
-              } catch (cacheError) {
-                console.warn(
-                  "⚠️ Erreur invalidation cache conversation:",
-                  cacheError.message
-                );
-              }
-            }
           }
         } catch (convError) {
           console.warn(
@@ -1267,21 +778,6 @@ class MongoMessageRepository {
             convError.message
           );
           // Ne pas faire échouer la suppression du message pour autant
-        }
-      }
-
-      // ✅ INVALIDER LES CACHES LIÉS
-      if (this.cacheService) {
-        try {
-          await this._invalidateMessageCaches(messageId);
-          await this._invalidateConversationCaches(updateResult.conversationId);
-          await this._invalidateUserCaches(receiverId);
-          console.log(`🗑️ Caches invalidés pour message ${messageId}`);
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur invalidation cache statut:",
-            cacheError.message
-          );
         }
       }
 
