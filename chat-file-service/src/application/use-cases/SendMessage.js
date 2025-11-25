@@ -25,16 +25,10 @@ async function fetchUsersInfo(userIds) {
 }
 
 class SendMessage {
-  constructor(
-    messageRepository,
-    conversationRepository,
-    kafkaProducer = null,
-    cacheService = null // Ajouté pour centraliser le cache
-  ) {
+  constructor(messageRepository, conversationRepository, kafkaProducer = null) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
     this.kafkaProducer = kafkaProducer;
-    this.cacheService = cacheService;
   }
 
   // ✅ AMÉLIORER LA LOGIQUE PRINCIPALE DANS execute()
@@ -309,28 +303,6 @@ class SendMessage {
           console.log(`📤 Événement Kafka publié: MESSAGE_SENT`);
         } catch (kafkaError) {
           console.warn("⚠️ Erreur Kafka SendMessage:", kafkaError.message);
-        }
-      }
-
-      // ✅ INVALIDER LE CACHE REDIS VIA CacheService
-      if (this.cacheService) {
-        try {
-          const cacheKeysToInvalidate = [
-            `messages:${conversationId}:*`, // ✅ TOUTES les pages de messages
-            `conversation:${conversationId}:*`,
-            `conversations:${senderId}`,
-            `conversations:${receiverId}`,
-          ];
-
-          for (const pattern of cacheKeysToInvalidate) {
-            await this.cacheService.del(pattern);
-          }
-
-          console.log(
-            `🗑️ Cache invalidé pour message dans conversation ${conversationId}`
-          );
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur invalidation cache:", cacheError.message);
         }
       }
 

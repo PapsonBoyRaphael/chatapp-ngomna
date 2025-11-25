@@ -1,7 +1,5 @@
 class GetMessages {
   constructor(messageRepository) {
-    // ✅ SUPPRESSION : cacheService n'est pas nécessaire
-    // Le repository (CachedMessageRepository) gère tout le cache
     this.messageRepository = messageRepository;
   }
 
@@ -17,8 +15,6 @@ class GetMessages {
         `🔍 GetMessages: conversation=${conversationId}, page=${page}, limit=${limit}`
       );
 
-      // ✅ DÉLÉGATION AU REPO : CachedMessageRepository gère cache/invalidation
-      // Le repo retourne { messages, fromCache }
       const result = await this.messageRepository.findByConversation(
         conversationId,
         {

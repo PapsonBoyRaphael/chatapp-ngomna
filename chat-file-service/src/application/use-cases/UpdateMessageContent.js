@@ -1,8 +1,7 @@
 class UpdateMessageContent {
-  constructor(messageRepository, kafkaProducer = null, cacheService = null) {
+  constructor(messageRepository, kafkaProducer = null) {
     this.messageRepository = messageRepository;
     this.kafkaProducer = kafkaProducer;
-    this.cacheService = cacheService;
   }
 
   /**
@@ -44,15 +43,6 @@ class UpdateMessageContent {
 
     // Sauvegarder la modification
     const updated = await this.messageRepository.save(message);
-
-    // Invalider le cache
-    if (this.cacheService) {
-      try {
-        await this.cacheService.del(`message:${messageId}`);
-      } catch (err) {
-        // log warning
-      }
-    }
 
     // Publier l'événement Kafka si besoin
     if (

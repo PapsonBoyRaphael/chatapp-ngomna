@@ -1,9 +1,7 @@
 class GetConversations {
-  constructor(conversationRepository, messageRepository, cacheService = null) {
+  constructor(conversationRepository, messageRepository) {
     this.conversationRepository = conversationRepository;
     this.messageRepository = messageRepository;
-    this.cacheService = cacheService;
-    this.cacheTimeout = 300;
   }
 
   async execute(userId, options = {}) {
@@ -15,30 +13,12 @@ class GetConversations {
       limit = 20,
       offset = (page - 1) * limit,
       includeArchived = false,
-      useCache = true,
     } = options;
 
     try {
       console.log(
         `🔍 Récupération conversations page ${page} (limit: ${limit}) pour utilisateur: ${userId}`
       );
-
-      // ✅ INCLURE LA PAGINATION DANS LA CLÉ DE CACHE
-      const cacheKey = `conversations:${userId}:page:${page}:limit:${limit}`;
-
-      // 1. Vérification du cache (avec pagination)
-      if (useCache && this.cacheService) {
-        try {
-          const cached = await this.cacheService.get(cacheKey);
-          if (cached && this._isValidCache(cached)) {
-            console.log("✅ Cache valide trouvé pour la page", page);
-            return JSON.parse(cached);
-          }
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur lecture cache:", cacheError.message);
-          await this.invalidateUserCache(userId, page, limit);
-        }
-      }
 
       // 2. ✅ RÉCUPÉRATION AVEC PAGINATION
       const conversationsResult =
@@ -157,22 +137,6 @@ class GetConversations {
         processingTime: Date.now() - startTime,
       };
 
-      // 6. Mise en cache (avec clé paginée)
-      if (useCache && this.cacheService && result.conversations.length > 0) {
-        try {
-          const cacheData = JSON.stringify({
-            ...result,
-            cachedAt: Date.now(),
-            version: "1.0",
-          });
-
-          await this.cacheService.set(cacheKey, this.cacheTimeout, cacheData);
-          console.log(`💾 Cache mis à jour pour la page ${page}`);
-        } catch (cacheError) {
-          console.warn("⚠️ Erreur mise en cache:", cacheError.message);
-        }
-      }
-
       console.log(
         `✅ Page ${page}: ${result.conversations.length} conversations récupérées (${result.processingTime}ms)`
       );
@@ -183,41 +147,6 @@ class GetConversations {
         `❌ Erreur GetConversations: ${error.message} (${processingTime}ms)`
       );
       throw error;
-    }
-  }
-
-  _isValidCache(cachedData) {
-    try {
-      const parsed = JSON.parse(cachedData);
-      const now = Date.now();
-      const cachedAt = parsed.cachedAt || 0;
-
-      if (now - cachedAt > this.cacheTimeout * 1000) {
-        return false;
-      }
-
-      return Array.isArray(parsed.conversations) && parsed.version === "1.0";
-    } catch {
-      return false;
-    }
-  }
-
-  async invalidateUserCache(userId, page = null, limit = null) {
-    if (!this.cacheService) return;
-
-    try {
-      if (page !== null && limit !== null) {
-        // Invalider une page spécifique
-        const cacheKey = `conversations:${userId}:page:${page}:limit:${limit}`;
-        await this.cacheService.del(cacheKey);
-        console.log(`🗑️ Cache invalidé pour la page ${page}`);
-      } else {
-        // Invalider toutes les pages (pattern matching)
-        // Cette partie dépend de votre implémentation Redis/stockage
-        console.log(`🗑️ Cache invalidé pour toutes les pages de ${userId}`);
-      }
-    } catch (error) {
-      console.warn("⚠️ Erreur invalidation cache:", error.message);
     }
   }
 }

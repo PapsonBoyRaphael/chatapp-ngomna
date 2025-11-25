@@ -2,13 +2,11 @@ class MarkMessageDelivered {
   constructor(
     messageRepository,
     conversationRepository = null,
-    kafkaProducer = null,
-    cacheService = null
+    kafkaProducer = null
   ) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
     this.kafkaProducer = kafkaProducer;
-    this.cacheService = cacheService;
   }
 
   /**
@@ -31,36 +29,19 @@ class MarkMessageDelivered {
       let result;
       if (messageId) {
         // mettre à jour un message spécifique
-        result = await this.messageRepository.updateSingleMessageStatus(
+        result = await this.messageRepository.markMessagesAsDelivered(
           messageId,
           userId,
           "DELIVERED"
         );
       } else {
         // mise à jour en masse (conversation ou messageIds)
-        result = await this.messageRepository.updateMessageStatus(
+        result = await this.messageRepository.markMessagesAsDelivered(
           conversationId,
           userId,
           "DELIVERED",
           messageIds || []
         );
-      }
-
-      // invalider cache
-      if (this.cacheService && result && result.modifiedCount > 0) {
-        try {
-          if (messageId) await this.cacheService.del(`msg:${messageId}`);
-          if (conversationId) {
-            await this.cacheService.del(`messages:${conversationId}:*`);
-            await this.cacheService.del(`conversation:${conversationId}`);
-          }
-          await this.cacheService.del(`conversations:${userId}`);
-        } catch (cacheErr) {
-          console.warn(
-            "⚠️ Erreur invalidation cache MarkMessageDelivered:",
-            cacheErr.message
-          );
-        }
       }
 
       // publication Kafka

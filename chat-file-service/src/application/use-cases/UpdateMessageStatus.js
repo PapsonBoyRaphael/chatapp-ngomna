@@ -1,14 +1,8 @@
 class UpdateMessageStatus {
-  constructor(
-    messageRepository,
-    conversationRepository,
-    kafkaProducer = null,
-    cacheService = null // Injection du cacheService
-  ) {
+  constructor(messageRepository, conversationRepository, kafkaProducer = null) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
     this.kafkaProducer = kafkaProducer;
-    this.cacheService = cacheService;
   }
 
   async execute({ conversationId, receiverId, status, messageIds = null }) {
@@ -43,24 +37,6 @@ class UpdateMessageStatus {
       );
 
       result = await updatePromise;
-
-      // Invalidation du cache via CacheService
-      if (this.cacheService && result.modifiedCount > 0) {
-        try {
-          if (conversationId) {
-            await this.cacheService.del(`msg:conv:${conversationId}:*`);
-            await this.cacheService.del(`conv:participant:*`); // Invalider les conversations liées
-          }
-          if (receiverId) {
-            await this.cacheService.del(`msg:uploader:${receiverId}:*`);
-          }
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur invalidation cache UpdateMessageStatus:",
-            cacheError.message
-          );
-        }
-      }
 
       // Publication Kafka si besoin (inchangé)
       if (this.kafkaProducer && result.modifiedCount > 0) {
@@ -137,31 +113,6 @@ class UpdateMessageStatus {
         receiverId,
         status
       );
-
-      // Invalidation du cache pour ce message
-      if (this.cacheService && result.modifiedCount > 0) {
-        try {
-          await this.cacheService.del(`msg:${messageId}`);
-        } catch (cacheError) {
-          console.warn(
-            "⚠️ Erreur invalidation cache message unique:",
-            cacheError.message
-          );
-        }
-      }
-
-      if (status === "READ") {
-        try {
-          await this.conversationRepository.resetUnreadCountInUserMetadata(
-            conversationId,
-            receiverId
-          );
-          console.log(`✅ Compteur non-lus réinitialisé pour ${receiverId}`);
-        } catch (error) {
-          console.error(`❌ Erreur réinitialisation compteur:`, error);
-          // Ne pas faire échouer la mise à jour du statut si la réinitialisation échoue
-        }
-      }
 
       // Publication Kafka si modification réussie (inchangé)
       if (this.kafkaProducer && result.modifiedCount > 0) {

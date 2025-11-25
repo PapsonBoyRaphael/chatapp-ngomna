@@ -1,14 +1,8 @@
 class SearchOccurrences {
-  constructor({
-    fileRepository,
-    conversationRepository,
-    messageRepository,
-    cacheService = null,
-  }) {
+  constructor({ fileRepository, conversationRepository, messageRepository }) {
     this.fileRepository = fileRepository;
     this.conversationRepository = conversationRepository;
     this.messageRepository = messageRepository;
-    this.cacheService = cacheService;
   }
 
   /**

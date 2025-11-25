@@ -2,10 +2,8 @@ const archiver = require("archiver");
 const stream = require("stream");
 
 class DownloadFile {
-  constructor(fileRepository, fileStorageService, cacheService = null) {
+  constructor(fileRepository, fileStorageService) {
     this.fileRepository = fileRepository;
-    this.fileStorageService = fileStorageService;
-    this.cacheService = cacheService;
     this.downloadQueueKey = "download:queue";
   }
 
@@ -48,17 +46,6 @@ class DownloadFile {
    */
   async executeMultiple(fileIds, userId) {
     // Mettre en attente la demande (file queue Redis via CacheService)
-    if (this.cacheService) {
-      try {
-        await this.cacheService.set(
-          this.downloadQueueKey,
-          { userId, fileIds, requestedAt: new Date() },
-          600 // 10 min TTL
-        );
-      } catch (err) {
-        console.warn("⚠️ Erreur file queue cacheService:", err.message);
-      }
-    }
 
     // Récupérer les fichiers
     const files = [];

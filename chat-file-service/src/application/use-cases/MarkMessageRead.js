@@ -2,13 +2,11 @@ class MarkMessageRead {
   constructor(
     messageRepository,
     conversationRepository = null,
-    kafkaProducer = null,
-    cacheService = null
+    kafkaProducer = null
   ) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
     this.kafkaProducer = kafkaProducer;
-    this.cacheService = cacheService;
   }
 
   /**
@@ -31,63 +29,19 @@ class MarkMessageRead {
       let result;
       if (messageId) {
         // un message spécifique
-        result = await this.messageRepository.updateSingleMessageStatus(
+        result = await this.messageRepository.markMessagesAsRead(
           messageId,
           userId,
           "READ"
         );
       } else {
         // mise à jour en masse
-        result = await this.messageRepository.updateMessageStatus(
+        result = await this.messageRepository.markMessagesAsRead(
           conversationId,
           userId,
           "READ",
           messageIds || []
         );
-      }
-
-      // invalider cache si modifié
-      if (this.cacheService && result && result.modifiedCount > 0) {
-        try {
-          if (messageId) await this.cacheService.del(`msg:${messageId}`);
-          if (conversationId) {
-            await this.cacheService.del(`messages:${conversationId}:*`);
-            await this.cacheService.del(`conversation:${conversationId}`);
-          }
-          await this.cacheService.del(`conversations:${userId}`);
-        } catch (cacheErr) {
-          console.warn(
-            "⚠️ Erreur invalidation cache MarkMessageRead:",
-            cacheErr.message
-          );
-        }
-      }
-
-      // réinitialiser compteur non-lus si bulk ou single succeeded
-      if (this.conversationRepository && result && result.modifiedCount > 0) {
-        try {
-          // si conversationId absent mais messageId présent, tenter de récupérer la conversationId via repo (si méthode existante)
-          let convId = conversationId;
-          if (
-            !convId &&
-            messageId &&
-            typeof this.messageRepository.findById === "function"
-          ) {
-            const msg = await this.messageRepository.findById(messageId);
-            convId = msg?.conversationId || conversationId;
-          }
-          if (convId) {
-            await this.conversationRepository.resetUnreadCountInUserMetadata(
-              convId,
-              userId
-            );
-          }
-        } catch (convErr) {
-          console.warn(
-            "⚠️ Erreur réinitialisation compteur unread après READ:",
-            convErr.message
-          );
-        }
       }
 
       // publication Kafka

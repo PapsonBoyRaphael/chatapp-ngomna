@@ -26,10 +26,16 @@ const ThumbnailService = require("./infrastructure/services/ThumbnailService");
 const FileStorageService = require("./infrastructure/services/FileStorageService");
 const MediaProcessingService = require("./infrastructure/services/MediaProcessingService");
 
+// Ajouter les imports des Cached Repositories
+const CachedMessageRepository = require("./infrastructure/repositories/CachedMessageRepository");
+const CachedConversationRepository = require("./infrastructure/repositories/CachedConversationRepository");
+const CachedFileRepository = require("./infrastructure/repositories/CachedFileRepository");
+
 // Gestionnaires Redis optionnels
 const CacheService = require("./infrastructure/redis/CacheService");
 const RoomManager = require("./infrastructure/redis/RoomManager");
 const OnlineUserManager = require("./infrastructure/redis/OnlineUserManager");
+const UnreadManager = require("./infrastructure/redis/UnreadManager");
 
 // Use Cases
 const SendMessage = require("./application/use-cases/SendMessage");
@@ -293,20 +299,44 @@ const startServer = async () => {
     // ===============================
     // 6. INITIALISATION REPOSITORIES
     // ===============================
-    // ✅ CORRIGER L'INJECTION DES SERVICES
+    // ✅ CRÉER D'ABORD LES MONGO REPOS
 
-    const messageRepository = new MongoMessageRepository(
-      cacheServiceInstance,
+    const mongoMessageRepository = new MongoMessageRepository(
       kafkaProducers?.messageProducer || null
     );
-    const conversationRepository = new MongoConversationRepository(
-      cacheServiceInstance,
+
+    const mongoConversationRepository = new MongoConversationRepository(
       kafkaProducers?.messageProducer || null
     );
-    const fileRepository = new MongoFileRepository(
+
+    const mongoFileRepository = new MongoFileRepository(
       redisClient,
       kafkaProducers?.fileProducer || null,
       thumbnailService,
+      cacheServiceInstance
+    );
+
+    // ✅ INITIALISER UNREADMANAGER AVANT DE L'UTILISER
+    let unreadManager = null;
+    if (cacheServiceInstance) {
+      unreadManager = new UnreadManager(cacheServiceInstance);
+      console.log("✅ UnreadManager initialisé");
+    }
+
+    // ✅ ENVELOPPER AVEC LES CACHED REPOSITORIES
+    const messageRepository = new CachedMessageRepository(
+      mongoMessageRepository,
+      cacheServiceInstance,
+      unreadManager
+    );
+
+    const conversationRepository = new CachedConversationRepository(
+      mongoConversationRepository,
+      cacheServiceInstance
+    );
+
+    const fileRepository = new CachedFileRepository(
+      mongoFileRepository,
       cacheServiceInstance
     );
 
@@ -326,68 +356,73 @@ const startServer = async () => {
     // ===============================
     // 7. INITIALISATION USE CASES
     // ===============================
+    // ✅ UTILISER LES CACHED REPOSITORIES
     const sendMessageUseCase = new SendMessage(
-      messageRepository,
-      conversationRepository,
+      messageRepository, // Cached
+      conversationRepository, // Cached
       kafkaProducers?.messageProducer || null,
       cacheServiceInstance
     );
 
     const getMessagesUseCase = new GetMessages(
-      messageRepository,
-      cacheServiceInstance
+      messageRepository // Cached
     );
 
     const getConversationUseCase = new GetConversation(
-      conversationRepository,
-      messageRepository,
+      conversationRepository, // Cached
+      messageRepository, // Cached
       cacheServiceInstance
     );
 
     const getConversationsUseCase = new GetConversations(
-      conversationRepository,
-      messageRepository,
+      conversationRepository, // Cached
+      messageRepository, // Cached
       cacheServiceInstance
     );
 
     const updateMessageStatusUseCase = new UpdateMessageStatus(
-      messageRepository,
-      conversationRepository,
+      messageRepository, // Cached
+      conversationRepository, // Cached
       kafkaProducers?.messageProducer || null,
       cacheServiceInstance
     );
 
     const updateMessageContentUseCase = new UpdateMessageContent(
-      messageRepository,
+      messageRepository, // Cached
       kafkaProducers?.messageProducer || null,
       cacheServiceInstance
     );
 
     const uploadFileUseCase = new UploadFile(
-      fileRepository,
+      fileRepository, // Cached
       kafkaProducers?.fileProducer || null
     );
 
-    const getFileUseCase = new GetFile(fileRepository, cacheServiceInstance);
-
-    const getConversationIdsUseCase = new GetConversationIds(
-      conversationRepository
+    const getFileUseCase = new GetFile(
+      fileRepository, // Cached
+      cacheServiceInstance
     );
 
-    const getMessageByIdUseCase = new GetMessageById(messageRepository);
+    const getConversationIdsUseCase = new GetConversationIds(
+      conversationRepository // Cached
+    );
+
+    const getMessageByIdUseCase = new GetMessageById(
+      messageRepository // Cached
+    );
 
     const downloadFileUseCase = new DownloadFile(
-      fileRepository,
+      fileRepository, // Cached
       fileStorageService,
       cacheServiceInstance
     );
 
     const createGroupUseCase = new CreateGroup(
-      conversationRepository,
+      conversationRepository, // Cached
       kafkaProducers?.messageProducer || null
     );
     const createBroadcastUseCase = new CreateBroadcast(
-      conversationRepository,
+      conversationRepository, // Cached
       kafkaProducers?.messageProducer || null
     );
 
@@ -396,15 +431,15 @@ const startServer = async () => {
     const MarkMessageRead = require("./application/use-cases/MarkMessageRead");
 
     const markMessageDeliveredUseCase = new MarkMessageDelivered(
-      messageRepository,
-      conversationRepository,
+      messageRepository, // Cached
+      conversationRepository, // Cached
       kafkaProducers?.messageProducer || null,
       cacheServiceInstance
     );
 
     const markMessageReadUseCase = new MarkMessageRead(
-      messageRepository,
-      conversationRepository,
+      messageRepository, // Cached
+      conversationRepository, // Cached
       kafkaProducers?.messageProducer || null,
       cacheServiceInstance
     );
@@ -413,6 +448,11 @@ const startServer = async () => {
     app.locals.useCases = app.locals.useCases || {};
     app.locals.useCases.markMessageDelivered = markMessageDeliveredUseCase;
     app.locals.useCases.markMessageRead = markMessageReadUseCase;
+    app.locals.repositories = {
+      message: messageRepository,
+      conversation: conversationRepository,
+      file: fileRepository,
+    };
 
     // ===============================
     // 8. INITIALISATION CONTROLLERS
