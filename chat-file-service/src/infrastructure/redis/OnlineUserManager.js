@@ -5,8 +5,8 @@ class OnlineUserManager {
     this.presencePrefix = "presence"; // Clé avec TTL pour détecter l'inactivité
     this.userDataPrefix = "user_data"; // Données sans TTL initial
     this.userSocketPrefix = "user_sockets";
-    this.defaultTTL = 5; // 5 minutes pour test
-    this.idleTTL = 10; // 1 heure idle
+    this.defaultTTL = 300; // 5 minutes pour test
+    this.idleTTL = 3600; // 1 heure idle
     this.subscriber = null;
 
     if (this.redis) {
@@ -240,7 +240,7 @@ class OnlineUserManager {
           );
         }
 
-        console.log();
+        console.log("✅ Données recréées avec succès");
       }
 
       const currentStatus = userData.status || "offline";

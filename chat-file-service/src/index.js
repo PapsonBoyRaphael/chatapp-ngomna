@@ -35,7 +35,7 @@ const CachedFileRepository = require("./infrastructure/repositories/CachedFileRe
 const CacheService = require("./infrastructure/redis/CacheService");
 const RoomManager = require("./infrastructure/redis/RoomManager");
 const OnlineUserManager = require("./infrastructure/redis/OnlineUserManager");
-const UnreadManager = require("./infrastructure/redis/UnreadManager");
+const UnreadManager = require("./infrastructure/redis/UnreadMessageManager");
 
 // Use Cases
 const SendMessage = require("./application/use-cases/SendMessage");

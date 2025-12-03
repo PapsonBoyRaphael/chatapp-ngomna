@@ -3,6 +3,13 @@ const Conversation = require("../mongodb/models/ConversationModel");
 class MongoConversationRepository {
   constructor(kafkaProducer = null) {
     this.kafkaProducer = kafkaProducer;
+    this.metrics = {
+      cacheHits: 0,
+      cacheMisses: 0,
+      errors: 0,
+      kafkaEvents: 0,
+      kafkaErrors: 0,
+    };
   }
 
   async save(conversationData) {
@@ -326,6 +333,7 @@ class MongoConversationRepository {
       const skip = (page - 1) * limit;
 
       this.metrics.dbQueries += 2;
+
       const [conversations, totalCount] = await Promise.all([
         Conversation.find(filter)
           .sort({ lastMessageAt: -1 })
@@ -600,16 +608,6 @@ class MongoConversationRepository {
             ).toFixed(2) + "%"
           : "0%",
       timestamp: new Date().toISOString(),
-    };
-  }
-
-  resetMetrics() {
-    this.metrics = {
-      cacheHits: 0,
-      cacheMisses: 0,
-      errors: 0,
-      kafkaEvents: 0,
-      kafkaErrors: 0,
     };
   }
 

@@ -78,7 +78,7 @@ const consumerConfig = {
   },
 
   // ✅ NOUVEAUX PARAMÈTRES ANTI-REBALANCE
-  allowAutoTopicCreation: false, // ✅ DÉSACTIVER AUTO-CRÉATION
+  allowAutoTopicCreation: true, // ✅ DÉSACTIVER AUTO-CRÉATION
   partitionAssignors: ["RoundRobinAssigner"], // ✅ ASSIGNATION EXPLICITE
   readUncommitted: false,
   maxInFlightRequests: 1, // ✅ LIMITER LES REQUÊTES CONCURRENTES

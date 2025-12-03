@@ -61,7 +61,7 @@ class CachedConversationRepository {
   }
 
   // Récupérer les conversations d'un utilisateur avec cache
-  async findByUser(userId, options = {}) {
+  async findByParticipant(userId, options = {}) {
     const cacheKey = `${this.cachePrefix}user:${userId}`;
 
     try {
@@ -71,7 +71,10 @@ class CachedConversationRepository {
         return cached;
       }
 
-      const conversations = await this.primaryStore.findByUser(userId, options);
+      const conversations = await this.primaryStore.findByParticipant(
+        userId,
+        options
+      );
 
       if (conversations.length > 0) {
         await this.cache.set(cacheKey, conversations, this.shortTTL);

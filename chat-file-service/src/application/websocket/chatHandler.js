@@ -272,6 +272,7 @@ class ChatHandler {
   async handleAuthentication(socket, data) {
     try {
       console.log(`🔐 Authentification demande:`, data);
+
       // ✅ 1. Authentification via token JWT si présent
       let userPayload = null;
       if (data.token) {
@@ -346,7 +347,7 @@ class ChatHandler {
       // ✅ REJOINDRE UNE SALLE UTILISATEUR
       socket.join(`user_${userIdString}`);
 
-      let conversationIds = null;
+      let conversationIds = []; // ✅ INITIALISER À UN TABLEAU VIDE AU LIEU DE null
 
       // 1. Rejoindre toutes les rooms de conversations de l'utilisateur
       if (this.getConversationIdsUseCase) {
@@ -354,7 +355,22 @@ class ChatHandler {
           conversationIds = await this.getConversationIdsUseCase.execute(
             userIdString
           );
-          if (Array.isArray(conversationIds)) {
+
+          // ✅ VÉRIFIER QUE conversationIds EST UN TABLEAU
+          if (!Array.isArray(conversationIds)) {
+            console.warn(
+              `⚠️ conversationIds n'est pas un tableau:`,
+              typeof conversationIds,
+              conversationIds
+            );
+            conversationIds = []; // ✅ FALLBACK À TABLEAU VIDE
+          }
+
+          console.log(
+            `✅ Récupération ${conversationIds.length} conversations pour ${userIdString}`
+          );
+
+          if (conversationIds.length > 0) {
             for (const convId of conversationIds) {
               // 1. D'abord rejoindre la room
               const roomName = `conversation_${convId}`;
@@ -363,82 +379,80 @@ class ChatHandler {
                 `👥 Utilisateur ${userIdString} rejoint room ${roomName}`
               );
 
-              // 2. Puis marquer les messages comme DELIVERED
+              // 2. Rejoindre la room dans Redis RoomManager
+              if (
+                this.roomManager &&
+                typeof this.roomManager.addUserToRoom === "function"
+              ) {
+                try {
+                  await this.roomManager.addUserToRoom(roomName, userIdString, {
+                    matricule: matriculeString,
+                    joinedAt: new Date(),
+                    conversationId: convId,
+                  });
+                } catch (roomError) {
+                  console.warn(
+                    `⚠️ Erreur ajout utilisateur à room ${roomName}:`,
+                    roomError.message
+                  );
+                }
+              }
+
+              // 3. Marquer les messages comme DELIVERED automatiquement
               if (this.updateMessageStatusUseCase) {
                 try {
                   const result = await this.updateMessageStatusUseCase.execute({
                     conversationId: convId,
                     receiverId: userIdString,
                     status: "DELIVERED",
-                    messageIds: null, // tous les messages non lus
+                    messageIds: null,
                   });
 
                   if (result?.modifiedCount > 0) {
                     console.log(
-                      `✅ ${result.modifiedCount} messages marqués comme DELIVERED dans conversation ${convId}`
+                      `✅ ${result.modifiedCount} messages marqués DELIVERED dans ${convId}`
                     );
-
-                    // Notifier la conversation
-                    this.io.to(roomName).emit("messagesAutoDelivered", {
-                      userId: userIdString,
-                      deliveredCount: result.modifiedCount,
-                      conversationId: convId,
-                      timestamp: new Date().toISOString(),
-                    });
                   }
-                } catch (error) {
+                } catch (deliveredError) {
                   console.warn(
-                    `⚠️ Erreur marquage delivered pour conversation ${convId}:`,
-                    error.message
+                    `⚠️ Erreur marquage delivered pour ${convId}:`,
+                    deliveredError.message
                   );
                 }
               }
 
-              // ✅ Gérer la room dans Redis via RoomManager
+              // 4. Gérer la room dans Redis via RoomManager
               if (
                 this.roomManager &&
                 typeof this.roomManager.createRoom === "function"
               ) {
-                // Créer la room conversation si elle n'existe pas
-                this.roomManager
-                  .createRoom(roomName, {
+                try {
+                  await this.roomManager.createRoom(roomName, {
                     type: "CONVERSATION",
-                    description: `Room pour la conversation ${convId}`,
+                    description: `Room pour conversation ${convId}`,
                     isPrivate: true,
                     maxUsers: 100,
-                  })
-                  .catch((error) => {
-                    console.warn(
-                      `⚠️ Erreur création room conversation dans Redis:`,
-                      error.message
-                    );
                   });
-              }
-              if (
-                this.roomManager &&
-                typeof this.roomManager.addUserToRoom === "function"
-              ) {
-                // Ajouter l'utilisateur à la room dans Redis
-                this.roomManager
-                  .addUserToRoom(roomName, userIdString, {
-                    matricule: matriculeString,
-                    joinedAt: new Date(),
-                    conversationId: convId,
-                  })
-                  .catch((error) => {
-                    console.warn(
-                      `⚠️ Erreur ajout utilisateur à la room conversation dans Redis:`,
-                      error.message
-                    );
-                  });
+                } catch (createRoomError) {
+                  console.warn(
+                    `⚠️ Erreur création room ${roomName}:`,
+                    createRoomError.message
+                  );
+                }
               }
             }
+          } else {
+            console.log(
+              `ℹ️ Aucune conversation existante pour ${userIdString}`
+            );
           }
-        } catch (err) {
+        } catch (convError) {
           console.warn(
-            `⚠️ Erreur lors de la récupération/join des rooms conversations pour ${userIdString}:`,
-            err.message
+            `⚠️ Erreur récupération conversations pour ${userIdString}:`,
+            convError.message
           );
+          // ✅ NE PAS FAIRE ÉCHOUER L'AUTHENTIFICATION
+          conversationIds = [];
         }
       }
 
@@ -510,7 +524,7 @@ class ChatHandler {
         nom: socket.nom,
         prenom: socket.prenom,
         ministere: socket.ministere,
-        autoJoinedConversations: conversationIds.length,
+        autoJoinedConversations: conversationIds.length, // ✅ MAINTENANT SÛREMENT UN NOMBRE
         timestamp: new Date().toISOString(),
       });
 

@@ -137,9 +137,8 @@ class NotificationConsumer {
       // ✅ CONNEXION AVEC TIMEOUT PLUS LONG
       if (!this.isConnected) {
         const connectPromise = this.consumer.connect();
-        const timeoutPromise = new Promise(
-          (_, reject) =>
-            setTimeout(() => reject(new Error("Connection timeout")), 30000) // ✅ 30s au lieu de 15s
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Connection timeout")), 30000)
         );
 
         await Promise.race([connectPromise, timeoutPromise]);
@@ -153,6 +152,42 @@ class NotificationConsumer {
         rebalanceWait += 1000;
       }
 
+      // ✅ CRÉER LE TOPIC S'IL N'EXISTE PAS (AVANT DE S'ABONNER)
+      try {
+        const admin = this.consumer.client.admin();
+        await admin.connect();
+
+        // Vérifier si le topic existe
+        const topics = await admin.listTopics();
+        if (!topics.includes(this.topicName)) {
+          console.log(`📋 Topic ${this.topicName} n'existe pas, création...`);
+          await admin.createTopics({
+            topics: [
+              {
+                topic: this.topicName,
+                numPartitions: 1,
+                replicationFactor: 1,
+              },
+            ],
+            validateOnly: false,
+            waitForLeaders: true,
+          });
+          console.log(`✅ Topic ${this.topicName} créé`);
+        } else {
+          console.log(`✅ Topic ${this.topicName} existe déjà`);
+        }
+
+        await admin.disconnect();
+      } catch (adminError) {
+        console.warn(
+          `⚠️ Impossible de créer automatiquement le topic: ${adminError.message}`
+        );
+        console.log("💡 Créez manuellement le topic avec:");
+        console.log(
+          `/opt/kafka/bin/kafka-topics.sh --create --topic ${this.topicName} --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1`
+        );
+      }
+
       // ✅ SUBSCRIPTION AU TOPIC
       await this.consumer.subscribe({
         topic: this.topicName,
@@ -164,9 +199,9 @@ class NotificationConsumer {
       // ✅ DÉMARRER AVEC CONFIGURATION ANTI-REBALANCE
       await this.consumer.run({
         autoCommit: true,
-        autoCommitInterval: 10000, // ✅ AUGMENTER
-        autoCommitThreshold: 50, // ✅ RÉDUIRE
-        partitionsConsumedConcurrently: 1, // ✅ LIMITER CONCURRENCE
+        autoCommitInterval: 10000,
+        autoCommitThreshold: 50,
+        partitionsConsumedConcurrently: 1,
         eachMessage: async ({
           topic,
           partition,
@@ -180,7 +215,6 @@ class NotificationConsumer {
             // ✅ HEARTBEAT IMMÉDIAT SI PROCHE DE LA LIMITE
             const timeSinceLastHeartbeat = Date.now() - this.lastHeartbeat;
             if (timeSinceLastHeartbeat > 10000) {
-              // 10s
               await heartbeat();
             }
 
@@ -229,8 +263,6 @@ class NotificationConsumer {
             ) {
               console.log("⚖️ Rebalancing détecté, pause temporaire");
               this.isRebalancing = true;
-
-              // ✅ NE PAS PAUSER PENDANT UN REBALANCING
               return;
             }
 
@@ -248,7 +280,7 @@ class NotificationConsumer {
               setTimeout(() => {
                 console.log("▶️ Reprise du consumer");
                 this.consumer.resume([{ topic, partitions: [partition] }]);
-              }, 15000); // ✅ AUGMENTER LE DÉLAI
+              }, 15000);
             }
           }
         },
