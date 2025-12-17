@@ -2,6 +2,10 @@
 
 echo "🚀 DÉMARRAGE KAFKA POUR DÉVELOPPEMENT"
 echo "===================================="
+echo ""
+echo "⚠️  ATTENTION: Kafka est optionnel pour l'application"
+echo "   L'application fonctionne aussi sans Kafka (mode fallback)"
+echo ""
 
 # Vérifier Java
 if ! command -v java &> /dev/null; then
@@ -10,9 +14,16 @@ if ! command -v java &> /dev/null; then
     exit 1
 fi
 
+# Vérifier si Kafka est installé
+if [ ! -d "/opt/kafka" ]; then
+    echo "❌ Kafka non trouvé dans /opt/kafka"
+    echo "💡 Installer Kafka d'abord"
+    exit 1
+fi
+
 # Créer les répertoires si nécessaire
 sudo mkdir -p /opt/kafka/logs /var/log/kafka
-sudo chown -R $USER:$USER /opt/kafka/logs /var/log/kafka
+sudo chown -R $USER:$USER /opt/kafka/logs /var/log/kafka 2>/dev/null
 
 # Arrêter les services existants
 echo "🛑 Arrêt des services existants..."
@@ -21,9 +32,8 @@ pkill -f kafka.Kafka 2>/dev/null || true
 sleep 2
 
 # Nettoyer les anciens logs
-rm -rf /opt/kafka/logs/* /tmp/kafka-logs* /tmp/zookeeper*
+rm -rf /opt/kafka/logs/* /tmp/kafka-logs* /tmp/zookeeper* 2>/dev/null
 
-# Démarrer Zookeeper
 echo "🔄 Démarrage Zookeeper..."
 nohup /opt/kafka/bin/zookeeper-server-start.sh /opt/kafka/config/zookeeper.properties > /tmp/zookeeper.log 2>&1 &
 ZOOKEEPER_PID=$!
@@ -33,7 +43,6 @@ echo "   ✅ Zookeeper démarré (PID: $ZOOKEEPER_PID)"
 echo "⏳ Attente Zookeeper (5s)..."
 sleep 5
 
-# Démarrer Kafka
 echo "🔄 Démarrage Kafka..."
 nohup /opt/kafka/bin/kafka-server-start.sh /opt/kafka/config/server.properties > /tmp/kafka.log 2>&1 &
 KAFKA_PID=$!
@@ -70,8 +79,11 @@ if /opt/kafka/bin/kafka-topics.sh --list --bootstrap-server localhost:9092 &>/de
     echo "   🔍 Zookeeper: tail -f /tmp/zookeeper.log"
     echo "   🔍 Kafka:     tail -f /tmp/kafka.log"
     echo ""
-    echo "🚀 Vous pouvez maintenant démarrer votre application:"
-    echo "   npm run dev"
+    echo "✅ Kafka est prêt pour votre application"
+    echo ""
+    echo "🛑 Pour arrêter Kafka:"
+    echo "   pkill -f 'kafka|zookeeper'"
+    echo ""
     
 else
     echo "   ❌ Impossible de se connecter à Kafka"

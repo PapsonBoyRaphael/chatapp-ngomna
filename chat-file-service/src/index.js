@@ -8,7 +8,7 @@ const { createAdapter } = require("@socket.io/redis-adapter");
 // Configuration
 require("dotenv").config();
 
-// ✅ AJOUTER VALIDATION ENVIRONNEMENT
+// ✅ VALIDATION ENVIRONNEMENT
 const EnvironmentValidator = require("./config/envValidator");
 const envValidator = new EnvironmentValidator();
 
@@ -17,25 +17,27 @@ if (!envValidator.validate()) {
   process.exit(1);
 }
 
-// Connexions infrastructure - TOUTES CORRIGÉES
+// Infrastructure
 const connectDB = require("./infrastructure/mongodb/connection");
 const redisConfig = require("./infrastructure/redis/redisConfig");
-const kafkaConfig = require("./infrastructure/kafka/config/kafkaConfig");
 
+// Services
 const ThumbnailService = require("./infrastructure/services/ThumbnailService");
 const FileStorageService = require("./infrastructure/services/FileStorageService");
 const MediaProcessingService = require("./infrastructure/services/MediaProcessingService");
+const ResilientMessageService = require("./infrastructure/services/ResilientMessageService");
 
-// Ajouter les imports des Cached Repositories
+// Repositories - Cached
 const CachedMessageRepository = require("./infrastructure/repositories/CachedMessageRepository");
 const CachedConversationRepository = require("./infrastructure/repositories/CachedConversationRepository");
 const CachedFileRepository = require("./infrastructure/repositories/CachedFileRepository");
 
-// Gestionnaires Redis optionnels
+// Redis Services
 const CacheService = require("./infrastructure/redis/CacheService");
 const RoomManager = require("./infrastructure/redis/RoomManager");
 const OnlineUserManager = require("./infrastructure/redis/OnlineUserManager");
 const UnreadManager = require("./infrastructure/redis/UnreadMessageManager");
+const MessageDeliveryService = require("./infrastructure/services/MessageDeliveryService");
 
 // Use Cases
 const SendMessage = require("./application/use-cases/SendMessage");
@@ -51,7 +53,6 @@ const UpdateMessageContent = require("./application/use-cases/UpdateMessageConte
 const DownloadFile = require("./application/use-cases/DownloadFile");
 const CreateGroup = require("./application/use-cases/CreateGroup");
 const CreateBroadcast = require("./application/use-cases/CreateBroadcast");
-const searchOccurrences = require("./application/use-cases/SearchOccurrences");
 const MarkMessageDelivered = require("./application/use-cases/MarkMessageDelivered");
 const MarkMessageRead = require("./application/use-cases/MarkMessageRead");
 
@@ -61,7 +62,7 @@ const MessageController = require("./application/controllers/MessageController")
 const ConversationController = require("./application/controllers/ConversationController");
 const HealthController = require("./application/controllers/HealthController");
 
-// Repositories
+// Repositories - Mongo
 const MongoMessageRepository = require("./infrastructure/repositories/MongoMessageRepository");
 const MongoConversationRepository = require("./infrastructure/repositories/MongoConversationRepository");
 const MongoFileRepository = require("./infrastructure/repositories/MongoFileRepository");
@@ -74,70 +75,15 @@ const createHealthRoutes = require("./interfaces/http/routes/healthRoutes");
 const createGroupRoutes = require("./interfaces/http/routes/groupRoutes");
 const createBroadcastRoutes = require("./interfaces/http/routes/broadcastRoutes");
 
-// Kafka Producers - Utilisation des vrais fichiers
-const MessageProducer = require("./infrastructure/kafka/producers/MessageProducer");
-const FileProducer = require("./infrastructure/kafka/producers/FileProducer");
-
-// Kafka Consumer
-const NotificationConsumer = require("./infrastructure/kafka/consumers/NotificationConsumer");
-
 // WebSocket Handler
 const ChatHandler = require("./application/websocket/chatHandler");
 
-// Middleware - CORRECTION
+// Middleware
 const { rateLimitMiddleware } = require("./interfaces/http/middleware");
 
-// ✅ DÉCLARATION DES VARIABLES GLOBALES AU BON ENDROIT
-let kafka = null;
-let kafkaProducers = null;
-let kafkaConsumer = null;
-let kafkaConsumers = null; // ✅ AJOUTER CETTE VARIABLE GLOBALE
-let kafkaStatus = "disconnected";
-
-const initializeKafka = async () => {
-  try {
-    console.log("🔧 Initialisation Kafka...");
-
-    const {
-      createKafkaInstance,
-      createProducer,
-      createConsumer,
-    } = require("./infrastructure/kafka/config/kafkaConfig");
-
-    // ✅ CRÉER L'INSTANCE KAFKA
-    kafka = createKafkaInstance();
-
-    // ✅ CRÉER ET CONNECTER LES PRODUCERS
-    const producer = createProducer(kafka);
-    await producer.connect();
-
-    kafkaProducers = {
-      messageProducer: new MessageProducer(producer),
-      fileProducer: new FileProducer(producer),
-    };
-
-    // ✅ CRÉER UN SEUL CONSUMER AVEC ID UNIQUE
-    const uniqueTopics = ["chat.notifications"]; // ✅ ÉVITER LES DOUBLONS
-    const consumer = createConsumer(kafka, uniqueTopics);
-    kafkaConsumer = new NotificationConsumer(consumer);
-
-    // ✅ ÉVITER LA DUPLICATION
-    kafkaConsumers = {
-      notificationConsumer: kafkaConsumer,
-    };
-
-    console.log("✅ Kafka initialisé avec succès");
-    kafkaStatus = "connected";
-    return true;
-  } catch (error) {
-    console.error("❌ Erreur initialisation Kafka:", error);
-    console.warn("⚠️ L'application continuera sans Kafka");
-    kafkaStatus = "error";
-    return false;
-  }
-};
-
-// ✅ SUPPRIMER LA DOUBLE INITIALISATION DANS startServer
+// ===============================
+// DÉMARRAGE SERVEUR
+// ===============================
 const startServer = async () => {
   try {
     console.log("🚀 Démarrage du Chat-File Service...");
@@ -158,36 +104,38 @@ const startServer = async () => {
 
     // Redis
     let redisClient = null;
-    let redisStatus = "disconnected";
     let onlineUserManager = null;
     let roomManager = null;
-    let cacheServiceInstance = null; // Nouveau nom pour éviter la confusion
+    let cacheServiceInstance = null;
 
     try {
       const redisConnected = await redisConfig.connect();
       if (redisConnected) {
         redisClient = redisConfig.getClient();
-        redisStatus = "connected";
 
-        // Initialiser CacheService en premier
+        // Initialiser CacheService
         cacheServiceInstance = new CacheService(redisClient, {
           defaultTTL: 3600,
           keyPrefix: "chat",
           maxScanCount: 1000,
         });
 
-        // Puis initialiser RoomManager
+        // Initialiser RoomManager
         roomManager = new RoomManager(redisClient);
         app.locals.roomManager = roomManager;
 
-        console.log("✅ Services Redis initialisés avec succès");
+        // ✅ INITIALISER OnlineUserManager
+        onlineUserManager = new OnlineUserManager(redisClient, io);
+
+        console.log("✅ Services Redis initialisés:");
+        console.log("   ✅ CacheService");
+        console.log("   ✅ RoomManager");
+        console.log("   ✅ OnlineUserManager");
       }
     } catch (error) {
       console.warn("⚠️ Redis non disponible:", error.message);
+      onlineUserManager = null;
     }
-
-    // ✅ INITIALISER KAFKA UNE SEULE FOIS
-    const kafkaInitialized = await initializeKafka();
 
     // ===============================
     // 3. CONFIGURATION EXPRESS
@@ -205,7 +153,6 @@ const startServer = async () => {
     app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
     app.locals.redisClient = redisClient;
-    app.locals.onlineUserManager = onlineUserManager;
 
     if (rateLimitMiddleware && rateLimitMiddleware.apiLimit) {
       app.use(rateLimitMiddleware.apiLimit);
@@ -239,7 +186,7 @@ const startServer = async () => {
       }
     }
 
-    // Initialiser OnlineUserManager avec config optimisée
+    // Initialiser OnlineUserManager
     onlineUserManager = new OnlineUserManager(redisClient, io, {
       keyPrefix: "chat:online",
       userTTL: 3600,
@@ -247,32 +194,29 @@ const startServer = async () => {
       maxScanCount: 1000,
     });
 
-    // ===============================
-    // 5. DÉMARRER LE CONSUMER UNE SEULE FOIS
-    // ===============================
-    if (kafkaConsumer && kafkaInitialized) {
+    // ✅ INITIALISER MessageDeliveryService MAINTENANT QUE IO EST CRÉÉ
+    let messageDeliveryService = null;
+    if (redisClient) {
       try {
-        console.log("🚀 Démarrage NotificationConsumer unique...");
-
-        // ✅ ATTENDRE UN PEU POUR ÉVITER LES CONFLITS DE DÉMARRAGE
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-
-        const started = await kafkaConsumer.start();
-        if (started) {
-          console.log("✅ Kafka consumer notifications démarré");
-        } else {
-          console.warn("⚠️ Échec démarrage consumer Kafka");
-        }
+        console.log("🚀 Initialisation MessageDeliveryService...");
+        messageDeliveryService = new MessageDeliveryService(redisClient, io);
+        console.log("⏳ Attente de l'initialisation du consumer...");
+        await messageDeliveryService.initialize();
+        app.locals.messageDeliveryService = messageDeliveryService;
+        console.log("   ✅ MessageDeliveryService initialisé");
       } catch (error) {
-        console.warn("⚠️ Erreur démarrage consumer Kafka:", error.message);
+        console.error(
+          "❌ Erreur initialisation MessageDeliveryService:",
+          error.message
+        );
       }
+    } else {
+      console.log("⚠️ Redis non disponible, MessageDeliveryService non créé");
     }
 
     // ===============================
-    // 5.5 INITIALISATION SERVICES FICHIERS
+    // 5. SERVICES FICHIERS
     // ===============================
-
-    // ✅ INITIALISER LE SERVICE DE STOCKAGE DE FICHIERS
     const fileStorageService = new FileStorageService({
       env: process.env.NODE_ENV || "development",
       s3Endpoint: process.env.S3_ENDPOINT || "http://localhost:9000",
@@ -288,10 +232,10 @@ const startServer = async () => {
       },
     });
 
-    // ✅ INITIALISER LE SERVICE DE TRAITEMENT MULTIMÉDIA
+    // Initialiser le service de traitement multimédia
     const mediaProcessingService = new MediaProcessingService();
 
-    // ✅ INITIALISER LE SERVICE DE THUMBNAILS
+    // Initialiser le service de thumbnails
     const thumbnailService = new ThumbnailService(fileStorageService);
 
     console.log("✅ Services de fichiers initialisés");
@@ -299,35 +243,25 @@ const startServer = async () => {
     // ===============================
     // 6. INITIALISATION REPOSITORIES
     // ===============================
-    // ✅ CRÉER D'ABORD LES MONGO REPOS
-
-    const mongoMessageRepository = new MongoMessageRepository(
-      kafkaProducers?.messageProducer || null
-    );
-
-    const mongoConversationRepository = new MongoConversationRepository(
-      kafkaProducers?.messageProducer || null
-    );
+    // Créer d'abord les repos Mongo
+    const mongoMessageRepository = new MongoMessageRepository();
+    const mongoConversationRepository = new MongoConversationRepository();
 
     const mongoFileRepository = new MongoFileRepository(
       redisClient,
-      kafkaProducers?.fileProducer || null,
+      null,
       thumbnailService,
       cacheServiceInstance
     );
 
-    // ✅ INITIALISER UNREADMANAGER AVANT DE L'UTILISER
-    let unreadManager = null;
-    if (cacheServiceInstance) {
-      unreadManager = new UnreadManager(cacheServiceInstance);
-      console.log("✅ UnreadManager initialisé");
-    }
+    // ✅ SUPPRIMER UnreadManager séparé si present
+    // const unreadManager = new UnreadManager(cacheServiceInstance);
 
-    // ✅ ENVELOPPER AVEC LES CACHED REPOSITORIES
+    // ✅ CRÉER CachedMessageRepository SANS UnreadManager
     const messageRepository = new CachedMessageRepository(
       mongoMessageRepository,
-      cacheServiceInstance,
-      unreadManager
+      cacheServiceInstance
+      // ← unreadManager SUPPRIMÉ - intégré dans CachedMessageRepository
     );
 
     const conversationRepository = new CachedConversationRepository(
@@ -340,28 +274,35 @@ const startServer = async () => {
       cacheServiceInstance
     );
 
-    // ✅ LOG POUR VÉRIFIER LES OBJETS REDIS
-    if (redisClient) {
-      console.log("🔍 Redis client methods:", {
-        hasGet: typeof redisClient.get === "function",
-        hasSet: typeof redisClient.set === "function",
-        hasSetex: typeof redisClient.setex === "function",
-        hasExpire: typeof redisClient.expire === "function",
-        hasDel: typeof redisClient.del === "function",
-      });
-    } else {
-      console.warn("⚠️ Redis client is null/undefined");
+    // ===============================
+    // CRÉER LE SERVICE RÉSILIENT
+    // ===============================
+    let resilientMessageService = null;
+    if (redisClient && messageRepository) {
+      resilientMessageService = new ResilientMessageService(
+        redisClient,
+        messageRepository,
+        mongoMessageRepository,
+        io // ✅ PASSER Socket.io DIRECTEMENT
+      );
+
+      // ✅ DÉMARRER LES WORKERS INTERNES (PAS BESOIN D'UN WORKER SÉPARÉ)
+      await resilientMessageService.startWorkers();
+
+      app.locals.resilientMessageService = resilientMessageService;
+      console.log("✅ ResilientMessageService avec workers internes démarré");
     }
 
     // ===============================
     // 7. INITIALISATION USE CASES
     // ===============================
-    // ✅ UTILISER LES CACHED REPOSITORIES
+
+    // ✅ PASSER resilientService À SendMessage
     const sendMessageUseCase = new SendMessage(
       messageRepository, // Cached
       conversationRepository, // Cached
-      kafkaProducers?.messageProducer || null,
-      cacheServiceInstance
+      cacheServiceInstance,
+      resilientMessageService // ← NOUVEAU
     );
 
     const getMessagesUseCase = new GetMessages(
@@ -383,19 +324,17 @@ const startServer = async () => {
     const updateMessageStatusUseCase = new UpdateMessageStatus(
       messageRepository, // Cached
       conversationRepository, // Cached
-      kafkaProducers?.messageProducer || null,
       cacheServiceInstance
     );
 
     const updateMessageContentUseCase = new UpdateMessageContent(
       messageRepository, // Cached
-      kafkaProducers?.messageProducer || null,
       cacheServiceInstance
     );
 
     const uploadFileUseCase = new UploadFile(
       fileRepository, // Cached
-      kafkaProducers?.fileProducer || null
+      null
     );
 
     const getFileUseCase = new GetFile(
@@ -418,29 +357,21 @@ const startServer = async () => {
     );
 
     const createGroupUseCase = new CreateGroup(
-      conversationRepository, // Cached
-      kafkaProducers?.messageProducer || null
+      conversationRepository // Cached
     );
     const createBroadcastUseCase = new CreateBroadcast(
-      conversationRepository, // Cached
-      kafkaProducers?.messageProducer || null
+      conversationRepository // Cached
     );
-
-    // === INITIALISATION DES USE-CASES DE MARQUAGE (DELIVERED / READ)
-    const MarkMessageDelivered = require("./application/use-cases/MarkMessageDelivered");
-    const MarkMessageRead = require("./application/use-cases/MarkMessageRead");
 
     const markMessageDeliveredUseCase = new MarkMessageDelivered(
       messageRepository, // Cached
       conversationRepository, // Cached
-      kafkaProducers?.messageProducer || null,
       cacheServiceInstance
     );
 
     const markMessageReadUseCase = new MarkMessageRead(
       messageRepository, // Cached
       conversationRepository, // Cached
-      kafkaProducers?.messageProducer || null,
       cacheServiceInstance
     );
 
@@ -461,7 +392,6 @@ const startServer = async () => {
       uploadFileUseCase,
       getFileUseCase,
       redisClient,
-      kafkaProducers?.fileProducer || null,
       fileStorageService,
       downloadFileUseCase,
       mediaProcessingService
@@ -471,18 +401,16 @@ const startServer = async () => {
       sendMessageUseCase,
       getMessagesUseCase,
       updateMessageStatusUseCase,
-      redisClient,
-      kafkaProducers?.messageProducer || null
+      redisClient
     );
 
     const conversationController = new ConversationController(
       getConversationsUseCase,
       getConversationUseCase,
-      redisClient,
-      kafkaProducers?.messageProducer || null
+      redisClient
     );
 
-    const healthController = new HealthController(redisClient, kafkaConfig);
+    const healthController = new HealthController(redisClient);
 
     // ===============================
     // 9. CONFIGURATION ROUTES HTTP
@@ -504,36 +432,26 @@ const startServer = async () => {
     // ===============================
     console.log("🔌 Configuration du gestionnaire WebSocket...");
 
-    // ✅ CRÉER LE CHATHANDLER AVEC TOUS LES PARAMÈTRES
+    // ✅ CRÉER LE CHATHANDLER SANS UserConsumerManager
     const chatHandler = new ChatHandler(
       io,
       sendMessageUseCase,
       getMessagesUseCase,
       updateMessageStatusUseCase,
-      kafkaProducers?.messageProducer || null,
-      redisClient,
-      onlineUserManager,
+      onlineUserManager, // ← VÉRIFIER QU'IL EST PASSÉ (5e paramètre)
       getConversationIdsUseCase,
       getConversationUseCase,
       getConversationsUseCase,
       getMessageByIdUseCase,
       updateMessageContentUseCase,
       createGroupUseCase,
-      createBroadcastUseCase
+      createBroadcastUseCase,
+      roomManager,
+      markMessageDeliveredUseCase,
+      markMessageReadUseCase,
+      resilientMessageService,
+      messageDeliveryService
     );
-
-    // Injecter roomManager dans le chatHandler si présent
-    if (roomManager) {
-      chatHandler.roomManager = roomManager;
-    }
-
-    // Gestionnaire d'utilisateurs Kafka
-    const UserConsumerManager = require("./infrastructure/kafka/consumers/UserConsumerManager");
-
-    const userConsumerManager = new UserConsumerManager(kafka);
-
-    // Injecter le manager
-    chatHandler.userConsumerManager = userConsumerManager;
 
     // ✅ CONFIGURER LES GESTIONNAIRES D'ÉVÉNEMENTS SOCKET.IO
     chatHandler.setupSocketHandlers();
@@ -548,10 +466,8 @@ const startServer = async () => {
     app.get("/health", async (req, res) => {
       try {
         const redisStatus = redisClient ? "✅ Connecté" : "⚠️ Déconnecté";
-        const kafkaStatus = kafkaProducers ? "✅ Connecté" : "⚠️ Déconnecté";
 
         let redisHealthStatus = "Non connecté";
-        let kafkaHealthStatus = "Non connecté";
         let connectedUsersCount = 0;
         let onlineUsersCount = 0;
         let activeRoomsCount = 0;
@@ -563,16 +479,6 @@ const startServer = async () => {
           } catch (error) {
             console.warn("⚠️ Erreur health check Redis:", error.message);
             redisHealthStatus = `Erreur: ${error.message}`;
-          }
-        }
-
-        // Health check Kafka sécurisé
-        if (kafkaProducers) {
-          try {
-            kafkaHealthStatus = await kafkaConfig.getHealthStatus();
-          } catch (error) {
-            console.warn("⚠️ Erreur health check Kafka:", error.message);
-            kafkaHealthStatus = `Erreur: ${error.message}`;
           }
         }
 
@@ -613,16 +519,6 @@ const startServer = async () => {
               status: redisStatus,
               details: redisHealthStatus,
             },
-            kafka: {
-              status: kafkaStatus,
-              details: kafkaHealthStatus,
-              producers: kafkaProducers
-                ? Object.keys(kafkaProducers).length
-                : 0,
-              consumers: kafkaConsumers
-                ? Object.keys(kafkaConsumers).length
-                : 0,
-            },
             websocket: "✅ Actif",
           },
           endpoints: {
@@ -636,8 +532,6 @@ const startServer = async () => {
           features: {
             chat: !!messageController,
             fileUpload: !!fileController,
-            realTimeMessages: !!kafkaProducers,
-            notifications: !!kafkaConsumers,
             caching: !!redisClient,
             userManagement: !!onlineUserManager,
             roomManagement: !!roomManager,
@@ -660,7 +554,7 @@ const startServer = async () => {
       }
     });
 
-    // Route de statistiques Kafka/Redis
+    // Route de statistiques
     app.get("/stats", async (req, res) => {
       try {
         // ✅ PROTECTION CONTRE LES ERREURS
@@ -671,12 +565,6 @@ const startServer = async () => {
           activeRooms: 0,
           usersList: [],
           roomsList: [],
-        };
-        let kafkaStats = {
-          isConnected: false,
-          status: kafkaStatus,
-          producers: null,
-          topics: [],
         };
 
         // Stats WebSocket sécurisées
@@ -717,164 +605,15 @@ const startServer = async () => {
           redisStats.error = error.message;
         }
 
-        // Stats Kafka sécurisées
-        try {
-          if (
-            kafkaConfig &&
-            typeof kafkaConfig.isKafkaConnected === "function"
-          ) {
-            kafkaStats = {
-              isConnected: kafkaConfig.isKafkaConnected(),
-              status: kafkaStatus,
-              producers: kafkaProducers
-                ? {
-                    messageProducer:
-                      await kafkaProducers.messageProducer.healthCheck(),
-                  }
-                : null,
-              topics: kafkaConfig.isKafkaConnected()
-                ? await kafkaConfig.listTopics()
-                : [],
-            };
-          }
-        } catch (error) {
-          console.warn("⚠️ Erreur stats Kafka:", error.message);
-          kafkaStats.error = error.message;
-        }
-
         const stats = {
           timestamp: new Date().toISOString(),
           websocket: websocketStats,
           redis: redisStats,
-          kafka: kafkaStats,
         };
         res.json(stats);
       } catch (error) {
         console.error("❌ Erreur stats:", error);
         res.status(500).json({
-          error: error.message,
-          timestamp: new Date().toISOString(),
-        });
-      }
-    });
-
-    // Route de test Kafka
-    app.get("/test/kafka", async (req, res) => {
-      try {
-        if (!kafkaProducers || !kafkaProducers.messageProducer) {
-          return res.status(503).json({
-            success: false,
-            message: "Kafka non disponible",
-            details: "MessageProducer non initialisé",
-            status: kafkaStatus,
-            availableEndpoints: {
-              healthCheck: "GET /health",
-              stats: "GET /stats",
-              testKafkaPost: "POST /test/kafka (pour envoyer un message)",
-            },
-          });
-        }
-
-        // ✅ HEALTH CHECK KAFKA POUR GET
-        const healthStatus = await kafkaProducers.messageProducer.healthCheck(
-          true
-        );
-
-        res.json({
-          success: true,
-          message: "Status Kafka récupéré",
-          kafka: {
-            status: kafkaStatus,
-            health: healthStatus,
-            producer: {
-              isConnected: kafkaProducers.messageProducer.isConnected,
-              isEnabled: kafkaProducers.messageProducer.isEnabled,
-            },
-            topics: kafkaConfig.isKafkaConnected
-              ? await kafkaConfig.listTopics()
-              : [],
-          },
-          usage: {
-            testMessage: "POST /test/kafka avec body JSON",
-            healthCheck: "GET /test/kafka (cette route)",
-          },
-          timestamp: new Date().toISOString(),
-        });
-      } catch (error) {
-        console.error("❌ Erreur GET test Kafka:", error);
-        res.status(500).json({
-          success: false,
-          error: error.message,
-          timestamp: new Date().toISOString(),
-        });
-      }
-    });
-
-    // ✅ ROUTE POST POUR ENVOYER UN MESSAGE DE TEST
-    app.post("/test/kafka", async (req, res) => {
-      try {
-        if (!kafkaProducers || !kafkaProducers.messageProducer) {
-          return res.status(503).json({
-            success: false,
-            message: "Kafka non disponible",
-            details: "MessageProducer non initialisé",
-          });
-        }
-
-        // ✅ VÉRIFIER QUE LA MÉTHODE EXISTE
-        if (
-          typeof kafkaProducers.messageProducer.publishMessage !== "function"
-        ) {
-          return res.status(503).json({
-            success: false,
-            message: "Méthode publishMessage non disponible",
-            availableMethods: Object.getOwnPropertyNames(
-              kafkaProducers.messageProducer
-            ).filter(
-              (prop) =>
-                typeof kafkaProducers.messageProducer[prop] === "function"
-            ),
-          });
-        }
-
-        // ✅ UTILISER LES DONNÉES DU BODY OU VALEURS PAR DÉFAUT
-        const {
-          eventType = "TEST_MESSAGE",
-          content = "Message de test depuis l'API",
-          userId = "test-user",
-          ...additionalData
-        } = req.body || {};
-
-        const testMessage = {
-          eventType,
-          content,
-          userId,
-          timestamp: new Date().toISOString(),
-          source: "API_TEST",
-          ...additionalData,
-        };
-
-        // ✅ UTILISER publishMessage AU LIEU DE publishSimpleMessage
-        const result = await kafkaProducers.messageProducer.publishMessage(
-          testMessage
-        );
-
-        res.json({
-          success: result,
-          message: result
-            ? "Message de test envoyé avec succès"
-            : "Échec envoi message",
-          data: testMessage,
-          kafka: {
-            status: kafkaStatus,
-            topicUsed: kafkaProducers.messageProducer.topicName,
-          },
-          timestamp: new Date().toISOString(),
-        });
-      } catch (error) {
-        console.error("❌ Erreur POST test Kafka:", error);
-        res.status(500).json({
-          success: false,
           error: error.message,
           timestamp: new Date().toISOString(),
         });
@@ -894,17 +633,12 @@ const startServer = async () => {
           conversations: "/conversations",
           health: "/health",
           stats: "/stats",
-          kafkaTest: "/test/kafka",
         },
         features: {
           chat: "✅ Chat en temps réel",
           files: "✅ Upload/Download fichiers",
           websocket: "✅ WebSocket activé",
           redis: redisClient ? "✅ Redis activé" : "⚠️ Mode mémoire locale",
-          kafka: kafkaProducers ? "✅ Kafka activé" : "⚠️ Mode développement",
-          notifications: kafkaConsumers
-            ? "✅ Notifications temps réel"
-            : "⚠️ Non disponible",
           userManagement: onlineUserManager
             ? "✅ Gestion utilisateurs"
             : "⚠️ Non disponible",
@@ -964,37 +698,6 @@ const startServer = async () => {
       }, 30 * 60 * 1000); // 30 minutes
     }
 
-    // Health check Kafka périodique
-    if (kafkaProducers && kafkaProducers.messageProducer) {
-      setInterval(async () => {
-        try {
-          if (
-            typeof kafkaProducers.messageProducer.healthCheck === "function"
-          ) {
-            const healthStatus =
-              await kafkaProducers.messageProducer.healthCheck();
-
-            // ✅ LOGGER SEULEMENT LES PROBLÈMES
-            if (
-              healthStatus.status === "error" ||
-              healthStatus.status === "degraded"
-            ) {
-              console.warn(
-                "⚠️ Problème détecté avec Kafka:",
-                healthStatus.message
-              );
-            } else if (process.env.NODE_ENV === "development") {
-              console.log(
-                `💚 Kafka health: ${healthStatus.status} (connected: ${healthStatus.connected})`
-              );
-            }
-          }
-        } catch (error) {
-          console.warn("⚠️ Erreur health check Kafka:", error.message);
-        }
-      }, 15 * 60 * 1000); // ✅ PASSER DE 5 À 15 MINUTES
-    }
-
     // ===============================
     // 14. DÉMARRAGE SERVEUR
     // ===============================
@@ -1010,8 +713,7 @@ const startServer = async () => {
       console.log("   📱 Interface web");
       console.log("   👥 Gestion utilisateurs en ligne");
       console.log("   🏠 Gestion des salons");
-      console.log("   🔔 Notifications temps réel");
-      console.log("   📊 Monitoring Kafka/Redis");
+      console.log("   📊 Monitoring Redis");
 
       console.log("\n📊 Statut des services:");
       console.log(`   MongoDB: ✅ Connecté`);
@@ -1019,17 +721,9 @@ const startServer = async () => {
         `   Redis:   ${redisClient ? "✅ Connecté" : "⚠️ Mode mémoire locale"}`
       );
       console.log(
-        `   Kafka:   ${
-          kafkaProducers ? "✅ Connecté" : "⚠️ Mode développement"
-        }`
-      );
-      console.log(
         `   UserMgr: ${onlineUserManager ? "✅ Actif" : "⚠️ Désactivé"}`
       );
       console.log(`   RoomMgr: ${roomManager ? "✅ Actif" : "⚠️ Désactivé"}`);
-      console.log(
-        `   NotifCon: ${kafkaConsumers ? "✅ Actif" : "⚠️ Désactivé"}` // ✅ UTILISER kafkaConsumers QUI EST MAINTENANT DÉFINI
-      );
 
       console.log("\n" + "=".repeat(70));
       console.log("🎯 LIENS RAPIDES - CHAT-FILE-SERVICE");
@@ -1041,9 +735,6 @@ const startServer = async () => {
         `🗣️ API Conversations: http://localhost:${PORT}/conversations`
       );
       console.log(`📊 Statistiques     : http://localhost:${PORT}/stats`);
-      console.log(
-        `🧪 Test Kafka       : POST http://localhost:${PORT}/test/kafka`
-      );
       console.log(`🔌 WebSocket        : ws://localhost:${PORT}`);
       console.log(`❤️ Health Check     : http://localhost:${PORT}/health`);
       console.log("=".repeat(70) + "\n");
@@ -1057,37 +748,33 @@ const startServer = async () => {
 // ===============================
 // GESTION FERMETURE PROPRE
 // ===============================
-const gracefulShutdown = async (signal) => {
-  console.log(`🛑 Signal ${signal} reçu. Arrêt en cours...`);
+const gracefulShutdown = async () => {
+  console.log("🛑 Arrêt gracieux du service...");
 
-  try {
-    // Arrêter Kafka
-    if (kafkaConsumer) {
-      console.log("🔌 Arrêt du consumer Kafka...");
-      await kafkaConsumer.stop();
-    }
-
-    if (kafkaProducers?.messageProducer) {
-      console.log("🔌 Arrêt du producer Kafka...");
-      await kafkaProducers.messageProducer.close();
-    }
-
-    // Fermer Redis
-    // if (redisConfig && redisConfig.disconnect) {
-    //   console.log("🔌 Fermeture Redis...");
-    //   await redisConfig.disconnect();
-    // }
-
-    console.log("✅ Arrêt propre terminé");
-    process.exit(0);
-  } catch (error) {
-    console.error("❌ Erreur lors de l'arrêt:", error);
-    process.exit(1);
+  // ✅ ARRÊTER LES WORKERS INTERNES
+  if (resilientMessageService) {
+    resilientMessageService.stopWorkers();
+    clearInterval(resilientMessageService.memoryMonitorInterval);
+    clearInterval(resilientMessageService.trimInterval);
+    clearInterval(resilientMessageService.metricsInterval);
+    console.log("✅ ResilientMessageService arrêté");
   }
+
+  if (redisClient) {
+    await redisClient.quit();
+    console.log("✅ Redis déconnecté");
+  }
+
+  if (mongoConnection) {
+    await mongoConnection.close();
+    console.log("✅ MongoDB déconnecté");
+  }
+
+  process.exit(0);
 };
 
-process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
-process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);
 
 process.on("uncaughtException", (error) => {
   console.error("❌ Exception non gérée:", error);

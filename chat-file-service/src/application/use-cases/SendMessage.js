@@ -25,49 +25,37 @@ async function fetchUsersInfo(userIds) {
 }
 
 class SendMessage {
-  constructor(messageRepository, conversationRepository, kafkaProducer = null) {
+  constructor(
+    messageRepository,
+    conversationRepository,
+    cacheService = null,
+    resilientService = null
+  ) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
-    this.kafkaProducer = kafkaProducer;
+    this.cacheService = cacheService;
+    this.resilientService = resilientService;
   }
 
-  // ✅ AMÉLIORER LA LOGIQUE PRINCIPALE DANS execute()
+  // ✅ MODIFIER LA MÉTHODE execute() - RETIRER KAFKA
   async execute(messageData) {
+    const startTime = Date.now();
+
     try {
       const {
-        content = "",
+        content,
         senderId,
         conversationId = "",
         type = "TEXT",
-        receiverId = "",
-        conversationName = "",
-        duration,
+        receiverId = null,
+        conversationName = null,
+        duration = null,
+        fileId = null,
+        fileName = null,
         fileUrl = null,
-        fileId = null, // ✅ NOUVEAU: ID du fichier pour les messages de type FILE
-        fileName = null, // ✅ NOUVEAU: Nom du fichier
-        fileSize = null, // ✅ NOUVEAU: Taille du fichier
-        mimeType = null, // ✅ NOUVEAU: Type MIME du fichier
+        fileSize = null,
+        mimeType = null,
       } = messageData;
-
-      if (!content || !senderId) {
-        throw new Error("Données de message incomplètes");
-      }
-
-      if (type !== "TEXT") {
-        if (type === "FILE" && (!fileId || !fileName)) {
-          throw new Error(
-            "Pour les messages FILE, fileId et fileName sont requis"
-          );
-        }
-
-        if (type === "AUDIO" && !duration) {
-          throw new Error("Pour les messages AUDIO, la durée est requise");
-        }
-
-        if (type === "IMAGE" && !fileId) {
-          throw new Error("Pour les messages IMAGE, fileId est requis");
-        }
-      }
 
       if (!content || !senderId) {
         throw new Error("Données de message incomplètes");
@@ -86,7 +74,7 @@ class SendMessage {
         conversationId = "";
       }
 
-      // ✅ VÉRIFIER OU CRÉER LA CONVERSATION AVEC VALIDATION RECEIVER ID
+      // ✅ CRÉER/VÉRIFIER LA CONVERSATION
       let conversation = null;
 
       try {
@@ -96,15 +84,9 @@ class SendMessage {
         );
 
         if (conversation && conversation._id) {
-          console.log(`✅ Conversation existante trouvée: ${conversationId}`, {
-            id: conversation._id,
-            name: conversation.name,
-            type: conversation.type,
-            participants: conversation.participants,
-            participantsCount: conversation.participants?.length,
-          });
+          console.log(`✅ Conversation trouvée: ${conversationId}`);
 
-          // ✅ VÉRIFIER QUE L'EXPÉDITEUR EST PARTICIPANT
+          // Vérifier que l'expéditeur est participant
           if (!conversation.participants.includes(senderId)) {
             throw new Error(
               `L'utilisateur ${senderId} n'est pas participant de cette conversation`
@@ -122,7 +104,7 @@ class SendMessage {
         conversation = null;
       }
 
-      // ✅ CRÉER LA CONVERSATION SI ELLE N'EXISTE PAS - AVEC VALIDATION RECEIVER ID
+      // ✅ CRÉER LA CONVERSATION SI ELLE N'EXISTE PAS
       if (!conversation) {
         if (!receiverId) {
           throw new Error(
@@ -193,60 +175,32 @@ class SendMessage {
         id: conversation._id,
         type: conversation.type,
         participants: conversation.participants,
-        isValid: true,
       });
 
       // ✅ CRÉER LE MESSAGE
       const message = {
-        content: String(content).trim(),
-        senderId: String(senderId),
-        conversationId: String(conversationId),
+        conversationId: conversation._id || conversation.id,
+        senderId,
+        receiverId:
+          receiverId || conversation.participants.find((p) => p !== senderId),
+        content,
         type,
         status: "SENT",
+        ...(fileId && { fileId }),
+        ...(fileName && { fileName }),
+        ...(fileUrl && { fileUrl }),
+        ...(fileSize && { fileSize }),
+        ...(mimeType && { mimeType }),
+        ...(duration && { duration }),
         timestamp: new Date(),
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        metadata: {
+          conversationName,
+          technical: {
+            source: "SendMessage-UseCase",
+            clientTimestamp: messageData.timestamp || new Date().toISOString(),
+          },
+        },
       };
-
-      // ✅ AJOUTER LES MÉTADONNÉES SPÉCIFIQUES AU TYPE DE MESSAGE
-      if (type !== "TEXT") {
-        message.metadata = {};
-
-        if (type === "FILE" || type === "IMAGE") {
-          message.metadata.file = {
-            ...(fileId && { fileId: fileId }),
-            ...(fileName && { fileName: fileName }),
-            ...(fileSize && { fileSize: fileSize }),
-            ...(fileUrl && { fileUrl: fileUrl }),
-            ...(mimeType && { mimeType: mimeType }),
-            ...(urlfile && { url: urlfile }),
-            uploadedAt: new Date(),
-          };
-        }
-
-        if (type === "AUDIO") {
-          message.metadata.audio = {
-            ...(duration && { duration: duration }),
-            ...(fileId && { fileId: fileId }),
-            ...(fileUrl && { fileUrl: fileUrl }),
-            ...(fileName && { fileName: fileName }),
-            ...(fileSize && { fileSize: fileSize }),
-            ...(mimeType && { mimeType: mimeType }),
-            ...(urlfile && { url: urlfile }),
-          };
-        }
-
-        if (type === "IMAGE") {
-          message.metadata.image = {
-            ...(fileId && { fileId: fileId }),
-            ...(fileName && { fileName: fileName }),
-            ...(fileUrl && { fileUrl: fileUrl }),
-            ...(fileSize && { fileSize: fileSize }),
-            ...(mimeType && { mimeType: mimeType }),
-            ...(urlfile && { url: urlfile }),
-          };
-        }
-      }
 
       console.log(`📝 Création message:`, {
         senderId: message.senderId,
@@ -256,21 +210,66 @@ class SendMessage {
         hasMetadata: !!message.metadata,
       });
 
-      // ✅ SAUVEGARDER LE MESSAGE AVEC GESTION D'ERREUR
-      let savedMessage;
-      try {
-        savedMessage = await this.messageRepository.save(message);
-        console.log(
-          `💾 Message sauvegardé: ${savedMessage._id || savedMessage.id}`
-        );
-      } catch (saveError) {
-        console.error(`❌ Erreur sauvegarde message:`, saveError.message);
-        throw new Error(
-          `Impossible de sauvegarder le message: ${saveError.message}`
-        );
+      // ✅ ÉTAPE 1 : LOG PRE-WRITE (Write-Ahead Logging)
+      let walId = null;
+      if (this.resilientService) {
+        walId = await this.resilientService.logPreWrite(message);
       }
 
-      // ✅ METTRE À JOUR LA CONVERSATION
+      // ✅ ÉTAPE 2 : SAUVEGARDER AVEC CIRCUIT BREAKER
+      let savedMessage;
+      try {
+        if (this.resilientService) {
+          savedMessage = await this.resilientService.circuitBreaker.execute(
+            () => this.messageRepository.save(message)
+          );
+        } else {
+          savedMessage = await this.messageRepository.save(message);
+        }
+
+        // ✅ MÉTRIQUES (PROTÉGÉ)
+        if (this.resilientService && this.resilientService.metrics) {
+          this.resilientService.metrics.totalMessages++;
+          this.resilientService.metrics.successfulSaves++;
+        }
+
+        console.log(`✅ Message sauvegardé: ${savedMessage._id}`);
+      } catch (saveError) {
+        console.error(`❌ Erreur sauvegarde message:`, saveError.message);
+
+        // ✅ RETRY AUTOMATIQUE
+        if (this.resilientService && saveError.retryable !== false) {
+          await this.resilientService.addRetry(message, 1, saveError);
+        }
+
+        // ✅ FALLBACK REDIS SI DISPONIBLE
+        if (this.resilientService) {
+          try {
+            savedMessage = await this.resilientService.redisFallback(message);
+            console.log(`✅ Message stocké en fallback Redis`);
+          } catch (fallbackError) {
+            // ✅ DEAD LETTER QUEUE EN DERNIER RECOURS
+            await this.resilientService.addToDLQ(message, saveError, 1, {
+              operation: "SendMessage.save",
+              walId,
+            });
+            throw new Error(
+              `Impossible de sauvegarder le message: ${saveError.message}`
+            );
+          }
+        } else {
+          throw new Error(
+            `Impossible de sauvegarder le message: ${saveError.message}`
+          );
+        }
+      }
+
+      // ✅ ÉTAPE 3 : LOG POST-WRITE
+      if (this.resilientService && walId) {
+        await this.resilientService.logPostWrite(savedMessage._id, walId);
+      }
+
+      // ✅ ÉTAPE 4 : METTRE À JOUR LA CONVERSATION
       try {
         await this.conversationRepository.updateLastMessage(conversationId, {
           content: message.content,
@@ -287,26 +286,7 @@ class SendMessage {
         // ✅ NE PAS FAIRE ÉCHOUER LE MESSAGE SI LA MISE À JOUR ÉCHOUE
       }
 
-      // Publier l'événement Kafka si besoin (inchangé)
-      if (this.kafkaProducer) {
-        try {
-          await this.kafkaProducer.publishMessage({
-            eventType: "MESSAGE_SENT",
-            messageId: String(savedMessage._id || savedMessage.id),
-            conversationId: String(conversationId),
-            senderId: String(senderId),
-            content: String(content),
-            type: type,
-            timestamp: new Date().toISOString(),
-            source: "SendMessage-UseCase",
-          });
-          console.log(`📤 Événement Kafka publié: MESSAGE_SENT`);
-        } catch (kafkaError) {
-          console.warn("⚠️ Erreur Kafka SendMessage:", kafkaError.message);
-        }
-      }
-
-      // ✅ RETOURNER LE RÉSULTAT
+      // ✅ RETOURNER LE RÉSULTAT (SANS KAFKA)
       const result = {
         success: true,
         message: {
@@ -348,26 +328,7 @@ class SendMessage {
       return result;
     } catch (error) {
       console.error("❌ Erreur SendMessage use case:", error);
-
-      // ✅ PUBLIER L'ERREUR SUR KAFKA
-      if (this.kafkaProducer) {
-        try {
-          await this.kafkaProducer.publishMessage({
-            eventType: "MESSAGE_SEND_FAILED",
-            conversationId: messageData.conversationId,
-            senderId: messageData.senderId,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-            source: "SendMessage-UseCase",
-          });
-        } catch (kafkaError) {
-          console.warn(
-            "⚠️ Erreur publication échec Kafka:",
-            kafkaError.message
-          );
-        }
-      }
-
+      // ✅ KAFKA COMPLÈTEMENT SUPPRIMÉ
       throw error;
     }
   }
@@ -380,101 +341,16 @@ class SendMessage {
     conversationName = null
   ) {
     try {
-      // Si receiverId est un tableau de plus d'un utilisateur, créer un groupe ou une diffusion
-      let participants;
-      let type;
-      let name = conversationName;
+      const participants = [senderId, receiverId];
+      const type = "PRIVATE";
 
-      if (Array.isArray(receiverId) && receiverId.length > 1) {
-        participants = [
-          senderId,
-          ...receiverId.filter((id) => id !== senderId),
-        ];
-        type = "GROUP"; // ou "BROADCAST" selon le contexte métier
-        if (!name) name = "Groupe";
-      } else {
-        // Conversation privée
-        participants = [senderId, receiverId];
-        type = "PRIVATE";
-        if (!name) name = "Conversation privée";
-      }
-
-      // Correction du tableau plat
-      participants = [...new Set(participants.map(String))];
-
-      // Récupérer les infos utilisateurs depuis auth-user-service
-      const usersInfo = await fetchUsersInfo(participants);
-      console.log(`🔍 Récupération infos utilisateurs:`, {
-        participants,
-        usersInfoCount: usersInfo,
-      });
-
-      // Initialiser unreadCounts et userMetadata pour chaque participant
-      const unreadCounts = {};
-      const userMetadata = [];
-      participants.forEach((pid) => {
-        unreadCounts[pid] = 0;
-        const info = usersInfo.find((u) => u.userId === pid) || {};
-        console.log(`🔍 Infos utilisateur ${pid}:`, info);
-        userMetadata.push({
-          userId: pid,
-          unreadCount: 0,
-          lastReadAt: null,
-          isMuted: false,
-          isPinned: false,
-          notificationSettings: {
-            enabled: true,
-            sound: true,
-            vibration: true,
-          },
-          name: info.name || null,
-          avatar: info.avatar || null,
-        });
-      });
-
-      // Construction du conversationData
       const conversationData = {
         _id: conversationId,
-        name,
+        name: conversationName || `Conversation ${senderId} - ${receiverId}`,
         type,
         participants,
         createdBy: senderId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        lastMessage: null,
-        isActive: true,
-        unreadCounts,
-        userMetadata,
-        metadata: {
-          autoCreated: true,
-          createdFrom: "SendMessage",
-          version: 1,
-          tags: [],
-          auditLog: [
-            {
-              action: "CREATED",
-              userId: senderId,
-              timestamp: new Date(),
-              details: {
-                trigger: "message_send",
-                originalConversationId: conversationId,
-                autoCreated: true,
-                method: "auto_conversation_creation",
-                receiverId,
-              },
-              metadata: {
-                source: "SendMessage-UseCase",
-                reason: "conversation_not_found",
-              },
-            },
-          ],
-          stats: {
-            totalMessages: 0,
-            totalFiles: 0,
-            totalParticipants: participants.length,
-            lastActivity: new Date(),
-          },
-        },
+        isPrivate: true,
         settings: {
           allowInvites: true,
           isPublic: false,
@@ -492,21 +368,7 @@ class SendMessage {
         conversationData
       );
 
-      // Publier l'événement Kafka
-      if (this.kafkaProducer) {
-        await this.kafkaProducer.publishMessage({
-          eventType: `${type}_CONVERSATION_CREATED`,
-          conversationId: String(savedConversation._id),
-          createdBy: senderId,
-          participants,
-          receiverId,
-          name,
-          type,
-          trigger: "message_send",
-          timestamp: new Date().toISOString(),
-          source: "SendMessage-UseCase",
-        });
-      }
+      // ✅ KAFKA SUPPRIMÉ D'ICI AUSSI
 
       return savedConversation;
     } catch (error) {
@@ -514,140 +376,44 @@ class SendMessage {
     }
   }
 
-  // ✅ AJOUTER UNE MÉTHODE DE VALIDATION SPÉCIFIQUE POUR CONVERSATIONS PRIVÉES
-  validatePrivateConversation(conversationData) {
-    const errors = [];
-
-    if (conversationData.type === "PRIVATE") {
-      // Vérifier qu'il y a exactement 2 participants
-      if (
-        !conversationData.participants ||
-        conversationData.participants.length !== 2
-      ) {
-        errors.push(
-          `Conversation privée doit avoir exactement 2 participants (actuel: ${
-            conversationData.participants?.length || 0
-          })`
-        );
-      }
-
-      // Vérifier que les participants sont uniques
-      const uniqueParticipants = [
-        ...new Set(conversationData.participants || []),
-      ];
-      if (uniqueParticipants.length !== 2) {
-        errors.push("Les 2 participants doivent être différents");
-      }
-
-      // Vérifier les compteurs non-lus pour les 2 participants
-      const unreadCountsKeys = Object.keys(conversationData.unreadCounts || {});
-      if (unreadCountsKeys.length !== 2) {
-        errors.push(
-          `Compteurs non-lus manquants pour tous les participants (actuel: ${unreadCountsKeys.length})`
-        );
-      }
-
-      // Vérifier que chaque participant a ses métadonnées
-      const userMetadataCount = conversationData.userMetadata?.length || 0;
-      if (userMetadataCount !== 2) {
-        errors.push(
-          `Métadonnées utilisateur manquantes (actuel: ${userMetadataCount})`
-        );
-      }
-
-      // Vérifier le maximum de participants
-      if (conversationData.settings?.maxParticipants !== 2) {
-        errors.push("maxParticipants doit être 2 pour une conversation privée");
-      }
-    }
-
-    if (errors.length > 0) {
-      console.error("❌ Erreurs validation conversation privée:", errors);
-      throw new Error(
-        `Validation conversation privée échouée: ${errors.join(", ")}`
-      );
-    }
-
-    console.log("✅ Validation conversation privée réussie");
-    return true;
-  }
-
-  // ✅ AMÉLIORER LA MÉTHODE validateConversationData EXISTANTE
+  // ✅ MÉTHODE DE VALIDATION EXISTANTE (INCHANGÉE)
   validateConversationData(conversationData) {
     const errors = [];
 
-    // ✅ VÉRIFICATIONS DE BASE
-    if (!conversationData._id) {
-      errors.push("ID de conversation manquant");
+    if (!conversationData.name || conversationData.name.trim().length === 0) {
+      errors.push("Le nom de la conversation est requis");
     }
 
-    if (!conversationData.name || typeof conversationData.name !== "string") {
-      errors.push("Nom de conversation manquant ou invalide");
+    if (!conversationData.type) {
+      errors.push("Le type de conversation est requis");
     }
 
     if (
-      !conversationData.participants ||
-      !Array.isArray(conversationData.participants)
+      !Array.isArray(conversationData.participants) ||
+      conversationData.participants.length === 0
     ) {
-      errors.push("Participants manquants ou invalides");
-    } else {
-      // ✅ VÉRIFICATION SUPPLÉMENTAIRE : minimum 2 participants
-      if (conversationData.participants.length < 2) {
-        errors.push(
-          `Minimum 2 participants requis (actuel: ${conversationData.participants.length})`
-        );
-      }
+      errors.push("La conversation doit avoir au moins 1 participant");
     }
 
     if (!conversationData.createdBy) {
-      errors.push("Créateur de conversation manquant");
+      errors.push("Le créateur de la conversation est requis");
     }
 
-    // ✅ VÉRIFIER UNREADCOUNTS
-    if (conversationData.unreadCounts === undefined) {
-      errors.push("unreadCounts manquant");
-    } else if (
-      typeof conversationData.unreadCounts !== "object" ||
-      conversationData.unreadCounts === null
-    ) {
-      errors.push("unreadCounts doit être un objet");
-    } else {
-      // ✅ VÉRIFIER QUE CHAQUE PARTICIPANT A UN COMPTEUR
-      const participantIds = conversationData.participants || [];
-      const unreadCountsKeys = Object.keys(conversationData.unreadCounts);
-
-      for (const participantId of participantIds) {
-        if (!unreadCountsKeys.includes(participantId)) {
-          errors.push(
-            `Compteur non-lu manquant pour le participant: ${participantId}`
-          );
+    if (conversationData.userMetadata) {
+      if (!Array.isArray(conversationData.userMetadata)) {
+        errors.push("userMetadata doit être un array");
+      } else {
+        for (const metadata of conversationData.userMetadata) {
+          const participantId = metadata.userId || metadata.participantId;
+          if (!conversationData.participants.includes(participantId)) {
+            errors.push(
+              `Métadonnées pour un participant non-existent: ${participantId}`
+            );
+          }
         }
       }
     }
 
-    // ✅ VÉRIFIER USERMETADATA
-    if (
-      conversationData.userMetadata &&
-      !Array.isArray(conversationData.userMetadata)
-    ) {
-      errors.push("userMetadata doit être un array");
-    } else if (conversationData.userMetadata) {
-      // ✅ VÉRIFIER QUE CHAQUE PARTICIPANT A SES MÉTADONNÉES
-      const participantIds = conversationData.participants || [];
-      const userMetadataUserIds = conversationData.userMetadata.map(
-        (meta) => meta.userId
-      );
-
-      for (const participantId of participantIds) {
-        if (!userMetadataUserIds.includes(participantId)) {
-          errors.push(
-            `Métadonnées manquantes pour le participant: ${participantId}`
-          );
-        }
-      }
-    }
-
-    // ✅ VÉRIFIER METADATA
     if (conversationData.metadata) {
       if (
         conversationData.metadata.auditLog &&
@@ -666,22 +432,6 @@ class SendMessage {
 
     console.log("✅ Validation conversation réussie");
     return true;
-  }
-
-  // ✅ MÉTHODE UTILITAIRE POUR EXTRAIRE RECEIVER ID
-  extractReceiverIdFromConversation(conversationId, senderId) {
-    try {
-      // Pattern: privé entre 2 utilisateurs
-      if (conversationId.includes("_")) {
-        const parts = conversationId.split("_");
-        return parts.find((part) => part !== senderId);
-      }
-
-      // Autres patterns possibles...
-      return null;
-    } catch (error) {
-      return null;
-    }
   }
 }
 

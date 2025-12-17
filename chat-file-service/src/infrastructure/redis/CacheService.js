@@ -81,44 +81,45 @@ class CacheService {
   // Cache des derniers messages d'une room
   async cacheLastMessages(roomId, messages, ttl = 3600) {
     try {
-      const key = `last_messages:${roomId}`;
+      const cacheKey = `${
+        this.options.keyPrefix
+      }:last_messages:${this.sanitizeKey(roomId)}`;
+
       const data = {
-        messages: messages.slice(0, 50), // Limiter aux 50 derniers messages
+        messages: Array.isArray(messages) ? messages.slice(0, 50) : [],
         cachedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        count: (Array.isArray(messages) ? messages.length : 0).toString(),
       };
-      return await this.set(key, data, ttl);
+
+      await this.redis.setEx(cacheKey, ttl, JSON.stringify(data));
+      console.log(
+        `💾 Last messages cachés: ${data.count} messages (${roomId})`
+      );
+      return cacheKey;
     } catch (err) {
-      console.warn("⚠️ Cache lastMessages error:", err.message);
-      return false;
+      console.warn("⚠️ Erreur cacheLastMessages:", err.message);
+      return null;
     }
   }
 
   // Récupérer les derniers messages cachés d'une room
   async getCachedLastMessages(roomId) {
     try {
-      const key = `last_messages:${roomId}`;
-      const cached = await this.get(key);
+      const cacheKey = `${
+        this.options.keyPrefix
+      }:last_messages:${this.sanitizeKey(roomId)}`;
 
-      if (cached) {
-        try {
-          // Vérifier que les données sont valides
-          if (cached.messages && Array.isArray(cached.messages)) {
-            return cached;
-          } else {
-            // Données invalides -> nettoyer et retourner null
-            await this.delete(key);
-            return null;
-          }
-        } catch (parseError) {
-          console.warn(`⚠️ Cache parse error for ${key}:`, parseError.message);
-          await this.delete(key); // Nettoyer les données corrompues
-          return null;
-        }
+      const cached = await this.redis.get(cacheKey);
+      if (!cached) {
+        console.log(`📦 Last messages miss: ${roomId}`);
+        return null;
       }
-      return null;
+
+      const data = JSON.parse(cached);
+      console.log(`📦 Last messages hit: ${data.count} messages (${roomId})`);
+      return data.messages || [];
     } catch (err) {
-      console.warn("⚠️ GetCachedLastMessages error:", err.message);
+      console.warn("⚠️ Erreur getCachedLastMessages:", err.message);
       return null;
     }
   }
@@ -126,13 +127,46 @@ class CacheService {
   // Invalider le cache des messages d'une room
   async invalidateRoomMessages(roomId) {
     try {
-      const pattern = `last_messages:${roomId}*`;
-      const count = await this.delete(pattern);
-      console.log(`🗑️ Invalidated ${count} cache entries for room ${roomId}`);
-      return count;
+      const patterns = [
+        `${this.options.keyPrefix}:last_messages:${this.sanitizeKey(roomId)}`,
+        `${this.options.keyPrefix}:messages:${this.sanitizeKey(roomId)}:*`,
+      ];
+
+      for (const pattern of patterns) {
+        try {
+          await this.redis.del(pattern);
+          console.log(`🗑️ Invalidé: ${pattern}`);
+        } catch (err) {
+          console.warn(`⚠️ Erreur invalidation ${pattern}:`, err.message);
+        }
+      }
     } catch (err) {
-      console.warn("⚠️ InvalidateRoomMessages error:", err.message);
-      return 0;
+      console.error("❌ Erreur invalidateRoomMessages:", err.message);
+    }
+  }
+
+  /**
+   * Renouveler le TTL d'une clé existante
+   * Utile pour les cache hits - étendre la vie des entrées utilisées
+   */
+  async renewTTL(key, ttl = this.options.defaultTTL) {
+    try {
+      const cacheKey = `${this.options.keyPrefix}:${this.sanitizeKey(key)}`;
+
+      // Vérifier existence
+      const exists = await this.redis.exists(cacheKey);
+      if (!exists) {
+        console.warn(`⚠️ renewTTL: Clé inexistante: ${key} (non renouvelée)`);
+        return false;
+      }
+
+      // Appliquer TTL
+      await this.redis.expire(cacheKey, ttl);
+      console.log(`🔄 TTL renouvelé: ${key} (${ttl}s)`);
+      return true;
+    } catch (err) {
+      console.error(`❌ Erreur renewTTL ${key}:`, err.message);
+      return false;
     }
   }
 

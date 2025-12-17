@@ -829,6 +829,47 @@ class MongoMessageRepository {
     }
   }
 
+  // ===============================
+  // MÉTHODES MANQUANTES
+  // ===============================
+
+  /**
+   * ✅ Compter les messages non-lus par conversation pour un utilisateur
+   * Utilisé par CachedMessageRepository.getUnreadCount()
+   */
+  async countUnreadMessages(conversationId, userId) {
+    try {
+      const count = await Message.countDocuments({
+        conversationId,
+        receiverId: userId,
+        status: { $ne: "READ" },
+      });
+      console.log(`📊 Unread par conv: ${conversationId}/${userId} = ${count}`);
+      return count;
+    } catch (error) {
+      console.error("❌ Erreur countUnreadMessages:", error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ Compter TOUS les messages non-lus pour un utilisateur (toutes conversations)
+   * Utilisé par UnreadMessageManager.getTotalUnreadCount()
+   */
+  async countAllUnreadMessages(userId) {
+    try {
+      const count = await Message.countDocuments({
+        receiverId: userId,
+        status: { $ne: "READ" },
+      });
+      console.log(`📊 Total unread pour ${userId}: ${count}`);
+      return count;
+    } catch (error) {
+      console.error("❌ Erreur countAllUnreadMessages:", error.message);
+      throw error;
+    }
+  }
+
   // Ajouter ces méthodes manquantes
   async getLastMessage(conversationId) {
     return await Message.findOne({ conversationId })

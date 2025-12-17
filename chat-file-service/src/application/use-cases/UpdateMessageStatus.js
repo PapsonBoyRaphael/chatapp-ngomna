@@ -38,36 +38,6 @@ class UpdateMessageStatus {
 
       result = await updatePromise;
 
-      // Publication Kafka si besoin (inchangé)
-      if (this.kafkaProducer && result.modifiedCount > 0) {
-        try {
-          const eventType =
-            status === "READ"
-              ? "MESSAGES_READ"
-              : status === "DELIVERED"
-              ? "MESSAGES_DELIVERED"
-              : "MESSAGES_STATUS_UPDATED";
-          await this.kafkaProducer.publishMessage({
-            eventType,
-            conversationId,
-            receiverId,
-            status,
-            modifiedCount: result.modifiedCount,
-            messageIds: messageIds || "ALL",
-            timestamp: new Date().toISOString(),
-            source: "UpdateMessageStatus-UseCase",
-          });
-          console.log(
-            `📤 Statut publié dans Kafka: ${eventType} - ${result.modifiedCount} messages`
-          );
-        } catch (kafkaError) {
-          console.warn(
-            "⚠️ Erreur publication statut Kafka (non bloquant):",
-            kafkaError.message
-          );
-        }
-      }
-
       // Si le statut est "READ", réinitialiser le compteur de messages non lus
       if (status === "READ") {
         try {

@@ -513,6 +513,179 @@ class RoomManager {
       return { totalRooms: 0, rooms: [], error: error.message };
     }
   }
+
+  /**
+   * Initialise une room de conversation à partir des données MongoDB
+   * Crée la room, ajoute les participants et stocke les métadonnées
+   * @param {Object} conversationData - Données de la conversation MongoDB
+   */
+  async initializeConversationRoom(conversationData) {
+    try {
+      const conversationIdString = String(
+        conversationData._id || conversationData.id
+      );
+      const roomName = `conv_${conversationIdString}`;
+
+      // 1️⃣ Créer la room
+      await this.createRoom(roomName, {
+        type: "CONVERSATION",
+        isPrivate: String(conversationData.isPrivate || true),
+        description: conversationData.title || "",
+      });
+
+      // 2️⃣ Ajouter les participants
+      const participants = conversationData.participants || [];
+      for (const participant of participants) {
+        await this.addUserToRoom(roomName, participant.userId, {
+          matricule: participant.matricule,
+          conversationId: conversationIdString,
+        });
+      }
+
+      // 3️⃣ Stocker les métadonnées de la conversation
+      const metadata = {
+        conversationId: conversationIdString,
+        title: conversationData.title || "Conversation",
+        isPrivate: String(conversationData.isPrivate || true),
+        createdBy: conversationData.createdBy
+          ? String(conversationData.createdBy)
+          : "Unknown",
+        createdAt:
+          conversationData.createdAt?.toISOString?.() ||
+          new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        participantsCount: String(participants.length),
+        unreadCounts: JSON.stringify(conversationData.unreadCounts || {}),
+        userMetadata: JSON.stringify(conversationData.userMetadata || {}),
+        settings: JSON.stringify(conversationData.settings || {}),
+      };
+
+      await this.redis.hSet(`room_metadata:${roomName}`, metadata);
+
+      // Définir TTL : 7 jours pour les métadonnées
+      await this.redis.expire(`room_metadata:${roomName}`, 86400 * 7);
+
+      console.log(
+        `✅ Room de conversation ${roomName} initialisée avec ${participants.length} participant(s)`
+      );
+      return true;
+    } catch (error) {
+      console.error("❌ Erreur initializeConversationRoom:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Récupère les données unifiées d'une conversation
+   * Combine métadonnées Redis + données temps-réel + participants
+   * @param {string} conversationId - ID de la conversation
+   * @returns {Object} Données unifiées de la conversation
+   */
+  async getConversationData(conversationId) {
+    try {
+      const conversationIdString = String(conversationId);
+      const roomName = `conv_${conversationIdString}`;
+
+      // 1️⃣ Récupérer métadonnées Redis
+      const metadata = await this.redis.hGetAll(`room_metadata:${roomName}`);
+
+      if (!metadata || Object.keys(metadata).length === 0) {
+        console.warn(`⚠️ Métadonnées manquantes pour ${roomName}`);
+        return null;
+      }
+
+      // 2️⃣ Récupérer participants et statut temps-réel
+      const users = await this.getRoomUsers(roomName);
+      const roomState = await this.redis.get(
+        `${this.roomStatePrefix}:${roomName}`
+      );
+
+      // 3️⃣ Assembler les données unifiées
+      const unifiedData = {
+        id: conversationIdString,
+        title: metadata.title || "Conversation",
+        isPrivate: metadata.isPrivate === "true",
+        createdBy: metadata.createdBy,
+        createdAt: metadata.createdAt,
+        updatedAt: metadata.updatedAt,
+        participants: users.map((user) => ({
+          userId: user.userId,
+          matricule: user.matricule,
+          joinedAt: user.joinedAt,
+          lastActivity: user.lastActivity,
+        })),
+        participantsCount: users.length,
+        status: roomState || "idle",
+        unreadCounts: metadata.unreadCounts
+          ? JSON.parse(metadata.unreadCounts)
+          : {},
+        userMetadata: metadata.userMetadata
+          ? JSON.parse(metadata.userMetadata)
+          : {},
+        settings: metadata.settings ? JSON.parse(metadata.settings) : {},
+      };
+
+      return unifiedData;
+    } catch (error) {
+      console.error("❌ Erreur getConversationData:", error);
+      return null;
+    }
+  }
+
+  /**
+   * Met à jour les métadonnées d'une conversation
+   * Synchronise les changements MongoDB → Redis
+   * @param {string} conversationId - ID de la conversation
+   * @param {Object} metadata - Nouvelles métadonnées à mettre à jour
+   */
+  async updateConversationMetadata(conversationId, metadata) {
+    try {
+      const conversationIdString = String(conversationId);
+      const roomName = `conv_${conversationIdString}`;
+
+      // 1️⃣ Vérifier que la room existe
+      const existingMetadata = await this.redis.hGetAll(
+        `room_metadata:${roomName}`
+      );
+      if (!existingMetadata || Object.keys(existingMetadata).length === 0) {
+        console.warn(
+          `⚠️ Room ${roomName} inexistante, initialisation nécessaire`
+        );
+        return false;
+      }
+
+      // 2️⃣ Préparer les données de mise à jour
+      const updateData = {
+        updatedAt: new Date().toISOString(),
+      };
+
+      // Mettre à jour les champs fournis
+      if (metadata.title) updateData.title = String(metadata.title);
+      if (metadata.isPrivate !== undefined)
+        updateData.isPrivate = String(metadata.isPrivate);
+      if (metadata.settings)
+        updateData.settings = JSON.stringify(metadata.settings);
+      if (metadata.userMetadata)
+        updateData.userMetadata = JSON.stringify(metadata.userMetadata);
+      if (metadata.unreadCounts)
+        updateData.unreadCounts = JSON.stringify(metadata.unreadCounts);
+
+      // 3️⃣ Mettre à jour Redis
+      await this.redis.hSet(`room_metadata:${roomName}`, updateData);
+
+      // 4️⃣ Renouveler le TTL
+      await this.redis.expire(`room_metadata:${roomName}`, 86400 * 7);
+
+      // 5️⃣ Mettre à jour l'activité de la room
+      await this.updateRoomActivity(roomName);
+
+      console.log(`✅ Métadonnées du room ${roomName} mises à jour`);
+      return true;
+    } catch (error) {
+      console.error("❌ Erreur updateConversationMetadata:", error);
+      return false;
+    }
+  }
 }
 
 module.exports = RoomManager;
