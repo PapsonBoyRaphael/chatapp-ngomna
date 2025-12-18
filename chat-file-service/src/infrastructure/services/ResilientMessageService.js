@@ -1,8 +1,9 @@
 /**
- * ResilientMessageService - Service COMPLET de résilience
+ * ResilientMessageService - Service COMPLET de résilience + Multi-Streams
  * ✅ Écrit ET lit les streams
  * ✅ Gère les retries automatiques
  * ✅ Nettoie la mémoire
+ * ✅ MULTI-STREAMS PAR TYPE (privé, groupe, typing, etc.)
  * ✅ Un seul point de vérité pour la logique résiliente
  */
 
@@ -75,7 +76,7 @@ class ResilientMessageService {
 
     this.maxRetries = 5;
 
-    // ✅ STREAMS CONFIGURATION
+    // ✅ STREAMS CONFIGURATION - RÉSILIENCE
     this.STREAMS = {
       WAL: "wal:stream",
       RETRY: "retry:stream",
@@ -84,14 +85,28 @@ class ResilientMessageService {
       MESSAGES: "messages:stream",
     };
 
+    // ✅ NOUVEAU : MULTI-STREAMS PAR TYPE
+    this.MULTI_STREAMS = {
+      PRIVATE: "stream:messages:private",
+      GROUP: "stream:messages:group",
+      TYPING: "stream:events:typing",
+      READ_RECEIPTS: "stream:events:read",
+      NOTIFICATIONS: "stream:messages:system",
+    };
+
     // ✅ CONFIGURATION SIMPLE DES TAILLES
-    // Ces valeurs sont APPLIQUÉES dans addToStream()
     this.STREAM_MAXLEN = {
-      [this.STREAMS.MESSAGES]: 5000, // 5k messages (grand buffer)
-      [this.STREAMS.RETRY]: 5000, // 5k retries
-      [this.STREAMS.WAL]: 10000, // 10k WAL entries
-      [this.STREAMS.FALLBACK]: 5000, // 5k fallbacks
-      [this.STREAMS.DLQ]: 1000, // 1k erreurs
+      [this.STREAMS.MESSAGES]: 5000,
+      [this.STREAMS.RETRY]: 5000,
+      [this.STREAMS.WAL]: 10000,
+      [this.STREAMS.FALLBACK]: 5000,
+      [this.STREAMS.DLQ]: 1000,
+      // Multi-streams
+      [this.MULTI_STREAMS.PRIVATE]: 10000,
+      [this.MULTI_STREAMS.GROUP]: 20000,
+      [this.MULTI_STREAMS.TYPING]: 2000,
+      [this.MULTI_STREAMS.READ_RECEIPTS]: 5000,
+      [this.MULTI_STREAMS.NOTIFICATIONS]: 2000,
     };
 
     // ✅ MÉTRIQUES
@@ -104,6 +119,10 @@ class ResilientMessageService {
       avgProcessingTime: 0,
       peakMemoryMB: 0,
       lastReportTime: Date.now(),
+      // Multi-streams metrics
+      privateMessagesPublished: 0,
+      groupMessagesPublished: 0,
+      typingEventsPublished: 0,
     };
 
     this.memoryLimitMB = parseInt(process.env.REDIS_MEMORY_LIMIT_MB) || 512;
@@ -119,16 +138,16 @@ class ResilientMessageService {
     this.isRunning = false;
     this.batchSize = 10;
     this.processingDelayMs = 1000;
+    this.consumerGroupsInitialized = false;
 
     if (this.redis) {
-      // this.initConsumerGroups();
       this.startMemoryMonitor();
       this.startMetricsReporting();
       this.startStreamMonitoring();
     }
 
     console.log(
-      "✅ ResilientMessageService initialisé (Auto-trim Redis MAXLEN)"
+      "✅ ResilientMessageService initialisé (Auto-trim Redis MAXLEN + Multi-Streams)"
     );
   }
 
@@ -170,7 +189,7 @@ class ResilientMessageService {
         normalizedFields[key] = stringValue;
       }
 
-      // ✅ VÉRIFIER QUE LE CHAMP 'data' N'EST PAS VIDE (critiques)
+      // ✅ VÉRIFIER QUE LES CHAMPS CRITIQUES NE SONT PAS VIDES
       if (
         normalizedFields.data === "" ||
         normalizedFields.data === "undefined"
@@ -188,7 +207,6 @@ class ResilientMessageService {
       const maxLen = this.STREAM_MAXLEN[streamName];
       if (maxLen !== undefined) {
         try {
-          // Faire un trim asynchrone sans attendre
           this.redis.xTrim(streamName, "~", maxLen).catch(() => {
             // Ignorer les erreurs de trim
           });
@@ -201,7 +219,6 @@ class ResilientMessageService {
     } catch (err) {
       console.warn(`⚠️ Erreur addToStream ${streamName}:`, err.message);
       try {
-        // Fallback simple
         const normalizedFields = {};
         for (const [key, value] of Object.entries(fields || {})) {
           normalizedFields[key] = String(
@@ -218,34 +235,45 @@ class ResilientMessageService {
 
   // ===== INITIALISATION =====
 
-  // async initConsumerGroups() {
-  //   try {
-  //     const groupConfigs = {
-  //       [this.STREAMS.RETRY]: "retry-workers",
-  //       [this.STREAMS.DLQ]: "dlq-processors",
-  //       [this.STREAMS.FALLBACK]: "fallback-workers",
-  //     };
+  async initConsumerGroups() {
+    if (this.consumerGroupsInitialized) {
+      console.log("ℹ️ Consumer groups déjà initialisés");
+      return;
+    }
+    this.consumerGroupsInitialized = true;
 
-  //     for (const [stream, group] of Object.entries(groupConfigs)) {
-  //       try {
-  //         // ✅ CRÉER LE GROUPE DE CONSOMMATEURS (créera le stream s'il n'existe pas)
-  //         // PAS BESOIN DE CRÉER UNE ENTRÉE D'INIT !
-  //         await this.redis.xGroupCreate(stream, group, "$", {
-  //           MKSTREAM: true,
-  //         });
-  //         console.log(`✅ Stream ${stream} + Consumer group ${group} créés`);
-  //       } catch (err) {
-  //         if (err.message.includes("BUSYGROUP")) {
-  //           console.log(`ℹ️ Consumer group ${group} existe déjà`);
-  //         } else {
-  //           console.warn(`⚠️ Erreur création groupe:`, err.message);
-  //         }
-  //       }
-  //     }
-  //   } catch (err) {
-  //     console.warn("⚠️ Erreur init consumer groups:", err.message);
-  //   }
-  // }
+    try {
+      const groupConfigs = {
+        [this.STREAMS.RETRY]: "retry-workers",
+        [this.STREAMS.DLQ]: "dlq-processors",
+        [this.STREAMS.FALLBACK]: "fallback-workers",
+        // Multi-streams
+        [this.MULTI_STREAMS.PRIVATE]: "delivery-private",
+        [this.MULTI_STREAMS.GROUP]: "delivery-group",
+        [this.MULTI_STREAMS.TYPING]: "delivery-typing",
+        [this.MULTI_STREAMS.READ_RECEIPTS]: "delivery-read",
+        [this.MULTI_STREAMS.NOTIFICATIONS]: "delivery-notifications",
+      };
+
+      for (const [stream, group] of Object.entries(groupConfigs)) {
+        try {
+          await this.redis.xGroupCreate(stream, group, "$", {
+            MKSTREAM: true,
+          });
+          console.log(`✅ Stream ${stream} + Consumer group ${group} créés`);
+        } catch (err) {
+          if (err.message.includes("BUSYGROUP")) {
+            console.log(`ℹ️ Consumer group ${group} existe déjà`);
+          } else {
+            console.warn(`⚠️ Erreur création groupe:`, err.message);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("⚠️ Erreur init consumer groups:", err.message);
+      this.consumerGroupsInitialized = false;
+    }
+  }
 
   // ===== MONITORING MÉMOIRE =====
 
@@ -309,19 +337,18 @@ class ResilientMessageService {
             };
             totalSize += length;
 
-            // ✅ Warning si vraiment dépassé (ne devrait PAS arriver)
             if (length > maxLen * 1.5) {
               console.warn(
                 `⚠️ ${streamName} dépasse limites: ${length}/${maxLen}`
               );
             }
           } catch (err) {
-            console.warn(`⚠️ Erreur monitoring ${streamName}:`, err.message);
+            // Stream n'existe pas encore
           }
         }
 
         // Log toutes les 5 minutes
-        if (Object.keys(this.metrics).length % 5 === 0) {
+        if (Date.now() - this.metrics.lastReportTime > 300000) {
           console.log("📊 === ÉTAT DES STREAMS ===");
           console.table(streamSizes);
           console.log(`📊 Total: ${totalSize} entrées`);
@@ -362,6 +389,12 @@ class ResilientMessageService {
       );
       console.log(`💾 Mémoire pic: ${this.metrics.peakMemoryMB.toFixed(2)}MB`);
       console.log(`🔌 Circuit breaker: ${this.circuitBreaker.state}`);
+      // Multi-streams metrics
+      console.log(
+        `📨 Messages privés: ${this.metrics.privateMessagesPublished}`
+      );
+      console.log(`👥 Messages groupe: ${this.metrics.groupMessagesPublished}`);
+      console.log(`⌨️ Typing events: ${this.metrics.typingEventsPublished}`);
       console.log("================================");
 
       // Reset metrics
@@ -370,6 +403,9 @@ class ResilientMessageService {
       this.metrics.retryCount = 0;
       this.metrics.fallbackActivations = 0;
       this.metrics.dlqCount = 0;
+      this.metrics.privateMessagesPublished = 0;
+      this.metrics.groupMessagesPublished = 0;
+      this.metrics.typingEventsPublished = 0;
       this.metrics.lastReportTime = now;
       this.metrics.peakMemoryMB = 0;
     }, 3600000);
@@ -411,7 +447,6 @@ class ResilientMessageService {
         status: "completed",
       });
 
-      // ✅ Supprimer le WAL incomplet après succès
       await this.redis.xDel(this.STREAMS.WAL, walId);
       console.log(`✅ WAL cleanup: ${walId}`);
     } catch (err) {
@@ -430,7 +465,6 @@ class ResilientMessageService {
     try {
       this.metrics.retryCount++;
 
-      // ✅ VÉRIFIER QUE messageData N'EST PAS NULL
       const dataStr = JSON.stringify(messageData);
       if (!dataStr || dataStr === "undefined" || dataStr.trim() === "") {
         console.error("❌ addRetry: impossible de stringifier messageData", {
@@ -500,7 +534,6 @@ class ResilientMessageService {
     try {
       const hashKey = `fallback:${fallbackId}`;
 
-      // Stocker les données de fallback
       await this.redis.hSet(hashKey, {
         id: fallbackId,
         originalId: messageData._id?.toString() || "pending",
@@ -515,7 +548,6 @@ class ResilientMessageService {
 
       await this.redis.expire(hashKey, 86400);
 
-      // Ajouter au stream FALLBACK avec MAXLEN
       const streamId = await this.addToStream(this.STREAMS.FALLBACK, {
         fallbackId,
         conversationId: messageData.conversationId?.toString(),
@@ -623,7 +655,6 @@ class ResilientMessageService {
 
       if (!retries || retries.length === 0) return;
 
-      // Le format retourné est: [{ key, messages: [...] }]
       const streamData = retries[0];
       if (!streamData || !streamData.messages) return;
 
@@ -637,7 +668,6 @@ class ResilientMessageService {
 
           let messageData;
           try {
-            // ✅ VÉRIFIER QUE message.data EXISTE ET N'EST PAS VIDE OU "undefined"
             if (
               !message.data ||
               message.data.trim() === "" ||
@@ -656,7 +686,6 @@ class ResilientMessageService {
               "Data reçu:",
               message.data?.substring(0, 50)
             );
-            // ✅ Supprimer seulement après echec de parsing
             await this.redis.xDel(this.STREAMS.RETRY, id);
             continue;
           }
@@ -667,13 +696,11 @@ class ResilientMessageService {
             const savedMessage = await this.messageRepository.save(messageData);
             console.log(`✅ Retry réussi: ${message.messageId}`);
 
-            // ✅ Publier le message réussi
             await this.publishToMessageStream(savedMessage, {
               event: "NEW_MESSAGE",
               source: "retry",
             });
 
-            // ✅ Supprimer du RETRY après succès
             await this.redis.xDel(this.STREAMS.RETRY, id);
 
             if (this.io) {
@@ -722,7 +749,6 @@ class ResilientMessageService {
 
       if (!fallbacks || fallbacks.length === 0) return;
 
-      // Le format retourné est: [{ key, messages: [...] }]
       const streamData = fallbacks[0];
       if (!streamData || !streamData.messages) return;
 
@@ -764,13 +790,11 @@ class ResilientMessageService {
               `✅ Fallback rejoué: ${fallbackId} → ${mongoMessage._id}`
             );
 
-            // ✅ Publier le message rejoué
             await this.publishToMessageStream(mongoMessage, {
               event: "NEW_MESSAGE",
               source: "fallback_replay",
             });
 
-            // ✅ Nettoyer seulement après succès
             await this.redis.del(hashKey);
             await this.redis.zRem("fallback:active", fallbackId);
             await this.redis.xDel(this.STREAMS.FALLBACK, id);
@@ -850,7 +874,7 @@ class ResilientMessageService {
       }
 
       const now = Date.now();
-      const walTimeout = 60000; // 1 minute
+      const walTimeout = 60000;
 
       for (const [walId, walData] of incompleteWALs.entries()) {
         try {
@@ -881,7 +905,6 @@ class ResilientMessageService {
               );
             }
 
-            // ✅ Supprimer le WAL incomplet
             await this.redis.xDel(this.STREAMS.WAL, walData.id);
           }
         } catch (error) {
@@ -940,8 +963,8 @@ class ResilientMessageService {
   // ===== PUBLISH MESSAGE =====
 
   /**
-   * ✅ PUBLIER UN MESSAGE DANS LE STREAM
-   * Redis gère automatiquement le trim via MAXLEN
+   * ✅ PUBLIER UN MESSAGE DANS LE BON STREAM (MULTI-STREAMS)
+   * Détermine automatiquement le type : PRIVÉ / GROUPE
    */
   async publishToMessageStream(savedMessage, options = {}) {
     if (!this.redis) {
@@ -950,10 +973,46 @@ class ResilientMessageService {
     }
 
     try {
+      const conversationId = savedMessage.conversationId?.toString();
+      const senderId = savedMessage.senderId?.toString();
+      let receiverId = savedMessage.receiverId?.toString();
+
+      // ✅ DÉDUIRE receiverId SI ABSENT
+      if (
+        !receiverId ||
+        receiverId === "null" ||
+        receiverId === "undefined" ||
+        receiverId === ""
+      ) {
+        if (
+          options.conversationParticipants &&
+          Array.isArray(options.conversationParticipants)
+        ) {
+          receiverId = options.conversationParticipants
+            .map((p) => String(p.userId || p))
+            .find((p) => p !== String(senderId));
+        } else if (this.mongoRepository && conversationId) {
+          try {
+            const conversation = await this.mongoRepository.findById(
+              conversationId
+            );
+            if (conversation?.participants) {
+              receiverId = conversation.participants
+                .map((p) => String(p.userId || p))
+                .find((p) => p !== String(senderId));
+            }
+          } catch (err) {
+            console.warn("⚠️ Erreur déduction receiverId:", err.message);
+          }
+        }
+      }
+
+      // ✅ CONSTRUIRE LES DONNÉES DU MESSAGE
       const streamData = {
         messageId: savedMessage._id?.toString() || savedMessage.id,
-        conversationId: savedMessage.conversationId?.toString(),
-        senderId: savedMessage.senderId?.toString(),
+        conversationId: conversationId || "",
+        senderId: senderId || "",
+        receiverId: receiverId || "",
         content: (savedMessage.content || "").substring(0, 500),
         type: savedMessage.type || "TEXT",
         event: options.event || "NEW_MESSAGE",
@@ -965,16 +1024,124 @@ class ResilientMessageService {
         publishedAt: Date.now().toString(),
       };
 
-      // ✅ MAXLEN APPLIQUÉ AUTOMATIQUEMENT ICI !
-      const streamId = await this.addToStream(
-        this.STREAMS.MESSAGES,
-        streamData
-      );
+      // ✅ DÉTERMINER LE STREAM DE DESTINATION
+      let streamName = this.STREAMS.MESSAGES;
+      let streamDescription = "DÉFAUT";
 
-      console.log(`📤 Message publié dans stream: ${streamId}`);
+      // Cas 1 : Message privé (1→1)
+      if (
+        receiverId &&
+        receiverId !== "null" &&
+        receiverId !== "" &&
+        receiverId !== "undefined"
+      ) {
+        streamName = this.MULTI_STREAMS.PRIVATE;
+        streamDescription = "PRIVÉ";
+        this.metrics.privateMessagesPublished++;
+      }
+      // Cas 2 : Message de groupe (1→N avec conversationId)
+      else if (
+        conversationId &&
+        conversationId !== "null" &&
+        conversationId !== ""
+      ) {
+        streamName = this.MULTI_STREAMS.GROUP;
+        streamDescription = "GROUPE";
+        this.metrics.groupMessagesPublished++;
+      }
+
+      console.log(`📤 Publication [${streamDescription}] dans ${streamName}:`, {
+        messageId: streamData.messageId,
+        senderId: streamData.senderId,
+        receiverId: streamData.receiverId,
+        conversationId: streamData.conversationId,
+      });
+
+      const streamId = await this.addToStream(streamName, streamData);
+
+      console.log(`✅ Message publié: ${streamId}`);
       return streamId;
     } catch (error) {
       console.error("❌ Erreur publication stream:", error.message);
+      return null;
+    }
+  }
+
+  /**
+   * ✅ PUBLIER UN ÉVÉNEMENT TYPING
+   */
+  async publishTypingEvent(conversationId, userId, isTyping = true) {
+    if (!this.redis) return null;
+
+    try {
+      const streamId = await this.addToStream(this.MULTI_STREAMS.TYPING, {
+        conversationId: conversationId.toString(),
+        userId: userId.toString(),
+        isTyping: isTyping.toString(),
+        event: isTyping ? "TYPING_STARTED" : "TYPING_STOPPED",
+        timestamp: new Date().toISOString(),
+        publishedAt: Date.now().toString(),
+      });
+
+      this.metrics.typingEventsPublished++;
+      console.log(`⌨️ Typing event publié: ${streamId}`);
+      return streamId;
+    } catch (error) {
+      console.error("❌ Erreur publication typing event:", error.message);
+      return null;
+    }
+  }
+
+  /**
+   * ✅ PUBLIER UN ACCUSÉ DE LECTURE
+   */
+  async publishReadReceipt(messageId, conversationId, userId, readAt = null) {
+    if (!this.redis) return null;
+
+    try {
+      const streamId = await this.addToStream(
+        this.MULTI_STREAMS.READ_RECEIPTS,
+        {
+          messageId: messageId.toString(),
+          conversationId: conversationId.toString(),
+          userId: userId.toString(),
+          readAt: (readAt || new Date()).toISOString(),
+          timestamp: new Date().toISOString(),
+          publishedAt: Date.now().toString(),
+        }
+      );
+
+      console.log(`📖 Read receipt publié: ${streamId}`);
+      return streamId;
+    } catch (error) {
+      console.error("❌ Erreur publication read receipt:", error.message);
+      return null;
+    }
+  }
+
+  /**
+   * ✅ PUBLIER UNE NOTIFICATION
+   */
+  async publishNotification(userId, title, message, type = "INFO") {
+    if (!this.redis) return null;
+
+    try {
+      const streamId = await this.addToStream(
+        this.MULTI_STREAMS.NOTIFICATIONS,
+        {
+          userId: userId.toString(),
+          title: title.substring(0, 100),
+          message: message.substring(0, 500),
+          type: type,
+          timestamp: new Date().toISOString(),
+          publishedAt: Date.now().toString(),
+        }
+      );
+
+      console.log(`🔔 Notification publiée: ${streamId}`);
+      return streamId;
+    } catch (error) {
+      console.error("❌ Erreur publication notification:", error.message);
       return null;
     }
   }
@@ -985,6 +1152,30 @@ class ResilientMessageService {
     const startTime = Date.now();
 
     try {
+      // ✅ ÉTAPE 0 : RÉCUPÉRER LES PARTICIPANTS AVANT TOUT
+      let conversationParticipants = [];
+      if (messageData.conversationId && this.mongoRepository) {
+        try {
+          const conversation = await this.mongoRepository.findById(
+            messageData.conversationId
+          );
+
+          if (conversation) {
+            conversationParticipants = conversation.participants || [];
+            console.log(
+              `👥 Participants trouvés: ${conversationParticipants
+                .map((p) => p.userId || p)
+                .join(", ")}`
+            );
+          }
+        } catch (convError) {
+          console.warn(
+            "⚠️ Erreur récupération participants:",
+            convError.message
+          );
+        }
+      }
+
       // ✅ ÉTAPE 1 : LOG PRE-WRITE
       const walId = await this.logPreWrite(messageData);
 
@@ -997,11 +1188,12 @@ class ResilientMessageService {
 
         this.metrics.successfulSaves++;
 
-        // ✅ ÉTAPE 3 : PUBLICATION
+        // ✅ ÉTAPE 3 : PUBLICATION AVEC PARTICIPANTS
         const publishStartTime = Date.now();
         await this.publishToMessageStream(savedMessage, {
           event: "NEW_MESSAGE",
           source: "mongodb_write",
+          conversationParticipants: conversationParticipants, // ✅ PASSER LES PARTICIPANTS
         });
         const publishTime = Date.now() - publishStartTime;
 
@@ -1020,6 +1212,7 @@ class ResilientMessageService {
           mongoTime: `${mongoTime}ms`,
           publishTime: `${publishTime}ms`,
           totalTime: `${totalTime}ms`,
+          hasParticipants: conversationParticipants.length > 0,
         });
 
         return {
@@ -1030,25 +1223,27 @@ class ResilientMessageService {
       } catch (saveError) {
         console.error(`❌ Erreur sauvegarde:`, saveError.message);
 
-        // ✅ RETRY
+        // ✅ RETRY AUTOMATIQUE
         if (saveError.retryable !== false) {
           await this.addRetry(messageData, 1, saveError);
         }
 
-        // ✅ FALLBACK
+        // ✅ FALLBACK REDIS
         if (this.redis) {
           try {
             const fallbackMessage = await this.redisFallback(messageData);
             console.log(`✅ Fallback activé: ${fallbackMessage._id}`);
 
+            // ✅ PUBLIER LE FALLBACK AUSSI AVEC PARTICIPANTS
             await this.publishToMessageStream(fallbackMessage, {
               event: "NEW_MESSAGE",
               source: "redis_fallback",
+              conversationParticipants: conversationParticipants, // ✅ ICI AUSSI
             });
 
             return fallbackMessage;
           } catch (fallbackError) {
-            // ✅ DLQ EN DERNIER RECOURS
+            // ✅ DEAD LETTER QUEUE EN DERNIER RECOURS
             await this.addToDLQ(messageData, saveError, 1, {
               operation: "receiveMessage",
               walId,
@@ -1061,6 +1256,155 @@ class ResilientMessageService {
     } catch (error) {
       console.error("❌ Erreur receiveMessage:", error);
       throw error;
+    }
+  }
+
+  /**
+   * ✅ SYNCHRONISER LES MESSAGES MONGODB EXISTANTS VERS REDIS STREAMS
+   * Appelé au démarrage pour remplir les streams avec l'historique
+   */
+  async syncExistingMessagesToStream() {
+    if (!this.redis || !this.mongoRepository) {
+      console.warn("⚠️ Redis ou mongoRepository non disponible pour sync");
+      return;
+    }
+
+    try {
+      console.log("🔄 SYNCHRONISATION DÉMARRÉE: MongoDB → Redis Streams");
+
+      // ✅ RÉCUPÉRER TOUTES LES CONVERSATIONS ACTIVES (30 derniers jours)
+      let synced = 0;
+      let errors = 0;
+
+      try {
+        // Récupérer les conversations récentes
+        const conversations = await this.mongoRepository.findAll({
+          query: {
+            updatedAt: {
+              $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+            },
+          },
+          limit: 100,
+          sort: { updatedAt: -1 },
+        });
+
+        console.log(
+          `📋 ${conversations.length} conversation(s) à synchroniser`
+        );
+
+        for (const conversation of conversations) {
+          try {
+            const conversationId = conversation._id || conversation.id;
+            const participants = conversation.participants || [];
+
+            // ✅ RÉCUPÉRER LES MESSAGES DE CETTE CONVERSATION
+            let page = 1;
+            const limit = 50;
+            let hasMore = true;
+
+            while (hasMore) {
+              try {
+                const result = await this.mongoRepository.findByConversation(
+                  conversationId,
+                  { page, limit, sort: { createdAt: 1 } } // Plus ancien en premier
+                );
+
+                const messages = result.messages || result || [];
+
+                if (messages.length === 0) {
+                  hasMore = false;
+                  break;
+                }
+
+                // ✅ PUBLIER CHAQUE MESSAGE DANS LE BON STREAM
+                for (const message of messages) {
+                  try {
+                    await this.publishToMessageStream(message, {
+                      event: "EXISTING_MESSAGE",
+                      source: "initial_sync",
+                      conversationParticipants: participants,
+                    });
+
+                    synced++;
+
+                    // Petit délai pour ne pas surcharger Redis
+                    await new Promise((resolve) => setTimeout(resolve, 10));
+                  } catch (msgError) {
+                    console.warn(
+                      `⚠️ Erreur sync message ${message._id}:`,
+                      msgError.message
+                    );
+                    errors++;
+                  }
+                }
+
+                // Vérifier s'il y a d'autres pages
+                page++;
+                if (messages.length < limit) {
+                  hasMore = false;
+                }
+              } catch (pageError) {
+                console.warn(
+                  `⚠️ Erreur lecture page ${page} pour ${conversationId}:`,
+                  pageError.message
+                );
+                hasMore = false;
+              }
+            }
+          } catch (convError) {
+            console.warn(
+              `⚠️ Erreur sync conversation ${conversation._id}:`,
+              convError.message
+            );
+            errors++;
+          }
+        }
+
+        console.log(
+          `✅ SYNCHRONISATION TERMINÉE: ${synced} message(s) publiés, ${errors} erreur(s)`
+        );
+
+        // Log les statistiques
+        const stats = await this.getStreamStats();
+        console.log("📊 État des streams après sync:", stats);
+
+        return { synced, errors };
+      } catch (error) {
+        console.error("❌ Erreur synchronisation global:", error);
+        return { synced: 0, errors: 1 };
+      }
+    } catch (error) {
+      console.error("❌ Erreur critique syncExistingMessagesToStream:", error);
+      return { synced: 0, errors: 1 };
+    }
+  }
+
+  /**
+   * ✅ OBTENIR LES STATISTIQUES DES STREAMS
+   */
+  async getStreamStats() {
+    if (!this.redis) return null;
+
+    try {
+      const stats = {};
+
+      for (const [streamName, maxLen] of Object.entries(this.STREAM_MAXLEN)) {
+        try {
+          const length = await this.redis.xLen(streamName);
+          stats[streamName] = {
+            current: length,
+            max: maxLen,
+            usage: ((length / maxLen) * 100).toFixed(2) + "%",
+          };
+        } catch (err) {
+          stats[streamName] = { error: err.message };
+        }
+      }
+
+      return stats;
+    } catch (error) {
+      console.error("❌ Erreur getStreamStats:", error);
+      return null;
     }
   }
 

@@ -848,3 +848,259 @@ button:hover:before {
   margin-bottom: 1rem;
   display: block;
 }
+
+/* ✅ STYLES POUR CLIENT DESTINATAIRE */
+
+.recipient-info-box {
+  margin-top: 15px;
+  padding: 15px;
+  background: #f0f7ff;
+  border-radius: 8px;
+  border-left: 4px solid #4299e1;
+}
+
+.recipient-info-box h3 {
+  color: #2c5aa0;
+  margin-bottom: 10px;
+  font-size: 1rem;
+}
+
+.info-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px;
+  background: white;
+  border-radius: 4px;
+}
+
+.info-row .label {
+  font-weight: 600;
+  color: #495057;
+}
+
+.info-row .value {
+  color: #2d3748;
+  font-family: monospace;
+}
+
+.diagnostic-section {
+  grid-column: 1 / -1;
+}
+
+.diagnostic-results {
+  margin-top: 15px;
+  padding: 15px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 15px;
+}
+
+.diagnostic-results.hidden {
+  display: none;
+}
+
+.diagnostic-check {
+  background: white;
+  padding: 15px;
+  border-radius: 8px;
+  border-left: 4px solid #667eea;
+}
+
+.diagnostic-check h4 {
+  color: #2d3748;
+  margin-bottom: 10px;
+}
+
+.diagnostic-check p {
+  margin: 5px 0;
+  color: #495057;
+  font-size: 0.9rem;
+}
+
+.reception-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 15px;
+  padding: 15px;
+  background: #f0f7ff;
+  border-radius: 8px;
+}
+
+.stat-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px;
+  background: white;
+  border-radius: 6px;
+  border-top: 3px solid #48bb78;
+}
+
+.stat-label {
+  font-size: 0.9rem;
+  color: #6c757d;
+  margin-bottom: 5px;
+}
+
+.stat-value {
+  font-size: 1.8rem;
+  font-weight: bold;
+  color: #2d3748;
+}
+
+.config-section {
+  grid-column: 1 / -1;
+}
+
+.config-section label {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  margin: 5px 0;
+  background: #f8f9fa;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.config-section label:hover {
+  background: #e9ecef;
+}
+
+.config-section input[type="checkbox"] {
+  margin-right: 8px;
+  cursor: pointer;
+}
+
+.quick-actions-section {
+  grid-column: 1 / -1;
+}
+
+/* Modal de notification */
+.notification-modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.notification-modal.hidden {
+  display: none;
+}
+
+.notification-content {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  max-width: 400px;
+  width: 90%;
+  animation: slideDown 0.3s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.notification-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.notification-title {
+  font-weight: 600;
+  color: #2d3748;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: #6c757d;
+}
+
+.notification-body {
+  padding: 20px;
+  color: #495057;
+  white-space: pre-wrap;
+}
+
+.notification-footer {
+  padding: 15px 20px;
+  border-top: 1px solid #e9ecef;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+/* Styles pour les détails des messages */
+.message-details {
+  margin-top: 10px;
+  cursor: pointer;
+}
+
+.message-details summary {
+  color: #667eea;
+  font-weight: 600;
+  padding: 5px;
+  border-radius: 4px;
+  background: #f0f4ff;
+}
+
+.message-details summary:hover {
+  background: #e2e8f0;
+}
+
+.message-details pre {
+  background: #1a202c;
+  color: #e2e8f0;
+  padding: 10px;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  margin-top: 10px;
+}
+
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+
+.stats-table tr {
+  border-bottom: 1px solid #e9ecef;
+}
+
+.stats-table td {
+  padding: 10px;
+  text-align: left;
+}
+
+.stats-table tr:nth-child(even) {
+  background: #f8f9fa;
+}

@@ -161,8 +161,14 @@ class ChatHandler {
 
   // ✅ AUTHENTIFICATION
   async handleAuthentication(socket, data) {
+    const authStartTime = Date.now();
+    const authStartDate = new Date().toISOString();
+    console.log(`\n🔐 [${authStartDate}] ⏱️ AUTHENTIFICATION DÉBUTÉE`);
     try {
-      console.log(`🔐 Authentification demande:`, data);
+      console.log(
+        `🔐 [${new Date().toISOString()}] Authentification demande:`,
+        data
+      );
 
       let userPayload = null;
       if (data.token) {
@@ -232,118 +238,194 @@ class ChatHandler {
 
       let conversationIds = [];
 
-      // ✅ UTILISER LE USE CASE POUR RÉCUPÉRER LES CONVERSATIONS
-      if (this.getConversationIdsUseCase) {
-        try {
-          conversationIds = await this.getConversationIdsUseCase.execute(
-            userIdString
-          );
+      // ✅ RÉCUPÉRATION DES CONVERSATIONS EN ARRIÈRE-PLAN (non-bloquante)
+      setImmediate(async () => {
+        const convStartTime = Date.now();
+        console.log(
+          `🔍 [${new Date().toISOString()}] Début récupération conversations (ARRIÈRE-PLAN)`
+        );
 
-          if (!Array.isArray(conversationIds)) {
-            console.warn(`⚠️ conversationIds n'est pas un tableau`);
-            conversationIds = [];
-          }
+        if (this.getConversationIdsUseCase) {
+          try {
+            const conversationIdsData =
+              await this.getConversationIdsUseCase.execute(userIdString);
 
-          console.log(
-            `✅ Récupération ${conversationIds.length} conversations pour ${userIdString}`
-          );
+            if (!Array.isArray(conversationIdsData)) {
+              console.warn(`⚠️ conversationIds n'est pas un tableau`);
+              return;
+            }
 
-          if (conversationIds.length > 0) {
-            for (const convId of conversationIds) {
-              const roomName = `conversation_${convId}`;
-              socket.join(roomName);
+            const convDuration = Date.now() - convStartTime;
+            console.log(
+              `✅ [${new Date().toISOString()}] Récupération ${
+                conversationIdsData.length
+              } conversations pour ${userIdString} (⏱️ ${convDuration}ms)`
+            );
+
+            if (conversationIdsData.length > 0) {
+              // ✅ JOINTURE DES ROOMS EN ARRIÈRE-PLAN
+              const joinStartTime = Date.now();
               console.log(
-                `👥 Utilisateur ${userIdString} rejoint room ${roomName}`
+                `👥 [${new Date().toISOString()}] Début jointure rooms (ARRIÈRE-PLAN)`
+              );
+              for (const convId of conversationIdsData) {
+                const roomName = `conversation_${convId}`;
+                socket.join(roomName);
+              }
+              const joinDuration = Date.now() - joinStartTime;
+              console.log(
+                `👥 [${new Date().toISOString()}] Jointure rooms terminée (⏱️ ${joinDuration}ms)`
               );
 
-              // ✅ UTILISER LE USE CASE POUR MARQUER COMME DELIVERED
-              if (this.updateMessageStatusUseCase) {
-                try {
-                  const result = await this.updateMessageStatusUseCase.execute({
-                    conversationId: convId,
-                    receiverId: userIdString,
-                    status: "DELIVERED",
-                    messageIds: null,
-                  });
-
-                  if (result?.modifiedCount > 0) {
-                    console.log(
-                      `✅ ${result.modifiedCount} messages marqués DELIVERED`
-                    );
+              // ✅ MISE À JOUR STATUT EN ARRIÈRE-PLAN
+              const updateStartTime = Date.now();
+              console.log(
+                `📝 [${new Date().toISOString()}] Mise à jour statut lancée`
+              );
+              await Promise.all(
+                conversationIdsData.map(async (convId) => {
+                  if (this.updateMessageStatusUseCase) {
+                    try {
+                      await this.updateMessageStatusUseCase.execute({
+                        conversationId: convId,
+                        receiverId: userIdString,
+                        status: "DELIVERED",
+                        messageIds: null,
+                      });
+                    } catch (deliveredError) {
+                      console.warn(
+                        `⚠️ Erreur marquage delivered:`,
+                        deliveredError.message
+                      );
+                    }
                   }
-                } catch (deliveredError) {
-                  console.warn(
-                    `⚠️ Erreur marquage delivered:`,
-                    deliveredError.message
-                  );
-                }
-              }
+                })
+              );
+              const updateDuration = Date.now() - updateStartTime;
+              console.log(
+                `📝 [${new Date().toISOString()}] Mise à jour statut terminée (⏱️ ${updateDuration}ms)`
+              );
             }
+          } catch (convError) {
+            console.warn(
+              `⚠️ Erreur récupération conversations (ARRIÈRE-PLAN):`,
+              convError.message
+            );
           }
-        } catch (convError) {
-          console.warn(
-            `⚠️ Erreur récupération conversations:`,
-            convError.message
+        }
+      });
+
+      if (
+        socket.ministere &&
+        typeof socket.ministere === "string" &&
+        socket.ministere.trim()
+      ) {
+        try {
+          const ministereRoom = `ministere_${socket.ministere
+            .replace(/\s+/g, "_")
+            .toLowerCase()}`;
+          socket.join(ministereRoom);
+          console.log(
+            `🏛️ Utilisateur ${userIdString} rejoint room ministère: ${ministereRoom}`
           );
-          conversationIds = [];
+        } catch (ministereError) {
+          console.error(
+            `❌ Erreur jointure room ministère: ${ministereError.message}`
+          );
+        }
+      } else {
+        if (socket.ministere) {
+          console.warn(
+            `⚠️ socket.ministere n'est pas une chaîne valide: ${typeof socket.ministere} = ${JSON.stringify(
+              socket.ministere
+            )}`
+          );
         }
       }
 
-      if (socket.ministere) {
-        const ministereRoom = `ministere_${socket.ministere
-          .replace(/\s+/g, "_")
-          .toLowerCase()}`;
-        socket.join(ministereRoom);
+      const emitStartTime = Date.now();
+      console.log(
+        `📤 [${new Date().toISOString()}] Avant socket.emit('authenticated')...`
+      );
+      try {
+        socket.emit("authenticated", {
+          success: true,
+          userId: userIdString,
+          matricule: matriculeString,
+          nom: socket.nom,
+          prenom: socket.prenom,
+          ministere: socket.ministere,
+          autoJoinedConversations: conversationIds.length,
+          timestamp: new Date().toISOString(),
+        });
+        const emitDuration = Date.now() - emitStartTime;
         console.log(
-          `🏛️ Utilisateur ${userIdString} rejoint room ministère: ${ministereRoom}`
+          `✅ [${new Date().toISOString()}] socket.emit('authenticated') succès (⏱️ ${emitDuration}ms)`
         );
+      } catch (emitErr) {
+        console.error(`❌ Erreur lors du socket.emit: ${emitErr.message}`);
+        throw emitErr;
       }
 
-      socket.emit("authenticated", {
-        success: true,
-        userId: userIdString,
-        matricule: matriculeString,
-        nom: socket.nom,
-        prenom: socket.prenom,
-        ministere: socket.ministere,
-        autoJoinedConversations: conversationIds.length,
-        timestamp: new Date().toISOString(),
-      });
-
       console.log(
-        `✅ Utilisateur authentifié: ${matriculeString} (${userIdString})`
+        `✅ [${new Date().toISOString()}] Utilisateur authentifié: ${matriculeString} (${userIdString})`
       );
 
       // ✅ ENREGISTRER LE SOCKET DANS MessageDeliveryService
       console.log(
-        `🔍 messageDeliveryService disponible? ${
+        `🔍 [${new Date().toISOString()}] messageDeliveryService disponible? ${
           this.messageDeliveryService ? "✅ OUI" : "❌ NON"
         }`
       );
 
       if (this.messageDeliveryService) {
-        console.log(`📤 Enregistrement socket pour ${userIdString}...`);
-        this.messageDeliveryService.registerUserSocket(userIdString, socket);
-
-        // ✅ LIVRER LES MESSAGES EN ATTENTE
-        console.log(`📥 Livraison messages en attente pour ${userIdString}...`);
-        const deliveredCount =
-          await this.messageDeliveryService.deliverPendingMessagesOnConnect(
-            userIdString,
-            socket
+        const mdsStartTime = Date.now();
+        try {
+          console.log(
+            `📤 [${new Date().toISOString()}] Enregistrement socket pour ${userIdString}...`
           );
-        console.log(`✅ ${deliveredCount} message(s) en attente livré(s)`);
+          this.messageDeliveryService.registerUserSocket(userIdString, socket);
+          console.log(
+            `✅ [${new Date().toISOString()}] Socket enregistré pour ${userIdString}`
+          );
+
+          // ✅ LIVRER LES MESSAGES EN ATTENTE
+          console.log(
+            `📥 [${new Date().toISOString()}] Livraison messages en attente pour ${userIdString}...`
+          );
+          const deliveredCount =
+            await this.messageDeliveryService.deliverPendingMessagesOnConnect(
+              userIdString,
+              socket
+            );
+          const mdsDuration = Date.now() - mdsStartTime;
+          console.log(
+            `✅ [${new Date().toISOString()}] ${deliveredCount} message(s) en attente livré(s) pour ${userIdString} (⏱️ ${mdsDuration}ms)`
+          );
+        } catch (mdsError) {
+          console.error(
+            `❌ Erreur MessageDeliveryService: ${mdsError.message}`
+          );
+        }
       } else {
-        console.warn(`⚠️ messageDeliveryService est NULL/UNDEFINED!`);
+        console.warn(
+          `⚠️ [${new Date().toISOString()}] messageDeliveryService est NULL/UNDEFINED!`
+        );
       }
 
-      await this.syncUserWithRedis(userIdString, userData);
+      // ✅ SYNCHRONISATION REDIS EN ARRIÈRE-PLAN (non-bloquante)
+      setImmediate(() => this.syncUserWithRedis(userIdString, userData));
 
       socket.broadcast.emit("user_connected", {
         userId: userIdString,
         matricule: matriculeString,
         timestamp: new Date().toISOString(),
       });
+
+      const totalDuration = Date.now() - authStartTime;
+      console.log(
+        `\n✅ [${new Date().toISOString()}] ⏱️ AUTHENTIFICATION COMPLÈTE (⏱️ TOTAL: ${totalDuration}ms)\n`
+      );
     } catch (error) {
       console.error("❌ Erreur authentification WebSocket:", error);
       socket.emit("auth_error", {
@@ -380,6 +462,10 @@ class ChatHandler {
 
   // ✅ SYNC REDIS - Via OnlineUserManager UNIQUEMENT
   async syncUserWithRedis(userId, userData) {
+    const syncStartTime = Date.now();
+    console.log(
+      `🔴 [${new Date().toISOString()}] Sync Redis lancé en arrière-plan pour ${userId}`
+    );
     if (this.onlineUserManager) {
       try {
         const sanitizedData = {
@@ -401,7 +487,10 @@ class ChatHandler {
           String(userId),
           sanitizedData
         );
-        console.log(`✅ Utilisateur ${userId} synchronisé avec Redis`);
+        const syncDuration = Date.now() - syncStartTime;
+        console.log(
+          `✅ [${new Date().toISOString()}] Utilisateur ${userId} synchronisé avec Redis (⏱️ ${syncDuration}ms)`
+        );
       } catch (error) {
         console.warn("⚠️ Erreur sync utilisateur Redis:", error.message);
       }

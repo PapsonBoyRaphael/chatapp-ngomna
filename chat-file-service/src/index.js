@@ -232,10 +232,11 @@ const startServer = async () => {
       },
     });
 
-    // Initialiser le service de traitement multimédia
+    // ✅ CRÉER MediaProcessingService
     const mediaProcessingService = new MediaProcessingService();
+    console.log("✅ MediaProcessingService initialisé");
 
-    // Initialiser le service de thumbnails
+    // Initialiser le service de traitement multimédia
     const thumbnailService = new ThumbnailService(fileStorageService);
 
     console.log("✅ Services de fichiers initialisés");
@@ -289,8 +290,20 @@ const startServer = async () => {
       // ✅ DÉMARRER LES WORKERS INTERNES (PAS BESOIN D'UN WORKER SÉPARÉ)
       await resilientMessageService.startWorkers();
 
+      // ✅ NOUVELLE : SYNCHRONISER LES MESSAGES EXISTANTS
+      console.log(
+        "🔄 Démarrage de la synchronisation MongoDB → Redis Streams..."
+      );
+      const syncResult =
+        await resilientMessageService.syncExistingMessagesToStream();
+      console.log(
+        `✅ Synchronisation complétée: ${syncResult.synced} messages, ${syncResult.errors} erreur(s)`
+      );
+
       app.locals.resilientMessageService = resilientMessageService;
-      console.log("✅ ResilientMessageService avec workers internes démarré");
+      console.log(
+        "✅ ResilientMessageService avec workers et synchronisation démarré"
+      );
     }
 
     // ===============================
@@ -751,26 +764,72 @@ const startServer = async () => {
 const gracefulShutdown = async () => {
   console.log("🛑 Arrêt gracieux du service...");
 
-  // ✅ ARRÊTER LES WORKERS INTERNES
-  if (resilientMessageService) {
-    resilientMessageService.stopWorkers();
-    clearInterval(resilientMessageService.memoryMonitorInterval);
-    clearInterval(resilientMessageService.trimInterval);
-    clearInterval(resilientMessageService.metricsInterval);
-    console.log("✅ ResilientMessageService arrêté");
-  }
+  try {
+    // ✅ ARRÊTER LE MESSAGE DELIVERY SERVICE (Redis Streams Consumer)
+    if (
+      typeof messageDeliveryService !== "undefined" &&
+      messageDeliveryService
+    ) {
+      messageDeliveryService.stopConsumer();
+      console.log("✅ MessageDeliveryService arrêté");
+    }
 
-  if (redisClient) {
-    await redisClient.quit();
-    console.log("✅ Redis déconnecté");
-  }
+    // ✅ ARRÊTER LES WORKERS INTERNES (ResilientMessageService)
+    if (
+      typeof resilientMessageService !== "undefined" &&
+      resilientMessageService
+    ) {
+      if (resilientMessageService.stopWorkers) {
+        resilientMessageService.stopWorkers();
+      }
+      if (resilientMessageService.memoryMonitorInterval) {
+        clearInterval(resilientMessageService.memoryMonitorInterval);
+      }
+      if (resilientMessageService.trimInterval) {
+        clearInterval(resilientMessageService.trimInterval);
+      }
+      if (resilientMessageService.metricsInterval) {
+        clearInterval(resilientMessageService.metricsInterval);
+      }
+      console.log("✅ ResilientMessageService arrêté");
+    }
 
-  if (mongoConnection) {
-    await mongoConnection.close();
-    console.log("✅ MongoDB déconnecté");
-  }
+    // ✅ FERMER LE CLIENT REDIS STREAMS (séparé du client principal)
+    if (typeof redisStreamsClient !== "undefined" && redisStreamsClient) {
+      try {
+        await redisStreamsClient.quit();
+        console.log("✅ Redis Streams Client déconnecté");
+      } catch (err) {
+        console.warn("⚠️ Erreur fermeture Redis Streams Client:", err.message);
+      }
+    }
 
-  process.exit(0);
+    // ✅ FERMER LE CLIENT REDIS PRINCIPAL
+    if (typeof redisClient !== "undefined" && redisClient) {
+      try {
+        await redisClient.quit();
+        console.log("✅ Redis déconnecté");
+      } catch (err) {
+        console.warn("⚠️ Erreur fermeture Redis:", err.message);
+      }
+    }
+
+    // ✅ FERMER LA CONNEXION MONGODB
+    if (typeof mongoConnection !== "undefined" && mongoConnection) {
+      try {
+        await mongoConnection.close();
+        console.log("✅ MongoDB déconnecté");
+      } catch (err) {
+        console.warn("⚠️ Erreur fermeture MongoDB:", err.message);
+      }
+    }
+
+    console.log("✅ Arrêt gracieux complété");
+    process.exit(0);
+  } catch (error) {
+    console.error("❌ Erreur arrêt gracieux:", error.message);
+    process.exit(1);
+  }
 };
 
 process.on("SIGTERM", gracefulShutdown);

@@ -14,6 +14,13 @@ const execAsync = util.promisify(exec);
 
 class MediaProcessingService {
   constructor() {
+    // ✅ AJOUTER TOUS LES TIMEOUTS MANQUANTS
+    this.timeout = 30000; // 30 secondes pour processFile
+    this.imageProcessTimeout = 15000; // 15s pour images
+    this.audioProcessTimeout = 20000; // 20s pour audio
+    this.videoProcessTimeout = 45000; // 45s pour vidéo
+    this.documentProcessTimeout = 15000; // 15s pour documents
+
     this.supportedFormats = {
       IMAGE: ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "svg"],
       AUDIO: ["mp3", "wav", "ogg", "flac", "aac", "m4a", "wma"],
@@ -21,18 +28,26 @@ class MediaProcessingService {
       DOCUMENT: ["pdf", "doc", "docx", "txt", "rtf", "odt"],
     };
     this.metrics = { processed: 0, errors: 0 };
+    this.maxBufferSize = 500 * 1024 * 1024; // 500MB max
   }
 
   // Validation buffer/MIME
   validateBuffer(buffer, mimeType) {
-    if (buffer.length > this.maxBufferSize)
-      throw new Error("Buffer trop grand");
-    if (!this.isSupportedMimeType(mimeType))
-      throw new Error("Type MIME non supporté");
+    if (!buffer || buffer.length === 0) {
+      throw new Error("Buffer vide");
+    }
+    if (buffer.length > this.maxBufferSize) {
+      throw new Error(
+        `Buffer trop grand (${buffer.length} > ${this.maxBufferSize})`
+      );
+    }
+    if (!this.isSupportedMimeType(mimeType)) {
+      throw new Error(`Type MIME non supporté: ${mimeType}`);
+    }
   }
 
   /**
-   * Traite un fichier et extrait ses métadonnées (SANS thumbnails)
+   * ✅ TRAITE UN FICHIER ET EXTRAIT SES MÉTADONNÉES (SANS THUMBNAILS)
    */
   async processFile(buffer, originalName, mimeType) {
     this.validateBuffer(buffer, mimeType);
@@ -51,26 +66,54 @@ class MediaProcessingService {
         content: {},
       };
 
-      // Traitement spécifique selon le type avec timeout
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Timeout processing")), this.timeout)
-      );
-
+      // ✅ UTILISER LE TIMEOUT APPROPRIÉ SELON LE TYPE
+      let timeoutValue = this.timeout;
       switch (fileType) {
-        case "AUDIO":
-          metadata = await this.processAudio(buffer, metadata);
-          break;
         case "IMAGE":
-          metadata = await this.processImage(buffer, metadata);
+          timeoutValue = this.imageProcessTimeout;
+          break;
+        case "AUDIO":
+          timeoutValue = this.audioProcessTimeout;
           break;
         case "VIDEO":
-          metadata = await this.processVideo(buffer, metadata);
+          timeoutValue = this.videoProcessTimeout;
           break;
         case "DOCUMENT":
-          metadata = await this.processDocument(buffer, metadata);
+          timeoutValue = this.documentProcessTimeout;
           break;
         default:
-          metadata = await this.processOtherFile(buffer, metadata);
+          timeoutValue = this.timeout;
+      }
+
+      console.log(`⏱️ Timeout défini: ${timeoutValue}ms pour type ${fileType}`);
+
+      // Traitement spécifique selon le type avec timeout CORRIGÉ
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error(`Timeout processing ${fileType} (${timeoutValue}ms)`)
+            ),
+          timeoutValue // ✅ UTILISER LA VARIABLE CORRECTE
+        )
+      );
+
+      let processingPromise;
+      switch (fileType) {
+        case "AUDIO":
+          processingPromise = this.processAudio(buffer, metadata);
+          break;
+        case "IMAGE":
+          processingPromise = this.processImage(buffer, metadata);
+          break;
+        case "VIDEO":
+          processingPromise = this.processVideo(buffer, metadata);
+          break;
+        case "DOCUMENT":
+          processingPromise = this.processDocument(buffer, metadata);
+          break;
+        default:
+          processingPromise = this.processOtherFile(buffer, metadata);
       }
 
       metadata = await Promise.race([timeoutPromise, processingPromise]);
@@ -83,97 +126,259 @@ class MediaProcessingService {
       };
 
       this.metrics.processed++;
+      console.log(`✅ Traitement réussi: ${originalName}`);
       return metadata;
     } catch (error) {
       console.error(`❌ Erreur traitement fichier ${originalName}:`, error);
       this.metrics.errors++;
-      return { error: error.message, technical: {}, content: {} }; // Fallback metadata vide
+      return { error: error.message, technical: {}, content: {} }; // Fallback metadata
     }
   }
 
   /**
-   * Traitement des images (SANS génération de thumbnails)
+   * ✅ TRAITEMENT DES FICHIERS AUDIO
+   */
+  async processAudio(buffer, metadata) {
+    try {
+      // ✅ AJOUTER UN TIMEOUT INTERNE POUR mm.parseBuffer
+      const audioMetadata = await Promise.race([
+        mm.parseBuffer(buffer),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Audio parsing timeout")),
+            this.audioProcessTimeout - 1000 // 1s avant le timeout global
+          )
+        ),
+      ]);
+
+      metadata.content = {
+        duration: audioMetadata.format.duration || null,
+        bitrate: audioMetadata.format.bitrate || null,
+        sampleRate: audioMetadata.format.sampleRate || null,
+        channels: audioMetadata.format.numberOfChannels || null,
+        codec: audioMetadata.format.codec || null,
+      };
+
+      // Métadonnées ID3 si disponibles
+      if (audioMetadata.common) {
+        metadata.content = {
+          ...metadata.content,
+          title: audioMetadata.common.title || null,
+          artist: audioMetadata.common.artist || null,
+          album: audioMetadata.common.album || null,
+          genre: audioMetadata.common.genre?.[0] || null,
+          year: audioMetadata.common.year || null,
+        };
+      }
+
+      console.log(`✅ Audio traité: ${metadata.content.duration}s`);
+      return metadata;
+    } catch (error) {
+      console.warn("⚠️ Erreur traitement audio:", error.message);
+      // Retourner metadata partielle plutôt que de lever une erreur
+      metadata.content = {
+        duration: null,
+        bitrate: null,
+        sampleRate: null,
+        channels: null,
+        codec: null,
+      };
+      return metadata;
+    }
+  }
+
+  /**
+   * ✅ TRAITEMENT DES IMAGES (SANS THUMBNAILS)
    */
   async processImage(buffer, metadata) {
     try {
-      const imageInfo = await sharp(buffer).metadata();
+      const imageInfo = await Promise.race([
+        sharp(buffer).metadata(),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Image metadata timeout")),
+            this.imageProcessTimeout - 1000
+          )
+        ),
+      ]);
 
       metadata.content = {
         dimensions: {
-          width: imageInfo.width,
-          height: imageInfo.height,
+          width: imageInfo.width || null,
+          height: imageInfo.height || null,
         },
-        format: imageInfo.format,
-        space: imageInfo.space,
-        hasAlpha: imageInfo.hasAlpha,
-        channels: imageInfo.channels,
+        format: imageInfo.format || null,
+        space: imageInfo.space || "RGB",
+        hasAlpha: imageInfo.hasAlpha || false,
+        channels: imageInfo.channels || null,
       };
 
+      console.log(`✅ Image traitée: ${imageInfo.width}x${imageInfo.height}`);
       return metadata;
     } catch (error) {
       console.warn("⚠️ Erreur traitement image:", error.message);
+      metadata.content = {
+        dimensions: { width: null, height: null },
+        format: null,
+        space: "RGB",
+        hasAlpha: false,
+        channels: null,
+      };
       return metadata;
     }
   }
 
   /**
-   * Obtient les informations basiques d'une image
+   * ✅ TRAITEMENT DES VIDÉOS
    */
-  async getImageInfo(filePath) {
-    try {
-      // Utiliser une commande système légère pour les infos basiques
-      const { stdout } = await execAsync(`file "${filePath}"`);
-      const fileInfo = stdout.toString();
+  async processVideo(buffer, metadata) {
+    return new Promise((resolve, reject) => {
+      // ✅ TIMEOUT GLOBAL POUR TOUT LE PROCESSUS
+      const videoTimeout = setTimeout(
+        () => reject(new Error("Video processing timeout")),
+        this.videoProcessTimeout
+      );
 
-      // Extraire les dimensions si possible (approximation)
-      const dimensionsMatch = fileInfo.match(/(\d+) x (\d+)/);
-      const width = dimensionsMatch ? parseInt(dimensionsMatch[1]) : null;
-      const height = dimensionsMatch ? parseInt(dimensionsMatch[2]) : null;
+      try {
+        // Écrire buffer temporairement pour ffprobe
+        const tempPath = `/tmp/video_${Date.now()}`;
+        fs.writeFileSync(tempPath, buffer);
 
-      return {
-        width,
-        height,
-        format: this.getImageFormat(filePath),
-        space: "RGB", // Valeur par défaut
-        hasAlpha:
-          filePath.toLowerCase().includes(".png") ||
-          filePath.toLowerCase().includes(".gif"),
-        size: (await fs.stat(filePath)).size,
-      };
-    } catch (error) {
-      console.warn("⚠️ Erreur getImageInfo:", error.message);
-      return {
-        width: null,
-        height: null,
-        format: path.extname(filePath).replace(".", "").toUpperCase(),
-        space: "RGB",
-        hasAlpha: false,
-        size: (await fs.stat(filePath)).size,
-      };
-    }
+        ffmpeg.ffprobe(tempPath, (err, data) => {
+          clearTimeout(videoTimeout);
+
+          if (err) {
+            console.warn("⚠️ Erreur video ffprobe:", err.message);
+            fs.unlinkSync(tempPath).catch(() => {});
+            resolve(metadata); // Retourner metadata partielle
+            return;
+          }
+
+          try {
+            const videoStream = data.streams.find(
+              (s) => s.codec_type === "video"
+            );
+            const audioStream = data.streams.find(
+              (s) => s.codec_type === "audio"
+            );
+
+            if (videoStream) {
+              metadata.content.dimensions = {
+                width: videoStream.width || null,
+                height: videoStream.height || null,
+              };
+              metadata.content.duration =
+                parseFloat(videoStream.duration) || null;
+              metadata.content.bitrate = parseInt(videoStream.bit_rate) || null;
+              metadata.content.fps =
+                this.parseFps(videoStream.r_frame_rate) || null;
+              metadata.content.aspectRatio =
+                videoStream.display_aspect_ratio || null;
+              metadata.content.videoCodec = videoStream.codec_name || null;
+            }
+
+            if (audioStream) {
+              metadata.content.audioCodec = audioStream.codec_name || null;
+              metadata.content.audioChannels = audioStream.channels || null;
+              metadata.content.audioSampleRate =
+                parseInt(audioStream.sample_rate) || null;
+            }
+
+            console.log(`✅ Vidéo traitée`);
+            fs.unlinkSync(tempPath).catch(() => {});
+            resolve(metadata);
+          } catch (error) {
+            console.warn("⚠️ Erreur parsing vidéo:", error.message);
+            fs.unlinkSync(tempPath).catch(() => {});
+            resolve(metadata);
+          }
+        });
+      } catch (error) {
+        clearTimeout(videoTimeout);
+        console.warn("⚠️ Erreur traitement vidéo:", error.message);
+        resolve(metadata);
+      }
+    });
   }
 
   /**
-   * Détermine le format d'image
+   * ✅ TRAITEMENT DES DOCUMENTS
    */
-  getImageFormat(filePath) {
-    const ext = path.extname(filePath).toLowerCase();
-    switch (ext) {
-      case ".jpg":
-      case ".jpeg":
-        return "JPEG";
-      case ".png":
-        return "PNG";
-      case ".gif":
-        return "GIF";
-      case ".webp":
-        return "WEBP";
-      case ".bmp":
-        return "BMP";
-      case ".tiff":
-        return "TIFF";
-      default:
-        return ext.replace(".", "").toUpperCase();
+  async processDocument(buffer, metadata) {
+    try {
+      // ✅ AJOUTER TIMEOUT POUR PDF PARSING
+      const processingPromise = (async () => {
+        // 1. Pour les PDF
+        if (metadata.technical.extension === ".pdf") {
+          const pdfData = await Promise.race([
+            pdfParse(buffer),
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error("PDF parsing timeout")),
+                this.documentProcessTimeout - 1000
+              )
+            ),
+          ]);
+
+          metadata.content = {
+            pageCount: pdfData.numpages || 0,
+            text: pdfData.text ? pdfData.text.substring(0, 1000) : null,
+            wordCount: pdfData.text ? pdfData.text.split(/\s+/).length : 0,
+            hasImages: pdfData.text ? pdfData.text.includes("/Image") : false,
+            author: pdfData.info?.Author || null,
+            title: pdfData.info?.Title || null,
+            creator: pdfData.info?.Creator || null,
+            size: buffer.length,
+            encoding: "binary",
+          };
+        }
+        // 2. Pour les fichiers texte
+        else if (metadata.technical.extension.match(/\.(txt|rtf|md)$/)) {
+          try {
+            const text = buffer.toString("utf8");
+            metadata.content = {
+              text: text.substring(0, 1000),
+              wordCount: text.split(/\s+/).length,
+              lineCount: text.split("\n").length,
+              encoding: "utf8",
+              size: buffer.length,
+            };
+          } catch {
+            metadata.content = {
+              size: buffer.length,
+              encoding: "binary",
+            };
+          }
+        }
+        // 3. Pour les documents Office
+        else if (
+          metadata.technical.extension.match(/\.(doc|docx|xls|xlsx|ppt|pptx)$/)
+        ) {
+          metadata.content = {
+            size: buffer.length,
+            encoding: "binary",
+            type: metadata.technical.extension.substring(1).toUpperCase(),
+          };
+        }
+        // 4. Pour tout autre type de document
+        else {
+          metadata.content = {
+            size: buffer.length,
+            encoding: "binary",
+          };
+        }
+
+        return metadata;
+      })();
+
+      return await processingPromise;
+    } catch (error) {
+      console.warn("⚠️ Erreur traitement document:", error.message);
+      metadata.content = {
+        size: buffer.length,
+        encoding: "binary",
+      };
+      return metadata;
     }
   }
 
@@ -592,7 +797,6 @@ class MediaProcessingService {
       "image/png",
       "image/gif",
       "image/webp",
-      "image/bmp",
       "audio/mpeg",
       "audio/wav",
       "audio/ogg",
@@ -601,12 +805,7 @@ class MediaProcessingService {
       "video/mp4",
       "video/avi",
       "video/quicktime",
-      "audio/flac",
-      "audio/aac",
-      "video/mp4",
       "video/webm",
-      "video/x-msvideo",
-      "video/x-matroska",
       "application/pdf",
       "text/plain",
       "text/rtf",
@@ -614,8 +813,6 @@ class MediaProcessingService {
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       "application/vnd.ms-excel",
       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "application/vnd.ms-powerpoint",
-      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ];
 
     return supportedTypes.includes(mimeType);

@@ -10,7 +10,6 @@ class FileController {
     uploadFileUseCase,
     getFileUseCase,
     redisClient = null,
-    kafkaProducer = null,
     fileStorageService = null,
     downloadFileUseCase = null,
     mediaProcessingService = null,
@@ -19,7 +18,6 @@ class FileController {
     this.uploadFileUseCase = uploadFileUseCase;
     this.getFileUseCase = getFileUseCase;
     this.redisClient = redisClient;
-    this.kafkaProducer = kafkaProducer;
     this.fileStorageService = fileStorageService;
     this.downloadFileUseCase = downloadFileUseCase;
     this.searchOccurrencesUseCase = searchOccurrencesUseCase;
@@ -149,13 +147,6 @@ class FileController {
             processed: false,
           },
 
-          // ✅ MÉTADONNÉES KAFKA
-          kafkaMetadata: {
-            topic: "chat.files",
-            events: [],
-            lastPublished: null,
-          },
-
           // ✅ MÉTADONNÉES REDIS
           redisMetadata: {
             cacheKey: `file:${Date.now()}`,
@@ -213,73 +204,6 @@ class FileController {
 
       const processingTime = Date.now() - startTime;
 
-      // ✅ PUBLIER ÉVÉNEMENT KAFKA AVEC MÉTADONNÉES COMPLÈTES
-      if (this.kafkaProducer) {
-        try {
-          const kafkaMessage = {
-            eventType: "FILE_UPLOADED",
-            fileId: String(result.id || result._id),
-            userId: String(userId),
-            filename: fileData.originalName,
-            size: fileData.size,
-            mimeType: fileData.mimeType,
-            fileType: fileMetadata.technical?.fileType || "UNKNOWN",
-            conversationId: fileData.conversationId || "",
-
-            // ✅ MÉTADONNÉES TECHNIQUES DANS KAFKA
-            metadata: {
-              technical: {
-                fileType: fileMetadata.technical?.fileType,
-                extension: fileMetadata.technical?.extension,
-                category: fileMetadata.technical?.category,
-                checksums: fileMetadata.technical?.checksums || {},
-              },
-              content: {
-                duration: fileMetadata.content?.duration,
-                dimensions: fileMetadata.content?.dimensions,
-                bitrate: fileMetadata.content?.bitrate,
-                sampleRate: fileMetadata.content?.sampleRate,
-                codec: fileMetadata.content?.codec,
-                title: fileMetadata.content?.title,
-                artist: fileMetadata.content?.artist,
-                pageCount: fileMetadata.content?.pageCount,
-                wordCount: fileMetadata.content?.wordCount,
-              },
-            },
-
-            // ✅ INFORMATIONS DE TRAITEMENT
-            processing: {
-              status: "completed",
-              processingTime: processingTime,
-              hasThumbnails: false, // Seront générés plus tard par ThumbnailService
-              requiresThumbnails: fileMetadata.technical?.fileType === "IMAGE",
-            },
-
-            // ✅ INFORMATIONS DE STOCKAGE
-            storage: {
-              provider: fileData.metadata.storage.provider,
-              path: remotePath,
-              bucket: fileData.metadata.storage.bucket,
-              size: fileData.size,
-            },
-
-            processingTime: processingTime,
-            timestamp: new Date().toISOString(),
-            source: "file-controller",
-          };
-
-          await this.kafkaProducer.publishMessage(kafkaMessage);
-          console.log(
-            `📤 Événement Kafka FILE_UPLOADED publié pour ${fileData.originalName}`
-          );
-        } catch (kafkaError) {
-          console.warn(
-            "⚠️ Erreur publication upload fichier:",
-            kafkaError.message
-          );
-        }
-      }
-
       // ✅ RÉPONSE AVEC MÉTADONNÉES ENRICHIES
       res.status(201).json({
         success: true,
@@ -293,7 +217,6 @@ class FileController {
         },
         metadata: {
           processingTime: `${processingTime}ms`,
-          kafkaPublished: !!this.kafkaProducer,
           fileType: fileMetadata.technical?.fileType || "UNKNOWN",
           hasMetadata: !!fileMetadata.technical,
           timestamp: new Date().toISOString(),
@@ -501,27 +424,6 @@ class FileController {
       const deletedFile =
         await this.uploadFileUseCase.fileRepository.deleteFile(fileId, true);
 
-      // ✅ PUBLIER ÉVÉNEMENT KAFKA POUR SUPPRESSION
-      if (this.kafkaProducer && deletedFile) {
-        try {
-          await this.kafkaProducer.publishMessage({
-            eventType: "FILE_DELETED",
-            fileId: String(fileId),
-            userId: String(userId),
-            filename: deletedFile.originalName,
-            fileType: deletedFile.metadata?.technical?.fileType,
-            softDelete: true,
-            timestamp: new Date().toISOString(),
-            source: "file-controller",
-          });
-        } catch (kafkaError) {
-          console.warn(
-            "⚠️ Erreur publication suppression:",
-            kafkaError.message
-          );
-        }
-      }
-
       res.json({
         success: true,
         data: deletedFile,
@@ -561,24 +463,6 @@ class FileController {
         fileId,
         String(userId)
       );
-
-      // ✅ PUBLIER ÉVÉNEMENT KAFKA POUR TÉLÉCHARGEMENT
-      if (this.kafkaProducer) {
-        try {
-          await this.kafkaProducer.publishMessage({
-            eventType: "FILE_DOWNLOADED",
-            fileId: String(fileId),
-            userId: String(userId),
-            filename: file.originalName,
-            fileType: file.metadata?.technical?.fileType,
-            size: file.size,
-            timestamp: new Date().toISOString(),
-            source: "file-controller",
-          });
-        } catch (kafkaError) {
-          console.warn("⚠️ Erreur publication download:", kafkaError.message);
-        }
-      }
 
       res.setHeader(
         "Content-Disposition",
@@ -627,26 +511,6 @@ class FileController {
 
       const { zipStream, files } =
         await this.downloadFileUseCase.executeMultiple(fileIds, String(userId));
-
-      // ✅ PUBLIER ÉVÉNEMENT KAFKA POUR TÉLÉCHARGEMENT MULTIPLE
-      if (this.kafkaProducer) {
-        try {
-          await this.kafkaProducer.publishMessage({
-            eventType: "FILES_BULK_DOWNLOADED",
-            userId: String(userId),
-            fileIds: fileIds,
-            fileCount: files.length,
-            totalSize: files.reduce((sum, file) => sum + file.size, 0),
-            timestamp: new Date().toISOString(),
-            source: "file-controller",
-          });
-        } catch (kafkaError) {
-          console.warn(
-            "⚠️ Erreur publication bulk download:",
-            kafkaError.message
-          );
-        }
-      }
 
       res.setHeader(
         "Content-Disposition",

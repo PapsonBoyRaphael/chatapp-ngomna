@@ -181,8 +181,14 @@ class SendMessage {
       const message = {
         conversationId: conversation._id || conversation.id,
         senderId,
-        receiverId:
-          receiverId || conversation.participants.find((p) => p !== senderId),
+        // ✅ ASSURER QUE receiverId EST TOUJOURS UNE STRING
+        receiverId: String(
+          receiverId ||
+            conversation.participants.find(
+              (p) => String(p) !== String(senderId)
+            ) ||
+            null
+        ),
         content,
         type,
         status: "SENT",
@@ -223,9 +229,20 @@ class SendMessage {
           savedMessage = await this.resilientService.circuitBreaker.execute(
             () => this.messageRepository.save(message)
           );
+
+          // ✅ PUBLIER DANS LE STREAM REDIS AVEC DONNÉES COMPLÈTES
+          if (savedMessage && conversation) {
+            await this.resilientService.publishToMessageStream(savedMessage, {
+              event: "NEW_MESSAGE",
+              source: "SendMessage-UseCase",
+              conversationParticipants: conversation.participants, // ✅ AJOUTER LES PARTICIPANTS
+            });
+          }
         } else {
           savedMessage = await this.messageRepository.save(message);
         }
+
+        this.resilientService.publishToMessageStream(savedMessage);
 
         // ✅ MÉTRIQUES (PROTÉGÉ)
         if (this.resilientService && this.resilientService.metrics) {

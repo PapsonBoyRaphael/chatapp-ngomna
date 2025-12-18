@@ -15,42 +15,60 @@
       </header>
 
       <div class="main-content">
-        <!-- Section Authentification -->
+        <!-- Section Authentification AMÉLIORÉE -->
         <div class="section auth-section">
-          <h2>🔐 Authentification</h2>
+          <h2>🔐 Authentification (Destinataire)</h2>
           <div class="form-group">
             <input
               type="text"
               id="userId"
-              placeholder="ID Utilisateur (ex: 3)"
-              value="151703A"
+              placeholder="ID Utilisateur (ex: 2)"
+              value="2"
             />
             <input
               type="text"
               id="matricule"
-              placeholder="Matricule (ex: 151703A)"
-              value="151703A"
+              placeholder="Matricule (ex: 559296X)"
+              value="559296X"
             />
             <input type="text" id="token" placeholder="Token JWT (optionnel)" />
-            <!-- ✅ Ajout receiverId -->
-            <input
-              type="text"
-              id="receiverIdAuth"
-              placeholder="ID Destinataire (optionnel)"
-              value=""
-            />
-            <!-- ✅ Ajout statut -->
-            <select id="statusAuth">
-              <option value="">-- Statut (optionnel) --</option>
-              <option value="DELIVERED">DELIVERED</option>
-              <option value="SENT">SENT</option>
-              <option value="READ">READ</option>
-            </select>
             <button onclick="authenticate()" class="btn-primary">
-              🔑 S'authentifier
+              🔑 S'authentifier comme DESTINATAIRE
             </button>
           </div>
           <div class="status" id="authStatus"></div>
+
+          <!-- ✅ NOUVEAU : Informations du destinataire -->
+          <div class="recipient-info-box">
+            <h3>📊 Informations du Destinataire</h3>
+            <div id="recipientInfo" class="info-content">
+              <p class="placeholder">
+                Authentifiez-vous pour voir les informations
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section Diagnostic NOUVEAU -->
+        <div class="section diagnostic-section">
+          <h2>🔍 Diagnostic de Livraison</h2>
+          <div class="form-group">
+            <button onclick="diagnoseDelivery()" class="btn-primary">
+              🔍 Diagnostiquer ma Livraison
+            </button>
+            <button onclick="troubleshootDelivery()" class="btn-secondary">
+              🔧 Résoudre les Problèmes
+            </button>
+            <button onclick="viewDeliveryStats()" class="btn-secondary">
+              📊 Statistiques de Livraison
+            </button>
+          </div>
+
+          <!-- ✅ NOUVEAU : Résultats du diagnostic -->
+          <div id="diagnosticResults" class="diagnostic-results hidden">
+            <h3>📋 Résultats du Diagnostic</h3>
+            <div id="diagnosticContent" class="diagnostic-content"></div>
+          </div>
         </div>
 
         <!-- Section Tests de Base -->
@@ -72,142 +90,53 @@
           </div>
         </div>
 
-        <!-- Section Messages -->
-        <div class="section message-section">
-          <h2>💬 Test Messages</h2>
+        <!-- Section Configuration du Testeur -->
+        <div class="section config-section">
+          <h2>⚙️ Configuration du Testeur</h2>
           <div class="form-group">
-            <input
-              type="text"
-              id="conversationId"
-              placeholder="ID Conversation (24 caractères hexa)"
-              value="60f7b3b3b3b3b3b3b3b3b3b5"
-            />
-            <input
-              type="text"
-              id="receiverId"
-              placeholder="ID Destinataire (REQUIS pour nouvelles conversations)"
-              value="565939D"
-            />
-            <textarea
-              id="messageContent"
-              placeholder="Contenu du message..."
-              rows="3"
-            >
-Message de test depuis le testeur Socket.IO 🚀</textarea
-            >
-            <select id="messageType">
-              <option value="TEXT">TEXT</option>
-              <option value="IMAGE">IMAGE</option>
-              <option value="FILE">FILE</option>
-            </select>
-            <div class="button-grid">
-              <button
-                onclick="validateMessageData() && sendMessage()"
-                class="btn-primary"
-              >
-                📤 Envoyer Message
-              </button>
-              <button onclick="generateTestIds()" class="btn-secondary">
-                🔧 Générer IDs Test
-              </button>
-            </div>
-            <div class="form-help">
-              <small>
-                💡 Pour une nouvelle conversation privée, le receiverId est
-                obligatoire
-              </small>
-            </div>
+            <label>
+              <input type="checkbox" id="autoReceiptCheckbox" checked />
+              ✅ Accusé de réception automatique
+            </label>
+            <label>
+              <input type="checkbox" id="autoMarkDeliveredCheckbox" checked />
+              📬 Marquer automatiquement comme livré
+            </label>
+            <label>
+              <input type="checkbox" id="autoMarkReadCheckbox" />
+              📖 Marquer automatiquement comme lu (après 3s)
+            </label>
+            <label>
+              <input type="checkbox" id="showNotificationsCheckbox" checked />
+              🔔 Afficher les notifications
+            </label>
           </div>
         </div>
 
-        <!-- Section Conversations -->
-        <div class="section conversation-section">
-          <h2>🗨️ Test Conversations</h2>
-          <div class="button-grid">
-            <button onclick="joinConversation()" class="btn-success">
-              ➕ Rejoindre Conversation
-            </button>
-            <button onclick="leaveConversation()" class="btn-warning">
-              ➖ Quitter Conversation
-            </button>
-            <button onclick="startTyping()" class="btn-secondary">
-              ⌨️ Commencer à taper
-            </button>
-            <button onclick="stopTyping()" class="btn-secondary">
-              ⏹️ Arrêter de taper
-            </button>
-          </div>
-        </div>
-
-        <!-- Section Tests Avancés -->
-        <div class="section advanced-section">
-          <h2>🔬 Tests Avancés</h2>
-          <div class="button-grid">
-            <button onclick="testInvalidData()" class="btn-danger">
-              ❌ Test Données Invalides
-            </button>
-            <button onclick="testLongMessage()" class="btn-secondary">
-              📝 Test Message Long
-            </button>
-            <button onclick="testSpecialChars()" class="btn-secondary">
-              🔤 Test Caractères Spéciaux
-            </button>
-            <button onclick="stressTest()" class="btn-warning">
-              ⚡ Test de Charge
-            </button>
-          </div>
-        </div>
-
-        <!-- ✅ AJOUTER CETTE SECTION APRÈS LA SECTION CONVERSATIONS -->
-        <div class="section message-status-section">
-          <h2>📊 Statuts de Messages</h2>
-          <div class="form-group">
-            <input
-              type="text"
-              id="messageIdStatus"
-              placeholder="ID du Message (laisser vide pour utiliser le dernier envoyé)"
-              value=""
-            />
-            <div class="button-grid">
-              <button onclick="getLastMessageId()" class="btn-info">
-                🔍 Récupérer Dernier ID
-              </button>
-              <button onclick="markMessageDelivered()" class="btn-success">
-                📬 Marquer Livré
-              </button>
-              <button onclick="markMessageRead()" class="btn-success">
-                📖 Marquer Lu
-              </button>
-              <button onclick="markConversationRead()" class="btn-primary">
-                📚 Marquer Conversation Lue
-              </button>
-              <button onclick="getMessageStatus()" class="btn-secondary">
-                📊 Obtenir Statut
-              </button>
-            </div>
-            <div class="form-help">
-              <small>
-                🔍 Utilisez "Récupérer Dernier ID" pour auto-remplir avec le
-                dernier message envoyé
-              </small>
-              <br />
-              <small>
-                📬 Livré = Le message est arrivé sur l'appareil du destinataire
-              </small>
-              <br />
-              <small> 📖 Lu = Le destinataire a ouvert et lu le message </small>
-              <br />
-              <small>
-                📚 Conversation Lue = Tous les messages non lus de la
-                conversation sont marqués comme lus
-              </small>
-            </div>
-          </div>
-        </div>
-
-        <!-- Section Messages & Événements Reçus -->
+        <!-- Section Messages & Événements Reçus AMÉLIORÉE -->
         <div class="section messages-display-section">
           <h2>📨 Messages & Événements Reçus</h2>
+
+          <!-- ✅ NOUVEAU : Statistiques de réception -->
+          <div class="reception-stats">
+            <div class="stat-item">
+              <span class="stat-label">Messages Reçus:</span>
+              <span class="stat-value" id="receivedCount">0</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Messages Livrés:</span>
+              <span class="stat-value" id="deliveredCount">0</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Messages Lus:</span>
+              <span class="stat-value" id="readCount">0</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Erreurs:</span>
+              <span class="stat-value" id="errorCount">0</span>
+            </div>
+          </div>
+
           <div class="messages-container">
             <!-- Onglets pour filtrer les types de messages -->
             <div class="message-tabs">
@@ -238,6 +167,13 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
                 id="usersTab"
               >
                 👥 Utilisateurs
+              </button>
+              <button
+                class="tab-btn"
+                onclick="switchMessageTab('errors')"
+                id="errorsTab"
+              >
+                ❌ Erreurs
               </button>
             </div>
 
@@ -277,9 +213,7 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
               <div class="empty-state">
                 <i class="fas fa-users"></i>
                 <p>Aucun utilisateur en ligne</p>
-                <small
-                  >Authentifiez-vous pour voir les utilisateurs connectés</small
-                >
+                <small>Les utilisateurs connectés apparaîtront ici</small>
               </div>
             </div>
             <div class="users-stats">
@@ -301,102 +235,23 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
           </div>
         </div>
 
-        <!-- Section Upload de Fichier -->
-        <div class="section file-upload-section">
-          <h2>📁 Envoyer un Fichier</h2>
-          <form id="fileUploadForm" enctype="multipart/form-data">
-            <div class="form-group">
-              <input type="file" id="fileInput" name="file" required />
-              <input
-                type="text"
-                id="fileConversationId"
-                placeholder="ID Conversation (optionnel)"
-              />
-              <button type="submit" class="btn-primary">
-                ⬆️ Envoyer Fichier
-              </button>
-            </div>
-            <div class="status" id="fileUploadStatus"></div>
-          </form>
-        </div>
-
-        <!-- Section Mes Fichiers -->
-        <div class="section my-files-section">
-          <h2>📁 Mes Fichiers</h2>
+        <!-- Section Actions Rapides NOUVEAU -->
+        <div class="section quick-actions-section">
+          <h2>⚡ Actions Rapides</h2>
           <div class="button-grid">
-            <button onclick="fetchMyFiles()" class="btn-secondary">
-              📁 Mes Fichiers
+            <button onclick="replayAllMessages()" class="btn-warning">
+              🔄 Rejouer Tous les Messages
+            </button>
+            <button onclick="exportMessages()" class="btn-secondary">
+              💾 Exporter les Messages
+            </button>
+            <button onclick="testSimulatedDelay()" class="btn-secondary">
+              ⏱️ Tester Délai
+            </button>
+            <button onclick="simulateNetworkError()" class="btn-danger">
+              ❌ Simuler Erreur Réseau
             </button>
           </div>
-          <div id="myFilesList"></div>
-        </div>
-
-        <!-- Section Groupes et Diffusion -->
-        <div class="section group-section">
-          <h2>👥 Test Groupes & Diffusion</h2>
-          <div class="form-group">
-            <input
-              type="text"
-              id="groupId"
-              placeholder="ID Groupe (ObjectId auto)"
-            />
-            <button onclick="generateGroupId()" class="btn-secondary">
-              🔧 Générer ID Groupe
-            </button>
-            <input
-              type="text"
-              id="broadcastId"
-              placeholder="ID Liste de diffusion (ObjectId auto)"
-            />
-            <button onclick="generateBroadcastId()" class="btn-secondary">
-              🔧 Générer ID Diffusion
-            </button>
-            <input
-              type="text"
-              id="groupReceiverIds"
-              placeholder="IDs utilisateurs (séparés par virgule)"
-            />
-            <textarea
-              id="groupMessageContent"
-              placeholder="Message pour le groupe..."
-              rows="2"
-            ></textarea>
-            <textarea
-              id="broadcastMessageContent"
-              placeholder="Message pour la diffusion..."
-              rows="2"
-            ></textarea>
-            <input
-              type="text"
-              id="groupName"
-              placeholder="Nom du groupe (optionnel)"
-            />
-            <input
-              type="text"
-              id="broadcastName"
-              placeholder="Nom de la diffusion (optionnel)"
-            />
-            <div class="button-grid">
-              <button onclick="sendGroupMessage()" class="btn-success">
-                📤 Envoyer au Groupe
-              </button>
-              <button onclick="sendBroadcastMessage()" class="btn-warning">
-                📤 Envoyer à la Diffusion
-              </button>
-              <button onclick="fetchGroupMessages()" class="btn-secondary">
-                📥 Récupérer Messages Groupe
-              </button>
-              <button onclick="fetchBroadcastMessages()" class="btn-secondary">
-                📥 Récupérer Messages Diffusion
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Section réception complète des messages -->
-        <div class="section all-messages-section">
-          <h2>📥 Tous les messages reçus</h2>
-          <div id="allMessagesList"></div>
         </div>
       </div>
 
@@ -405,11 +260,30 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
         <div class="logs-header">
           <h3>📊 Logs en temps réel</h3>
           <button onclick="clearLogs()" class="btn-clear">🧹 Vider</button>
+          <button onclick="exportLogs()" class="btn-secondary">
+            💾 Exporter
+          </button>
         </div>
         <div class="logs-container" id="logsContainer"></div>
       </div>
     </div>
 
-    <script src="app.js"></script>
+    <!-- ✅ MODAL DE NOTIFICATION NOUVEAU -->
+    <div id="notificationModal" class="notification-modal hidden">
+      <div class="notification-content">
+        <div class="notification-header">
+          <span id="notificationTitle">🔔 Notification</span>
+          <button onclick="closeNotification()" class="close-btn">✕</button>
+        </div>
+        <div class="notification-body" id="notificationBody"></div>
+        <div class="notification-footer">
+          <button onclick="closeNotification()" class="btn-secondary">
+            OK
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script src="app-recipient.js"></script>
   </body>
 </html>
