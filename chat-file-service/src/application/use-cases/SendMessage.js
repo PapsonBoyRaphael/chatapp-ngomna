@@ -242,8 +242,6 @@ class SendMessage {
           savedMessage = await this.messageRepository.save(message);
         }
 
-        this.resilientService.publishToMessageStream(savedMessage);
-
         // ✅ MÉTRIQUES (PROTÉGÉ)
         if (this.resilientService && this.resilientService.metrics) {
           this.resilientService.metrics.totalMessages++;

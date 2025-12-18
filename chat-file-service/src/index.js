@@ -284,21 +284,23 @@ const startServer = async () => {
         redisClient,
         messageRepository,
         mongoMessageRepository,
+        mongoConversationRepository,
         io // ✅ PASSER Socket.io DIRECTEMENT
       );
 
       // ✅ DÉMARRER LES WORKERS INTERNES (PAS BESOIN D'UN WORKER SÉPARÉ)
       await resilientMessageService.startWorkers();
 
+      // resilientMessageService.nukeAllRedisData(); //
       // ✅ NOUVELLE : SYNCHRONISER LES MESSAGES EXISTANTS
-      console.log(
-        "🔄 Démarrage de la synchronisation MongoDB → Redis Streams..."
-      );
-      const syncResult =
-        await resilientMessageService.syncExistingMessagesToStream();
-      console.log(
-        `✅ Synchronisation complétée: ${syncResult.synced} messages, ${syncResult.errors} erreur(s)`
-      );
+      // console.log(
+      //   "🔄 Démarrage de la synchronisation MongoDB → Redis Streams..."
+      // );
+      // const syncResult =
+      //   await resilientMessageService.syncExistingMessagesToStream();
+      // console.log(
+      //   `✅ Synchronisation complétée: ${syncResult.synced} messages, ${syncResult.errors} erreur(s)`
+      // );
 
       app.locals.resilientMessageService = resilientMessageService;
       console.log(

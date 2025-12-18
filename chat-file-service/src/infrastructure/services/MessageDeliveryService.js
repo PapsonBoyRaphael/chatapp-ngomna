@@ -95,14 +95,14 @@ class MessageDeliveryService {
   }
 
   /**
-   * ✅ CRÉER UN CONSUMER POUR UN STREAM
+   * ✅ CRÉER UN CONSUMER POUR UN STREAM (CORRIGÉ)
    */
   async createStreamConsumer(streamType, config) {
     try {
       const redisConsumer = this.redis.duplicate();
       await redisConsumer.connect();
 
-      // Créer le groupe consommateur
+      // ✅ CRÉER UN SEUL CONSUMER GROUP (pas par utilisateur)
       try {
         await redisConsumer.xGroupCreate(
           config.streamKey,
@@ -110,15 +110,17 @@ class MessageDeliveryService {
           "$",
           { MKSTREAM: true }
         );
-        console.log(`✅ Consumer créé: ${streamType} (${config.streamKey})`);
+        console.log(
+          `✅ Consumer group créé: ${config.groupId} pour ${streamType}`
+        );
       } catch (groupErr) {
         if (!groupErr.message.includes("BUSYGROUP")) {
           throw groupErr;
         }
-        console.log(`ℹ️ Consumer existant: ${streamType}`);
+        console.log(`ℹ️ Consumer group existant: ${config.groupId}`);
       }
 
-      // Enregistrer le consumer
+      // ✅ ENREGISTRER LE CONSUMER
       this.streamConsumers.set(config.streamKey, {
         redis: redisConsumer,
         config,
@@ -126,6 +128,8 @@ class MessageDeliveryService {
         isRunning: false,
         interval: null,
       });
+
+      console.log(`🔧 Consumer configuré: ${streamType} (${config.streamKey})`);
     } catch (error) {
       console.error(
         `❌ Erreur création consumer ${streamType}:`,
@@ -183,64 +187,56 @@ class MessageDeliveryService {
   }
 
   /**
-   * ✅ CONSOMMER UN STREAM
+   * ✅ CONSOMMER UN STREAM (CORRIGÉ)
    */
   async consumeStream(consumer) {
     try {
-      const userIds = Array.from(this.userSockets.keys());
+      // ✅ UTILISER UN CONSUMER ID GÉNÉRIQUE (pas par utilisateur)
+      const consumerId = `${consumer.config.groupId}:delivery-worker`;
 
-      if (userIds.length === 0) {
-        return;
-      }
+      try {
+        // ✅ LIRE TOUS LES MESSAGES DU STREAM
+        const messages = await consumer.redis.xReadGroup(
+          consumer.config.groupId,
+          consumerId,
+          { key: consumer.config.streamKey, id: ">" },
+          { COUNT: this.maxMessagesPerRead, BLOCK: this.blockTimeout }
+        );
 
-      // ✅ CONSOMMER POUR CHAQUE UTILISATEUR CONNECTÉ
-      for (const userId of userIds) {
-        try {
-          const consumerId = `${consumer.config.groupId}:${userId}`;
+        if (messages && messages.length > 0) {
+          const entries = messages[0]?.messages || [];
 
-          // Lire les nouveaux messages
-          const messages = await consumer.redis.xReadGroup(
-            consumer.config.groupId,
-            consumerId,
-            { key: consumer.config.streamKey, id: ">" },
-            { COUNT: this.maxMessagesPerRead, BLOCK: this.blockTimeout }
-          );
+          for (const entry of entries) {
+            try {
+              const message = entry.message;
 
-          if (messages && messages.length > 0) {
-            const entries = messages[0]?.messages || [];
+              // ✅ DISTRIBUER LE MESSAGE AU BON DESTINATAIRE
+              await this.distributeMessageToRecipient(
+                consumer.streamType,
+                message,
+                entry.id
+              );
 
-            for (const entry of entries) {
-              try {
-                const message = entry.message;
-
-                // ✅ ROUTER SELON LE TYPE DE STREAM
-                await this.routeMessageByStreamType(
-                  consumer.streamType,
-                  message,
-                  userId
-                );
-
-                // ✅ ACK IMMÉDIATEMENT
-                await consumer.redis.xAck(
-                  consumer.config.streamKey,
-                  consumer.config.groupId,
-                  entry.id
-                );
-              } catch (error) {
-                console.warn(
-                  `⚠️ Erreur traitement message ${consumer.streamType}:`,
-                  error.message
-                );
-              }
+              // ✅ ACK APRÈS LIVRAISON RÉUSSIE
+              await consumer.redis.xAck(
+                consumer.config.streamKey,
+                consumer.config.groupId,
+                entry.id
+              );
+            } catch (messageError) {
+              console.warn(
+                `⚠️ Erreur traitement message ${consumer.streamType}:`,
+                messageError.message
+              );
             }
           }
-        } catch (userError) {
-          if (!userError.message.includes("timeout")) {
-            console.warn(
-              `⚠️ Erreur consommation ${consumer.streamType} pour ${userId}:`,
-              userError.message
-            );
-          }
+        }
+      } catch (streamError) {
+        if (!streamError.message.includes("timeout")) {
+          console.warn(
+            `⚠️ Erreur consommation stream ${consumer.streamType}:`,
+            streamError.message
+          );
         }
       }
     } catch (error) {
@@ -252,15 +248,177 @@ class MessageDeliveryService {
   }
 
   /**
+   * ✅ NOUVELLE MÉTHODE : DISTRIBUER LE MESSAGE AU BON DESTINATAIRE
+   */
+  async distributeMessageToRecipient(streamType, message, entryId) {
+    try {
+      console.log(`📬 Distribution message ${streamType}:`, {
+        messageId: message.messageId,
+        senderId: message.senderId,
+        receiverId: message.receiverId,
+        conversationId: message.conversationId,
+      });
+
+      switch (streamType) {
+        // ✅ CAS 1 : MESSAGES PRIVÉS
+        case "private":
+          if (message.receiverId) {
+            const receiverId = String(message.receiverId);
+
+            console.log(
+              `➡️ Livraison message privé: ${message.senderId} → ${receiverId}`
+            );
+
+            // ✅ VÉRIFIER QUE LE DESTINATAIRE EST CONNECTÉ
+            if (this.userSockets.has(receiverId)) {
+              await this.deliverPrivateMessage(message, receiverId);
+            } else {
+              console.log(
+                `⏳ Destinataire ${receiverId} déconnecté, message en attente`
+              );
+              await this.addToPendingQueue(receiverId, message);
+            }
+          } else {
+            console.warn("⚠️ Message privé sans receiverId:", message);
+          }
+          break;
+
+        // ✅ CAS 2 : MESSAGES DE GROUPE
+        case "group":
+          if (message.conversationId) {
+            console.log(
+              `➡️ Livraison message groupe: ${message.conversationId}`
+            );
+
+            // ✅ LIVRER À TOUS LES PARTICIPANTS CONNECTÉS
+            await this.deliverGroupMessageToAllParticipants(message);
+          } else {
+            console.warn("⚠️ Message groupe sans conversationId:", message);
+          }
+          break;
+
+        // ✅ CAS 3 : TYPING EVENTS
+        case "typing":
+          if (message.conversationId) {
+            await this.deliverTypingEventToConversationParticipants(message);
+          }
+          break;
+
+        // ✅ CAS 4 : READ RECEIPTS
+        case "readReceipts":
+          if (message.messageId && message.senderId) {
+            // Livrer à l'expéditeur original du message
+            const originalSender = String(message.senderId);
+            if (this.userSockets.has(originalSender)) {
+              await this.deliverReadReceipt(message, originalSender);
+            }
+          }
+          break;
+
+        // ✅ CAS 5 : NOTIFICATIONS SYSTÈME
+        case "notifications":
+          if (message.userId) {
+            const targetUser = String(message.userId);
+            if (this.userSockets.has(targetUser)) {
+              await this.deliverNotification(message, targetUser);
+            } else {
+              await this.addToPendingQueue(targetUser, message);
+            }
+          }
+          break;
+
+        default:
+          console.warn(`⚠️ Stream type inconnu: ${streamType}`);
+      }
+    } catch (error) {
+      console.error(`❌ Erreur distribution message ${streamType}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ LIVRER UN MESSAGE DE GROUPE À TOUS LES PARTICIPANTS
+   */
+  async deliverGroupMessageToAllParticipants(message) {
+    try {
+      const conversationId = String(message.conversationId);
+      const senderId = String(message.senderId);
+
+      // ✅ RÉCUPÉRER TOUS LES UTILISATEURS CONNECTÉS DE LA CONVERSATION
+      const connectedUsers = [];
+
+      for (const [userId, socketIds] of this.userSockets.entries()) {
+        // ✅ IGNORER L'EXPÉDITEUR
+        if (userId === senderId) continue;
+
+        // ✅ VÉRIFIER SI L'UTILISATEUR EST DANS LA CONVERSATION
+        const userConversations = this.userConversations.get(userId) || [];
+        if (userConversations.includes(conversationId)) {
+          connectedUsers.push(userId);
+        }
+      }
+
+      console.log(
+        `👥 Livraison message groupe à ${connectedUsers.length} utilisateur(s) connecté(s)`
+      );
+
+      // ✅ LIVRER À CHAQUE UTILISATEUR CONNECTÉ
+      for (const userId of connectedUsers) {
+        await this.deliverGroupMessage(message, userId);
+      }
+
+      console.log(
+        `✅ Message groupe livré: ${senderId} → conv:${conversationId} (${connectedUsers.length} destinataires)`
+      );
+    } catch (error) {
+      console.error("❌ Erreur livraison message groupe:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER UN ÉVÉNEMENT TYPING AUX PARTICIPANTS
+   */
+  async deliverTypingEventToConversationParticipants(message) {
+    try {
+      const conversationId = String(message.conversationId);
+      const senderId = String(message.senderId);
+
+      // ✅ LIVRER À TOUS LES PARTICIPANTS SAUF L'EXPÉDITEUR
+      for (const [userId, socketIds] of this.userSockets.entries()) {
+        if (userId === senderId) continue;
+
+        const userConversations = this.userConversations.get(userId) || [];
+        if (userConversations.includes(conversationId)) {
+          await this.deliverTypingEvent(message, userId);
+        }
+      }
+
+      console.log(`⌨️ Typing event livré pour conversation: ${conversationId}`);
+    } catch (error) {
+      console.error("❌ Erreur livraison typing event:", error);
+    }
+  }
+
+  /**
    * ✅ ROUTER LES MESSAGES SELON LE TYPE DE STREAM
    */
   async routeMessageByStreamType(streamType, message, userId) {
     const userIdStr = String(userId);
 
+    console.log(
+      `➡️ Routing message ${streamType} pour utilisateur ${userIdStr}`
+    );
+
+    console.log(
+      "Receiver check:",
+      message.receiverId && String(message.receiverId) === userIdStr
+    );
+
     switch (streamType) {
       // ✅ CAS 1 : MESSAGES PRIVÉS
       case "private":
         if (message.receiverId && String(message.receiverId) === userIdStr) {
+          console.log("Livraison message privé à", userIdStr);
           await this.deliverPrivateMessage(message, userIdStr);
         }
         break;
@@ -306,6 +464,8 @@ class MessageDeliveryService {
     try {
       const socketIds = this.userSockets.get(userId);
 
+      console.log("userSockets", socketIds);
+
       if (!socketIds || socketIds.length === 0) {
         // Utilisateur pas connecté - ajouter en queue d'attente
         await this.addToPendingQueue(userId, message);
@@ -316,7 +476,7 @@ class MessageDeliveryService {
       for (const socketId of socketIds) {
         const socket = this.io.sockets.sockets.get(socketId);
         if (socket) {
-          socket.emit("message:private", {
+          socket.emit("newMessage", {
             messageId: message.messageId,
             conversationId: message.conversationId,
             senderId: message.senderId,

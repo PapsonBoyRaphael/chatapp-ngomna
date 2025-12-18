@@ -61,11 +61,13 @@ class ResilientMessageService {
     redisClient,
     messageRepository,
     mongoRepository = null,
+    mongoConversationRepository = null,
     io = null
   ) {
     this.redis = redisClient;
     this.messageRepository = messageRepository;
     this.mongoRepository = mongoRepository;
+    this.mongoConversationRepository = mongoConversationRepository;
     this.io = io;
 
     this.circuitBreaker = new CircuitBreaker({
@@ -1278,7 +1280,7 @@ class ResilientMessageService {
 
       try {
         // Récupérer les conversations récentes
-        const conversations = await this.mongoRepository.findAll({
+        const conversations = await this.mongoConversationRepository.findAll({
           query: {
             updatedAt: {
               $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
@@ -1408,12 +1410,499 @@ class ResilientMessageService {
     }
   }
 
-  // ===== ARRÊT =====
+  // ===== GESTION DES DOUBLONS =====
+
+  /**
+   * ✅ SUPPRIMER LES DOUBLONS D'UN STREAM SPÉCIFIQUE
+   */
+  async removeDuplicatesFromStream(streamKey = null) {
+    if (!this.redis) {
+      console.warn("⚠️ Redis non disponible pour suppression doublons");
+      return 0;
+    }
+
+    try {
+      // Par défaut, nettoyer tous les streams de messages
+      const streamsToClean = streamKey
+        ? [streamKey]
+        : [
+            this.MULTI_STREAMS.PRIVATE,
+            this.MULTI_STREAMS.GROUP,
+            this.STREAMS.MESSAGES,
+          ];
+
+      let totalDuplicatesRemoved = 0;
+
+      for (const stream of streamsToClean) {
+        try {
+          console.log(`🔍 Analyse des doublons dans ${stream}...`);
+
+          // 1. ✅ RÉCUPÉRER TOUS LES MESSAGES DU STREAM
+          const allMessages = await this.redis.xRange(stream, "-", "+");
+
+          if (allMessages.length === 0) {
+            console.log(`ℹ️ Stream ${stream} est vide`);
+            continue;
+          }
+
+          // 2. ✅ IDENTIFIER LES DOUBLONS PAR messageId
+          const seen = new Set();
+          const duplicates = [];
+          const messageIdToEntries = new Map();
+
+          for (const entry of allMessages) {
+            const entryId = Array.isArray(entry) ? entry[0] : entry.id;
+            const fields = Array.isArray(entry)
+              ? Object.fromEntries(
+                  Array.from({ length: entry[1].length / 2 }, (_, i) => [
+                    entry[1][i * 2],
+                    entry[1][i * 2 + 1],
+                  ])
+                )
+              : entry.message;
+
+            const messageId = fields.messageId || fields.id;
+
+            if (!messageId || messageId === "") {
+              console.warn(`⚠️ Message sans ID trouvé: ${entryId}`);
+              continue;
+            }
+
+            if (!messageIdToEntries.has(messageId)) {
+              messageIdToEntries.set(messageId, []);
+            }
+            messageIdToEntries.get(messageId).push({ entryId, fields });
+
+            if (seen.has(messageId)) {
+              duplicates.push(entryId);
+            } else {
+              seen.add(messageId);
+            }
+          }
+
+          console.log(
+            `📊 Stream ${stream}: ${allMessages.length} entrées, ${seen.size} uniques, ${duplicates.length} doublon(s)`
+          );
+
+          // 3. ✅ ANALYSE DÉTAILLÉE DES DOUBLONS
+          if (duplicates.length > 0) {
+            console.log(
+              `🔍 Analyse détaillée des ${duplicates.length} doublon(s):`
+            );
+
+            for (const [messageId, entries] of messageIdToEntries.entries()) {
+              if (entries.length > 1) {
+                console.log(
+                  `  📝 Message ${messageId}: ${entries.length} occurrences`
+                );
+
+                // Garder le plus ancien (premier dans le stream)
+                const sortedEntries = entries.sort((a, b) =>
+                  a.entryId.localeCompare(b.entryId)
+                );
+
+                const toKeep = sortedEntries[0];
+                const toRemove = sortedEntries.slice(1);
+
+                console.log(`    ✅ Conserver: ${toKeep.entryId}`);
+                toRemove.forEach((entry) => {
+                  console.log(`    ❌ Supprimer: ${entry.entryId}`);
+                });
+              }
+            }
+          }
+
+          // 4. ✅ SUPPRIMER LES DOUBLONS EN BATCH
+          if (duplicates.length > 0) {
+            const batchSize = 100;
+            let removedCount = 0;
+
+            for (let i = 0; i < duplicates.length; i += batchSize) {
+              const batch = duplicates.slice(i, i + batchSize);
+
+              try {
+                await this.redis.xDel(stream, ...batch);
+                removedCount += batch.length;
+                console.log(
+                  `🗑️ Batch ${Math.ceil((i + 1) / batchSize)}: ${
+                    batch.length
+                  } doublons supprimés`
+                );
+
+                // Petit délai pour ne pas surcharger Redis
+                if (i + batchSize < duplicates.length) {
+                  await new Promise((resolve) => setTimeout(resolve, 100));
+                }
+              } catch (delError) {
+                console.error(`❌ Erreur suppression batch:`, delError.message);
+              }
+            }
+
+            totalDuplicatesRemoved += removedCount;
+            console.log(
+              `✅ ${removedCount} doublon(s) supprimé(s) de ${stream}`
+            );
+          } else {
+            console.log(`✅ Aucun doublon dans ${stream}`);
+          }
+        } catch (streamError) {
+          console.error(
+            `❌ Erreur analyse stream ${stream}:`,
+            streamError.message
+          );
+        }
+      }
+
+      if (totalDuplicatesRemoved > 0) {
+        console.log(
+          `🎉 NETTOYAGE TERMINÉ: ${totalDuplicatesRemoved} doublon(s) supprimé(s) au total`
+        );
+
+        // ✅ LOGS DES STATISTIQUES APRÈS NETTOYAGE
+        const stats = await this.getStreamStats();
+        if (stats) {
+          console.log("📊 État des streams après nettoyage:");
+          console.table(stats);
+        }
+      } else {
+        console.log("✨ Aucun doublon détecté dans les streams");
+      }
+
+      return totalDuplicatesRemoved;
+    } catch (error) {
+      console.error("❌ Erreur suppression doublons:", error);
+      return 0;
+    }
+  }
+
+  /**
+   * ✅ NETTOYAGE COMPLET DE TOUT REDIS (Streams + données associées)
+   * ⚠️ ATTENTION: Supprime TOUTES les données de chat Redis
+   */
+  async nukeAllRedisData() {
+    if (!this.redis) {
+      console.error("❌ Redis non disponible");
+      return { success: false, error: "Redis non disponible" };
+    }
+
+    console.log("☢️ ===== NETTOYAGE COMPLET REDIS =====");
+    console.warn(
+      "⚠️ ATTENTION: Cette opération va supprimer TOUTES les données de chat Redis!"
+    );
+
+    try {
+      // ✅ PATTERNS DE SUPPRESSION COMPLETS
+      const patterns = [
+        // 1. Streams principaux
+        "stream:*",
+        "*:stream",
+
+        // 2. Données de synchronisation
+        "*sync*",
+        "message-sync:*",
+
+        // 3. Présence et utilisateurs en ligne
+        "presence:*",
+        "online:*",
+        "user:*",
+        "userData:*",
+        "userSocket:*",
+
+        // 4. Messages en attente et delivery
+        "pending:messages:*",
+        "pending:*",
+        "delivery:*",
+
+        // 5. Résilience et fallback
+        "fallback:*",
+        "retry:*",
+        "wal:*",
+        "dlq:*",
+
+        // 6. Consumer groups et workers
+        "*delivery-*",
+        "consumer:*",
+
+        // 7. Cache applicatif
+        "chat:*",
+        "conversation:*",
+        "conversations:*",
+        "unread:*",
+        "last_messages:*",
+        "messages:*",
+
+        // 8. Rooms et gestion temps-réel
+        "room:*",
+        "rooms:*",
+        "roomUsers:*",
+        "userRooms:*",
+
+        // 9. Autres patterns possibles
+        "file:*",
+        "cache:*",
+      ];
+
+      let totalDeleted = 0;
+      const results = {};
+      const startTime = Date.now();
+
+      // ✅ SUPPRESSION PAR PATTERNS
+      for (const pattern of patterns) {
+        try {
+          console.log(`🔍 Recherche pattern: ${pattern}`);
+
+          let cursor = 0;
+          let keysForPattern = [];
+
+          // Utiliser SCAN pour éviter de bloquer Redis
+          do {
+            const result = await this.redis.scan(cursor, {
+              MATCH: pattern,
+              COUNT: 1000,
+            });
+
+            cursor = result.cursor;
+            keysForPattern.push(...result.keys);
+          } while (cursor !== 0);
+
+          if (keysForPattern.length > 0) {
+            console.log(
+              `🗑️ ${keysForPattern.length} clé(s) avec pattern: ${pattern}`
+            );
+
+            // ✅ SUPPRESSION PAR BATCH POUR PERFORMANCE
+            const batchSize = 100;
+            let deletedForPattern = 0;
+
+            for (let i = 0; i < keysForPattern.length; i += batchSize) {
+              const batch = keysForPattern.slice(i, i + batchSize);
+
+              try {
+                const deleted = await this.redis.del(...batch);
+                deletedForPattern += deleted;
+
+                // Log progression
+                if (keysForPattern.length > batchSize) {
+                  console.log(
+                    `    📦 Batch ${Math.ceil((i + 1) / batchSize)}/${Math.ceil(
+                      keysForPattern.length / batchSize
+                    )}: ${deleted} clé(s) supprimée(s)`
+                  );
+                }
+
+                // Petit délai pour ne pas surcharger Redis
+                if (i + batchSize < keysForPattern.length) {
+                  await new Promise((resolve) => setTimeout(resolve, 10));
+                }
+              } catch (batchError) {
+                console.error(
+                  `❌ Erreur suppression batch:`,
+                  batchError.message
+                );
+              }
+            }
+
+            totalDeleted += deletedForPattern;
+            results[pattern] = deletedForPattern;
+          } else {
+            results[pattern] = 0;
+          }
+        } catch (patternError) {
+          console.warn(`⚠️ Erreur pattern ${pattern}:`, patternError.message);
+          results[pattern] = { error: patternError.message };
+        }
+      }
+
+      // ✅ SUPPRIMER LES CLÉS SPÉCIFIQUES CONNUES
+      console.log("🎯 Suppression des clés spécifiques...");
+
+      const specificKeys = [
+        "online:users",
+        "messages:stream",
+        "retry:stream",
+        "wal:stream",
+        "fallback:stream",
+        "dlq:stream",
+        "stream:messages:private",
+        "stream:messages:group",
+        "stream:events:typing",
+        "stream:events:read",
+        "stream:messages:system",
+        "active:conversations",
+        "global:stats",
+      ];
+
+      for (const key of specificKeys) {
+        try {
+          const deleted = await this.redis.del(key);
+          if (deleted > 0) {
+            totalDeleted += deleted;
+            results[`specific:${key}`] = deleted;
+          }
+        } catch (keyError) {
+          console.warn(`⚠️ Erreur suppression ${key}:`, keyError.message);
+          results[`specific:${key}`] = { error: keyError.message };
+        }
+      }
+
+      // ✅ NETTOYER TOUS LES CONSUMER GROUPS
+      console.log("🧹 Nettoyage des consumer groups...");
+
+      try {
+        const streamKeys = await this.redis.keys("stream:*");
+        let groupsDestroyed = 0;
+
+        for (const streamKey of streamKeys) {
+          try {
+            const groups = await this.redis.xInfoGroups(streamKey);
+
+            for (const group of groups) {
+              try {
+                await this.redis.xGroupDestroy(streamKey, group.name);
+                groupsDestroyed++;
+              } catch (destroyError) {
+                // Ignorer si le groupe n'existe pas
+              }
+            }
+          } catch (infoError) {
+            // Ignorer si le stream n'existe pas ou pas de groupes
+          }
+        }
+
+        if (groupsDestroyed > 0) {
+          results["consumer:groups"] = groupsDestroyed;
+          console.log(`✅ ${groupsDestroyed} consumer group(s) supprimé(s)`);
+        }
+      } catch (groupsError) {
+        console.warn(
+          "⚠️ Erreur suppression consumer groups:",
+          groupsError.message
+        );
+        results["consumer:groups"] = { error: groupsError.message };
+      }
+
+      // ✅ STATISTIQUES FINALES
+      const duration = Date.now() - startTime;
+
+      console.log(`✅ NETTOYAGE TERMINÉ en ${duration}ms`);
+      console.log(`🗑️ Total: ${totalDeleted} clé(s) supprimée(s)`);
+      console.log("📊 Résultats détaillés:");
+
+      // Afficher les résultats triés
+      const sortedResults = Object.entries(results)
+        .filter(([_, value]) => typeof value === "number" && value > 0)
+        .sort(([, a], [, b]) => b - a);
+
+      if (sortedResults.length > 0) {
+        console.table(Object.fromEntries(sortedResults));
+      }
+
+      // ✅ VÉRIFICATION FINALE
+      console.log("🔍 Vérification finale...");
+
+      const remainingChatKeys = await this.redis.keys("stream:*");
+      const totalRemainingKeys = await this.redis.dbSize();
+
+      console.log(`📋 ${remainingChatKeys.length} stream(s) restant(s)`);
+      console.log(
+        `📊 ${totalRemainingKeys} clé(s) totales restantes dans Redis`
+      );
+
+      // ✅ RÉINITIALISER LES MÉTRIQUES
+      if (this.metrics) {
+        this.metrics = {
+          ...this.metrics,
+          totalMessages: 0,
+          successfulSaves: 0,
+          fallbackActivations: 0,
+          retryCount: 0,
+          dlqCount: 0,
+          privateMessagesPublished: 0,
+          groupMessagesPublished: 0,
+          typingEventsPublished: 0,
+        };
+      }
+
+      console.log("🎉 NETTOYAGE COMPLET TERMINÉ AVEC SUCCÈS!");
+
+      return {
+        success: true,
+        totalDeleted,
+        duration: `${duration}ms`,
+        results,
+        remainingChatKeys: remainingChatKeys.length,
+        totalRemainingKeys,
+        patterns: patterns.length,
+      };
+    } catch (error) {
+      console.error("❌ Erreur critique nettoyage complet Redis:", error);
+
+      return {
+        success: false,
+        error: error.message,
+        stack: error.stack,
+      };
+    }
+  }
+
+  /**
+   * ✅ NETTOYAGE SÉLECTIF PAR CATÉGORIE
+   */
+  async cleanRedisCategory(category) {
+    if (!this.redis) {
+      console.error("❌ Redis non disponible");
+      return { success: false, error: "Redis non disponible" };
+    }
+
+    const categories = {
+      streams: ["stream:*", "*:stream"],
+      users: ["presence:*", "online:*", "user:*", "userData:*"],
+      messages: ["pending:messages:*", "messages:*", "last_messages:*"],
+      cache: ["cache:*", "conversation:*", "conversations:*"],
+      rooms: ["room:*", "rooms:*", "roomUsers:*", "userRooms:*"],
+      resilience: ["fallback:*", "retry:*", "wal:*", "dlq:*"],
+    };
+
+    if (!categories[category]) {
+      return {
+        success: false,
+        error: `Catégorie inconnue. Disponibles: ${Object.keys(categories).join(
+          ", "
+        )}`,
+      };
+    }
+
+    console.log(`🧹 Nettoyage catégorie: ${category}`);
+
+    const patterns = categories[category];
+    let totalDeleted = 0;
+
+    for (const pattern of patterns) {
+      const keys = await this.redis.keys(pattern);
+      if (keys.length > 0) {
+        const deleted = await this.redis.del(...keys);
+        totalDeleted += deleted;
+        console.log(
+          `✅ ${deleted} clé(s) supprimée(s) pour pattern: ${pattern}`
+        );
+      }
+    }
+
+    return {
+      success: true,
+      category,
+      totalDeleted,
+      patterns: patterns.length,
+    };
+  }
+
+  // ===== ARRÊT COMPLET =====
 
   stopAll() {
     console.log("🛑 Arrêt complet du service...");
 
     this.stopWorkers();
+    this.stopDuplicateCleanup(); // ✅ AJOUTER L'ARRÊT DU NETTOYAGE
 
     clearInterval(this.memoryMonitorInterval);
     clearInterval(this.metricsInterval);
