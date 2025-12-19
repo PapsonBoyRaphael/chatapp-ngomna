@@ -398,6 +398,54 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
           <h2>📥 Tous les messages reçus</h2>
           <div id="allMessagesList"></div>
         </div>
+
+        <!-- Section Présence -->
+        <div class="section presence-section">
+          <h2>👁️ Test Présence & Surveillance</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="targetUserId"
+              placeholder="ID Utilisateur cible"
+              value="2"
+            />
+            <select id="userRole">
+              <option value="member">Membre</option>
+              <option value="moderator">Modérateur</option>
+              <option value="admin">Admin</option>
+            </select>
+
+            <div class="button-grid">
+              <button
+                onclick="getConversationOnlineUsers()"
+                class="btn-primary"
+              >
+                👥 Users En Ligne
+              </button>
+              <button
+                onclick="getConversationsWithPresence()"
+                class="btn-primary"
+              >
+                📋 Conversations + Présence
+              </button>
+              <button onclick="subscribeToPresence()" class="btn-success">
+                👁️ Surveiller Présence
+              </button>
+              <button onclick="unsubscribeFromPresence()" class="btn-warning">
+                🚫 Arrêter Surveillance
+              </button>
+            </div>
+
+            <div class="button-grid">
+              <button onclick="getPresenceDashboard()" class="btn-secondary">
+                📊 Dashboard Global
+              </button>
+              <button onclick="setUserRole()" class="btn-warning">
+                👑 Définir Rôle
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Logs en temps réel -->
