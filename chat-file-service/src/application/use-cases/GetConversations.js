@@ -7,47 +7,50 @@ class GetConversations {
   async execute(userId, options = {}) {
     const startTime = Date.now();
 
-    // ✅ RÉCUPÉRER LES OPTIONS DE PAGINATION
     const {
       page = 1,
       limit = 20,
-      offset = (page - 1) * limit,
+      cursor = null,
+      direction = "newer",
       includeArchived = false,
+      useCache = true,
     } = options;
 
     try {
       console.log(
-        `🔍 Récupération conversations page ${page} (limit: ${limit}) pour utilisateur: ${userId}`
+        `🔍 GetConversations: userId=${userId}, page=${page}, limit=${limit}, cursor=${cursor}, useCache=${useCache}`
       );
 
-      // 2. ✅ RÉCUPÉRATION AVEC PAGINATION
-      const conversationsResult =
-        await this.conversationRepository.findByParticipant(userId, {
+      // ✅ APPEL REPOSITORY avec cursor ET cache
+      const result = await this.conversationRepository.findByParticipant(
+        userId,
+        {
           page: parseInt(page),
           limit: parseInt(limit),
-          offset: parseInt(offset),
-          includeArchived: includeArchived,
-          useCache: false,
-        });
+          cursor,
+          direction,
+          includeArchived,
+          useCache,
+        }
+      );
 
-      if (
-        !conversationsResult ||
-        !Array.isArray(conversationsResult.conversations)
-      ) {
+      if (!result || !Array.isArray(result.conversations)) {
         throw new Error("Format de données invalide depuis le repository");
       }
 
-      const conversations = conversationsResult.conversations || [];
+      const conversations = result.conversations || [];
       const totalCount =
-        conversationsResult.totalCount ||
-        conversationsResult.pagination?.totalCount ||
-        0;
+        result.totalCount || result.pagination?.totalCount || 0;
 
       console.log(
-        `📋 ${conversations.length} conversations trouvées sur ${totalCount} total pour la page ${page}`
+        `📋 ${
+          conversations.length
+        } conversations trouvées sur ${totalCount} total pour la page ${page} (${
+          result.fromCache ? "cache" : "MongoDB"
+        })`
       );
 
-      // 3. Traitement des métadonnées (inchangé)
+      // Traitement des métadonnées (inchangé)
       const conversationsWithMetadata = await Promise.all(
         conversations.map(async (conversation) => {
           try {
@@ -102,17 +105,17 @@ class GetConversations {
         })
       );
 
-      // 4. Trier par dernière activité
+      // Trier par dernière activité
       const sortedConversations = conversationsWithMetadata.sort(
         (a, b) => new Date(b.lastActivity) - new Date(a.lastActivity)
       );
 
-      // 5. ✅ CALCULS DE PAGINATION CORRECTS
+      // ✅ CALCULS DE PAGINATION CORRECTS
       const totalPages = Math.ceil(totalCount / limit);
       const hasNext = page < totalPages;
       const hasPrevious = page > 1;
 
-      const result = {
+      const finalResult = {
         conversations: sortedConversations,
         pagination: {
           currentPage: parseInt(page),
@@ -121,7 +124,7 @@ class GetConversations {
           hasNext: hasNext,
           hasPrevious: hasPrevious,
           limit: parseInt(limit),
-          offset: parseInt(offset),
+          offset: (page - 1) * limit,
           nextPage: hasNext ? parseInt(page) + 1 : null,
           previousPage: hasPrevious ? parseInt(page) - 1 : null,
         },
@@ -133,14 +136,21 @@ class GetConversations {
           (sum, c) => sum + (c.unreadCount || 0),
           0
         ),
-        fromCache: false,
+        fromCache: result.fromCache || false,
+        nextCursor: result.nextCursor || null,
+        hasMore: result.hasMore || false,
         processingTime: Date.now() - startTime,
       };
 
       console.log(
-        `✅ Page ${page}: ${result.conversations.length} conversations récupérées (${result.processingTime}ms)`
+        `✅ Page ${page}: ${
+          finalResult.conversations.length
+        } conversations récupérées (${finalResult.processingTime}ms) - ${
+          result.fromCache ? "CACHE" : "DB"
+        }`
       );
-      return result;
+
+      return finalResult;
     } catch (error) {
       const processingTime = Date.now() - startTime;
       console.error(

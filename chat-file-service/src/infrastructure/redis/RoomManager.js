@@ -1,14 +1,21 @@
 class RoomManager {
-  constructor(redis) {
+  constructor(redis, io = null) {
     this.redis = redis;
+    this.io = io; // ✅ AJOUTER IO POUR BROADCAST
     this.roomPrefix = "rooms";
     this.roomUsersPrefix = "room_users";
     this.userRoomsPrefix = "user_rooms";
     this.roomDataPrefix = "room_data";
-    this.roomStatePrefix = "room_state"; // "active" | "idle" | "archived"
-    this.defaultRoomTTL = 3600; // 1 heure active
-    this.idleRoomTTL = 7200; // 2 heures idle
-    this.archivedRoomTTL = 86400; // 24h avant suppression définitive
+    this.roomStatePrefix = "room_state";
+    this.roomRolesPrefix = "room_roles"; // ✅ NOUVEAU : pour les rôles
+    this.roomPeakPrefix = "room_peak"; // ✅ NOUVEAU : pics de connexion
+
+    this.defaultRoomTTL = 3600;
+    this.idleRoomTTL = 7200;
+    this.archivedRoomTTL = 86400;
+
+    // ✅ RÉFÉRENCE AU OnlineUserManager (sera injectée)
+    this.onlineUserManager = null;
   }
 
   // APPELER ÇA DANS addUserToRoom ET updateRoomActivity
@@ -685,6 +692,730 @@ class RoomManager {
       console.error("❌ Erreur updateConversationMetadata:", error);
       return false;
     }
+  }
+
+  // =======================================
+  // ✅ NOUVELLES MÉTHODES DE PRÉSENCE
+  // =======================================
+
+  /**
+   * ✅ NOUVEAU : Récupérer les statistiques de présence complètes d'une room
+   */
+  async getRoomPresenceStats(roomName) {
+    try {
+      const roomNameString = String(roomName);
+
+      // 1. ✅ RÉCUPÉRER TOUS LES UTILISATEURS DE LA ROOM
+      const userIds = await this.redis.sMembers(
+        `${this.roomUsersPrefix}:${roomNameString}`
+      );
+
+      if (!userIds || userIds.length === 0) {
+        return {
+          roomName: roomNameString,
+          totalUsers: 0,
+          onlineUsers: 0,
+          idleUsers: 0,
+          offlineUsers: 0,
+          users: [],
+          stats: this.getEmptyStats(),
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      // 2. ✅ VÉRIFIER ONLINEUSEMANAGER
+      if (!this.onlineUserManager) {
+        console.warn(
+          "⚠️ OnlineUserManager non disponible pour getRoomPresenceStats"
+        );
+        return this.getFallbackStats(roomNameString, userIds);
+      }
+
+      // 3. ✅ ANALYSER CHAQUE UTILISATEUR
+      const users = [];
+      let onlineCount = 0;
+      let idleCount = 0;
+      let offlineCount = 0;
+
+      for (const userId of userIds) {
+        try {
+          // Données de la room
+          const userRoomData = await this.redis.hGetAll(
+            `${this.roomDataPrefix}:${roomNameString}:${userId}`
+          );
+
+          // Statut de présence via OnlineUserManager
+          const isOnline = await this.onlineUserManager.isUserOnline(userId);
+          const userData = await this.onlineUserManager.getUserData(userId);
+
+          // Déterminer le statut précis
+          let status = "offline";
+          let lastActivity = null;
+          let connectedAt = null;
+
+          if (userData) {
+            status = userData.status || (isOnline ? "online" : "offline");
+            lastActivity = userData.lastActivity;
+            connectedAt = userData.connectedAt;
+          }
+
+          // Compter les statuts
+          if (status === "online") onlineCount++;
+          else if (status === "idle") idleCount++;
+          else offlineCount++;
+
+          // Rôle dans la room
+          const role = await this.getUserRoleInRoom(roomNameString, userId);
+
+          // Conversation ID
+          const conversationId =
+            userRoomData.conversationId || roomNameString.replace("conv_", "");
+
+          users.push({
+            userId: userId,
+            matricule:
+              userRoomData.matricule || userData?.matricule || "Unknown",
+            status,
+            isOnline: status === "online",
+            isIdle: status === "idle",
+            isOffline: status === "offline",
+            lastActivity,
+            connectedAt,
+            joinedAt: userRoomData.joinedAt,
+            role,
+            conversationId,
+            // Temps de connexion calculé
+            connectedDuration: this.calculateConnectedDuration(connectedAt),
+            // Métadonnées complètes
+            metadata: {
+              roomData: userRoomData,
+              presenceData: userData || {},
+              lastRoomActivity: userRoomData.lastActivity,
+            },
+          });
+        } catch (userError) {
+          console.warn(
+            `⚠️ Erreur analyse utilisateur ${userId}:`,
+            userError.message
+          );
+          // Utilisateur avec données minimales
+          users.push({
+            userId,
+            matricule: "Unknown",
+            status: "offline",
+            isOnline: false,
+            isIdle: false,
+            isOffline: true,
+            error: userError.message,
+          });
+          offlineCount++;
+        }
+      }
+
+      // 4. ✅ RÉCUPÉRER LES MÉTADONNÉES DE LA ROOM
+      const roomMetadata = await this.redis.hGetAll(
+        `${this.roomPrefix}:${roomNameString}`
+      );
+
+      // 5. ✅ RÉCUPÉRER LE STATUT DE LA ROOM
+      const roomState =
+        (await this.redis.get(`${this.roomStatePrefix}:${roomNameString}`)) ||
+        "active";
+
+      // 6. ✅ CALCULER LES STATISTIQUES AVANCÉES
+      const stats = await this.calculateAdvancedStats(roomNameString, users);
+
+      return {
+        roomName: roomNameString,
+        roomState,
+        totalUsers: userIds.length,
+        onlineUsers: onlineCount,
+        idleUsers: idleCount,
+        offlineUsers: offlineCount,
+
+        // ✅ UTILISATEURS TRIÉS PAR STATUT (en ligne d'abord)
+        users: users.sort((a, b) => {
+          const statusOrder = { online: 0, idle: 1, offline: 2 };
+          const statusSort = statusOrder[a.status] - statusOrder[b.status];
+          if (statusSort !== 0) return statusSort;
+
+          // Si même statut, trier par dernière activité
+          if (a.lastActivity && b.lastActivity) {
+            return new Date(b.lastActivity) - new Date(a.lastActivity);
+          }
+          return 0;
+        }),
+
+        // ✅ STATISTIQUES AVANCÉES
+        stats,
+
+        // ✅ MÉTADONNÉES DE LA ROOM
+        roomMetadata,
+
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      console.error("❌ Erreur getRoomPresenceStats:", error);
+      return {
+        roomName: String(roomName),
+        error: error.message,
+        totalUsers: 0,
+        onlineUsers: 0,
+        idleUsers: 0,
+        offlineUsers: 0,
+        users: [],
+        stats: this.getEmptyStats(),
+        timestamp: new Date().toISOString(),
+      };
+    }
+  }
+
+  /**
+   * ✅ NOUVEAU : Calculer les statistiques avancées
+   */
+  async calculateAdvancedStats(roomName, users) {
+    try {
+      const onlineUsers = users.filter((u) => u.status === "online");
+      const totalUsers = users.length;
+
+      // Pourcentages
+      const onlinePercentage =
+        totalUsers > 0
+          ? Math.round((onlineUsers.length / totalUsers) * 100)
+          : 0;
+      const idlePercentage =
+        totalUsers > 0
+          ? Math.round(
+              (users.filter((u) => u.status === "idle").length / totalUsers) *
+                100
+            )
+          : 0;
+
+      // Utilisateur le plus actif
+      const mostActiveUser =
+        users.length > 0
+          ? users.reduce((prev, current) => {
+              if (!prev.lastActivity) return current;
+              if (!current.lastActivity) return prev;
+              return new Date(prev.lastActivity) >
+                new Date(current.lastActivity)
+                ? prev
+                : current;
+            })
+          : null;
+
+      // Temps de connexion moyen
+      const averageConnectedTime =
+        this.calculateAverageConnectedTime(onlineUsers);
+
+      // Pic d'utilisateurs en ligne
+      const peakOnlineCount = await this.getPeakOnlineCount(roomName);
+
+      // Mettre à jour le pic si nécessaire
+      if (onlineUsers.length > peakOnlineCount) {
+        await this.updatePeakOnlineCount(roomName, onlineUsers.length);
+      }
+
+      // Distribution des rôles
+      const roleDistribution = {};
+      users.forEach((user) => {
+        const role = user.role || "member";
+        roleDistribution[role] = (roleDistribution[role] || 0) + 1;
+      });
+
+      // Activité récente (dernière heure)
+      const recentActivityCount = users.filter((user) => {
+        if (!user.lastActivity) return false;
+        const lastActivity = new Date(user.lastActivity);
+        const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+        return lastActivity > oneHourAgo;
+      }).length;
+
+      return {
+        onlinePercentage,
+        idlePercentage,
+        offlinePercentage: 100 - onlinePercentage - idlePercentage,
+        mostActiveUser: mostActiveUser
+          ? {
+              userId: mostActiveUser.userId,
+              matricule: mostActiveUser.matricule,
+              lastActivity: mostActiveUser.lastActivity,
+            }
+          : null,
+        averageConnectedTime,
+        peakOnlineCount: Math.max(peakOnlineCount, onlineUsers.length),
+        currentPeak: onlineUsers.length,
+        roleDistribution,
+        recentActivityCount,
+        // Ratios utiles
+        activeRatio: totalUsers > 0 ? onlineUsers.length / totalUsers : 0,
+        engagementScore: this.calculateEngagementScore(users),
+        roomHealth: this.calculateRoomHealth(
+          onlineUsers.length,
+          totalUsers,
+          recentActivityCount
+        ),
+      };
+    } catch (error) {
+      console.error("❌ Erreur calculateAdvancedStats:", error);
+      return this.getEmptyStats();
+    }
+  }
+
+  /**
+   * ✅ NOUVEAU : Calculer le temps de connexion moyen
+   */
+  calculateConnectedDuration(connectedAt) {
+    if (!connectedAt) return null;
+
+    try {
+      const now = new Date();
+      const connected = new Date(connectedAt);
+      const diffMs = now - connected;
+      const diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+      if (diffMinutes < 1) return "< 1m";
+      if (diffMinutes < 60) return `${diffMinutes}m`;
+      if (diffMinutes < 1440)
+        return `${Math.floor(diffMinutes / 60)}h ${diffMinutes % 60}m`;
+      return `${Math.floor(diffMinutes / 1440)}j ${Math.floor(
+        (diffMinutes % 1440) / 60
+      )}h`;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
+   * ✅ NOUVEAU : Calculer le temps moyen de connexion
+   */
+  calculateAverageConnectedTime(onlineUsers) {
+    try {
+      if (onlineUsers.length === 0) return "0m";
+
+      const now = new Date();
+      let totalMinutes = 0;
+      let validUsers = 0;
+
+      for (const user of onlineUsers) {
+        if (user.connectedAt) {
+          const connectedTime = new Date(user.connectedAt);
+          const diffMinutes = Math.floor((now - connectedTime) / (1000 * 60));
+          totalMinutes += diffMinutes;
+          validUsers++;
+        }
+      }
+
+      if (validUsers === 0) return "0m";
+
+      const avgMinutes = Math.floor(totalMinutes / validUsers);
+
+      if (avgMinutes < 60) return `${avgMinutes}m`;
+      if (avgMinutes < 1440)
+        return `${Math.floor(avgMinutes / 60)}h ${avgMinutes % 60}m`;
+      return `${Math.floor(avgMinutes / 1440)}j ${Math.floor(
+        (avgMinutes % 1440) / 60
+      )}h`;
+    } catch (error) {
+      return "N/A";
+    }
+  }
+
+  /**
+   * ✅ NOUVEAU : Calculer le score d'engagement (0-100)
+   */
+  calculateEngagementScore(users) {
+    try {
+      if (users.length === 0) return 0;
+
+      let score = 0;
+      const now = new Date();
+
+      users.forEach((user) => {
+        // Points pour le statut
+        if (user.status === "online") score += 10;
+        else if (user.status === "idle") score += 5;
+
+        // Points pour l'activité récente
+        if (user.lastActivity) {
+          const diffHours =
+            (now - new Date(user.lastActivity)) / (1000 * 60 * 60);
+          if (diffHours < 1) score += 8;
+          else if (diffHours < 6) score += 5;
+          else if (diffHours < 24) score += 2;
+        }
+
+        // Points pour le rôle (admin/moderator plus engagés)
+        if (user.role === "admin") score += 3;
+        else if (user.role === "moderator") score += 2;
+      });
+
+      // Normaliser sur 100
+      const maxPossibleScore = users.length * 21; // 10+8+3
+      return Math.min(100, Math.round((score / maxPossibleScore) * 100));
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  /**
+   * ✅ NOUVEAU : Calculer la santé de la room (healthy, moderate, low)
+   */
+  calculateRoomHealth(onlineUsers, totalUsers, recentActivity) {
+    try {
+      if (totalUsers === 0) return "empty";
+
+      const onlineRatio = onlineUsers / totalUsers;
+      const activityRatio = recentActivity / totalUsers;
+
+      if (onlineRatio >= 0.5 && activityRatio >= 0.3) return "healthy";
+      if (onlineRatio >= 0.2 && activityRatio >= 0.1) return "moderate";
+      return "low";
+    } catch (error) {
+      return "unknown";
+    }
+  }
+
+  /**
+   * ✅ NOUVEAU : Gestion des rôles
+   */
+  async getUserRoleInRoom(roomName, userId) {
+    try {
+      const role = await this.redis.hGet(
+        `${this.roomRolesPrefix}:${roomName}`,
+        String(userId)
+      );
+      return role || "member";
+    } catch (error) {
+      return "member";
+    }
+  }
+
+  async setUserRoleInRoom(roomName, userId, role) {
+    try {
+      await this.redis.hSet(
+        `${this.roomRolesPrefix}:${roomName}`,
+        String(userId),
+        String(role)
+      );
+
+      // Mettre TTL sur les rôles
+      await this.redis.expire(`${this.roomRolesPrefix}:${roomName}`, 86400 * 7); // 7 jours
+
+      console.log(`👑 Rôle ${role} assigné à ${userId} dans ${roomName}`);
+      return true;
+    } catch (error) {
+      console.error("❌ Erreur setUserRoleInRoom:", error);
+      return false;
+    }
+  }
+
+  /**
+   * ✅ NOUVEAU : Gestion des pics de connexion
+   */
+  async getPeakOnlineCount(roomName) {
+    try {
+      const peakKey = `${this.roomPeakPrefix}:${roomName}`;
+      const peakData = await this.redis.hGetAll(peakKey);
+
+      if (!peakData || !peakData.count) return 0;
+
+      return {
+        count: parseInt(peakData.count) || 0,
+        timestamp: peakData.timestamp,
+        duration: peakData.duration || "0m",
+      };
+    } catch (error) {
+      return 0;
+    }
+  }
+
+  async updatePeakOnlineCount(roomName, currentCount) {
+    try {
+      const peakKey = `${this.roomPeakPrefix}:${roomName}`;
+      const currentPeak = await this.getPeakOnlineCount(roomName);
+      const currentPeakCount =
+        typeof currentPeak === "object" ? currentPeak.count : currentPeak;
+
+      if (currentCount > currentPeakCount) {
+        await this.redis.hSet(peakKey, {
+          count: currentCount.toString(),
+          timestamp: new Date().toISOString(),
+          roomName: String(roomName),
+        });
+
+        await this.redis.expire(peakKey, 86400 * 30); // 30 jours
+
+        console.log(
+          `🏔️ Nouveau pic pour ${roomName}: ${currentCount} utilisateurs`
+        );
+        return currentCount;
+      }
+
+      return currentPeakCount;
+    } catch (error) {
+      console.error("❌ Erreur updatePeakOnlineCount:", error);
+      return 0;
+    }
+  }
+
+  /**
+   * ✅ NOUVEAU : Obtenir toutes les conversations avec présence pour un utilisateur
+   */
+  async getConversationsWithPresence(userId) {
+    try {
+      const userIdString = String(userId);
+
+      // 1. Récupérer toutes les rooms de l'utilisateur
+      const userRooms = await this.getUserRooms(userIdString);
+
+      const conversations = [];
+
+      for (const roomName of userRooms) {
+        if (!roomName.startsWith("conv_")) continue;
+
+        const conversationId = roomName.replace("conv_", "");
+
+        try {
+          // 2. Récupérer les statistiques de présence
+          const presenceStats = await this.getRoomPresenceStats(roomName);
+
+          // 3. Récupérer les métadonnées de la conversation
+          const metadata = await this.redis.hGetAll(
+            `room_metadata:${roomName}`
+          );
+
+          // 4. Vérifier le statut de l'utilisateur dans cette conversation
+          const userStatus = presenceStats.users.find(
+            (u) => u.userId === userIdString
+          );
+
+          conversations.push({
+            conversationId,
+            title: metadata.title || "Conversation",
+            type: metadata.type || "CONVERSATION",
+            isPrivate: metadata.isPrivate === "true",
+
+            // Statistiques de présence
+            onlineUsers: presenceStats.onlineUsers,
+            idleUsers: presenceStats.idleUsers,
+            totalUsers: presenceStats.totalUsers,
+            isActive: presenceStats.roomState === "active",
+            roomHealth: presenceStats.stats.roomHealth,
+
+            // Statut de l'utilisateur courant
+            userStatus: userStatus
+              ? {
+                  isOnline: userStatus.isOnline,
+                  isIdle: userStatus.isIdle,
+                  lastActivity: userStatus.lastActivity,
+                  role: userStatus.role,
+                  connectedDuration: userStatus.connectedDuration,
+                }
+              : {
+                  isOnline: false,
+                  isIdle: false,
+                  role: "member",
+                },
+
+            // Statistiques détaillées
+            presenceStats: {
+              onlinePercentage: presenceStats.stats.onlinePercentage,
+              averageConnectedTime: presenceStats.stats.averageConnectedTime,
+              peakOnlineCount: presenceStats.stats.peakOnlineCount,
+              engagementScore: presenceStats.stats.engagementScore,
+              recentActivityCount: presenceStats.stats.recentActivityCount,
+            },
+
+            // Métadonnées complètes
+            metadata,
+            lastActivity: presenceStats.roomMetadata.lastActivity,
+            createdAt: metadata.createdAt,
+
+            timestamp: new Date().toISOString(),
+          });
+        } catch (convError) {
+          console.warn(
+            `⚠️ Erreur traitement conversation ${conversationId}:`,
+            convError.message
+          );
+
+          // Conversation avec données minimales
+          conversations.push({
+            conversationId,
+            title: "Conversation",
+            onlineUsers: 0,
+            totalUsers: 0,
+            isActive: false,
+            userStatus: { isOnline: false, isIdle: false },
+            error: convError.message,
+          });
+        }
+      }
+
+      // Trier par activité (conversations actives d'abord)
+      return conversations.sort((a, b) => {
+        if (a.isActive !== b.isActive) return b.isActive - a.isActive;
+        if (a.onlineUsers !== b.onlineUsers)
+          return b.onlineUsers - a.onlineUsers;
+        return new Date(b.lastActivity || 0) - new Date(a.lastActivity || 0);
+      });
+    } catch (error) {
+      console.error("❌ Erreur getConversationsWithPresence:", error);
+      return [];
+    }
+  }
+
+  /**
+   * ✅ NOUVEAU : Broadcast des mises à jour de présence
+   */
+  async broadcastPresenceUpdate(roomName) {
+    try {
+      if (!this.io) {
+        console.warn("⚠️ Socket.IO non disponible pour broadcast");
+        return false;
+      }
+
+      const presenceStats = await this.getRoomPresenceStats(roomName);
+      const conversationId = roomName.replace("conv_", "");
+
+      // Émettre à tous les membres de la room
+      this.io.to(roomName).emit("presence:update", {
+        conversationId,
+        ...presenceStats,
+        event: "presence_updated",
+        timestamp: new Date().toISOString(),
+      });
+
+      // Émettre aussi aux surveillants de présence
+      this.io.to(`presence_${roomName}`).emit("presence:realtime", {
+        conversationId,
+        ...presenceStats,
+        event: "presence_realtime_update",
+        timestamp: new Date().toISOString(),
+      });
+
+      console.log(
+        `📡 Présence diffusée: ${roomName} (${presenceStats.onlineUsers}/${presenceStats.totalUsers})`
+      );
+      return true;
+    } catch (error) {
+      console.error("❌ Erreur broadcastPresenceUpdate:", error);
+      return false;
+    }
+  }
+
+  /**
+   * ✅ NOUVEAU : Dashboard global de présence
+   */
+  async getGlobalPresenceDashboard() {
+    try {
+      const rooms = await this.getRooms();
+
+      let totalConversations = 0;
+      let totalUsers = 0;
+      let totalOnline = 0;
+      let totalIdle = 0;
+      const conversations = [];
+      const healthDistribution = { healthy: 0, moderate: 0, low: 0, empty: 0 };
+
+      for (const room of rooms) {
+        if (room.name.startsWith("conv_")) {
+          const presence = await this.getRoomPresenceStats(room.name);
+
+          totalConversations++;
+          totalUsers += presence.totalUsers;
+          totalOnline += presence.onlineUsers;
+          totalIdle += presence.idleUsers;
+
+          healthDistribution[presence.stats.roomHealth]++;
+
+          conversations.push({
+            conversationId: room.name.replace("conv_", ""),
+            ...presence,
+          });
+        }
+      }
+
+      return {
+        globalStats: {
+          totalConversations,
+          totalUsers,
+          totalOnline,
+          totalIdle,
+          totalOffline: totalUsers - totalOnline - totalIdle,
+          onlinePercentage:
+            totalUsers > 0 ? Math.round((totalOnline / totalUsers) * 100) : 0,
+          averageUsersPerConversation:
+            totalConversations > 0
+              ? Math.round(totalUsers / totalConversations)
+              : 0,
+          averageOnlinePerConversation:
+            totalConversations > 0
+              ? Math.round(totalOnline / totalConversations)
+              : 0,
+          healthDistribution,
+        },
+        conversations: conversations.sort(
+          (a, b) => b.onlineUsers - a.onlineUsers
+        ),
+        generatedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      console.error("❌ Erreur getGlobalPresenceDashboard:", error);
+      return {
+        globalStats: {
+          totalConversations: 0,
+          totalUsers: 0,
+          totalOnline: 0,
+          error: error.message,
+        },
+        conversations: [],
+      };
+    }
+  }
+
+  /**
+   * ✅ UTILITAIRES
+   */
+  getEmptyStats() {
+    return {
+      onlinePercentage: 0,
+      idlePercentage: 0,
+      offlinePercentage: 100,
+      mostActiveUser: null,
+      averageConnectedTime: "0m",
+      peakOnlineCount: 0,
+      currentPeak: 0,
+      roleDistribution: { member: 0 },
+      recentActivityCount: 0,
+      activeRatio: 0,
+      engagementScore: 0,
+      roomHealth: "empty",
+    };
+  }
+
+  getFallbackStats(roomName, userIds) {
+    return {
+      roomName: String(roomName),
+      totalUsers: userIds.length,
+      onlineUsers: 0,
+      idleUsers: 0,
+      offlineUsers: userIds.length,
+      users: userIds.map((userId) => ({
+        userId,
+        matricule: "Unknown",
+        status: "offline",
+        isOnline: false,
+        isIdle: false,
+        isOffline: true,
+        role: "member",
+        fallback: true,
+      })),
+      stats: this.getEmptyStats(),
+      warning: "OnlineUserManager non disponible",
+      timestamp: new Date().toISOString(),
+    };
   }
 }
 

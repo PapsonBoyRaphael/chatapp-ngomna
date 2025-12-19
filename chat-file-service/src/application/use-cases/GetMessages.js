@@ -5,23 +5,31 @@ class GetMessages {
 
   async execute(conversationId, options = {}) {
     try {
-      const { page = 1, limit = 50, userId, useCache = true } = options;
+      const {
+        cursor = null,
+        limit = 50,
+        direction = "older",
+        userId,
+        useCache = true,
+      } = options;
 
       if (!conversationId) {
         throw new Error("ID de conversation requis");
       }
 
       console.log(
-        `🔍 GetMessages: conversation=${conversationId}, page=${page}, limit=${limit}`
+        `🔍 GetMessages: conversation=${conversationId}, cursor=${cursor}, direction=${direction}, useCache=${useCache}`
       );
 
+      // ✅ APPEL REPOSITORY avec cursor
       const result = await this.messageRepository.findByConversation(
         conversationId,
         {
-          page: parseInt(page),
+          cursor,
           limit: parseInt(limit),
+          direction,
           userId,
-          useCache: useCache, // Option pour forcer lecture MongoDB si needed
+          useCache,
         }
       );
 
@@ -31,7 +39,13 @@ class GetMessages {
         })`
       );
 
-      return result;
+      return {
+        messages: result.messages || [],
+        nextCursor: result.nextCursor || null,
+        hasMore: result.hasMore || false,
+        fromCache: result.fromCache || false,
+        totalCount: result.totalCount || 0,
+      };
     } catch (error) {
       console.error("❌ Erreur GetMessages use case:", error);
       throw error;

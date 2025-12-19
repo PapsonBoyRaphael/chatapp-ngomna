@@ -6,15 +6,12 @@ class MessageController {
     getMessagesUseCase,
     updateMessageStatusUseCase,
     redisClient = null,
-    kafkaProducer = null,
     getMessageByIdUseCase = null,
-    searchOccurrencesUseCase = null // Ajout du use-case
+    searchOccurrencesUseCase = null
   ) {
     this.sendMessageUseCase = sendMessageUseCase;
     this.getMessagesUseCase = getMessagesUseCase;
     this.updateMessageStatusUseCase = updateMessageStatusUseCase;
-    this.cacheService = redisClient ? new CacheService(redisClient) : null;
-    this.kafkaProducer = kafkaProducer;
     this.getMessageByIdUseCase = getMessageByIdUseCase;
     this.searchOccurrencesUseCase = searchOccurrencesUseCase;
   }
@@ -37,7 +34,7 @@ class MessageController {
         return res.status(400).json({
           success: false,
           message: "senderId, receiverId et content sont requis",
-          code: "MISSING_REQUIRED_FIELDS",
+          code: "MISSING_PARAMETERS",
         });
       }
 
@@ -45,8 +42,8 @@ class MessageController {
       if (content.trim().length > 10000) {
         return res.status(400).json({
           success: false,
-          message: "Le message ne peut pas dépasser 10000 caractères",
-          code: "MESSAGE_TOO_LONG",
+          message: "Le contenu du message est trop long (max 10000 caractères)",
+          code: "CONTENT_TOO_LONG",
         });
       }
 
@@ -71,64 +68,20 @@ class MessageController {
 
       const processingTime = Date.now() - startTime;
 
-      // Invalidation du cache lié
-      if (this.cacheService) {
-        try {
-          const cacheKeysToInvalidate = [
-            `messages:${message.conversationId}:*`,
-            `conversation:${message.conversationId}:*`,
-            `conversations:${senderId}`,
-            `conversations:${receiverId}`,
-          ];
-          for (const pattern of cacheKeysToInvalidate) {
-            await this.cacheService.del(pattern);
-          }
-          console.log(`🗑️ Caches invalidés pour le message: ${message._id}`);
-        } catch (redisError) {
-          console.warn(
-            "⚠️ Erreur invalidation cache message:",
-            redisError.message
-          );
-        }
-      }
+      // ❌ SUPPRIMER TOUTE INVALIDATION CACHE DU CONTROLLER
+      // Le cache est maintenant géré uniquement par les repositories
 
       res.status(201).json({
         success: true,
-        message: "Message envoyé avec succès",
-        data: {
-          ...message,
-          isOwn: true,
-          deliveryStatus: "sent",
-        },
+        data: message,
         metadata: {
           processingTime: `${processingTime}ms`,
-          kafkaPublished: !!this.kafkaProducer,
-          cacheInvalidated: !!this.cacheService,
           timestamp: new Date().toISOString(),
         },
       });
     } catch (error) {
       const processingTime = Date.now() - startTime;
       console.error("❌ Erreur envoi message:", error);
-
-      // 🚀 PUBLIER ERREUR DANS KAFKA
-      if (this.kafkaProducer) {
-        try {
-          await this.kafkaProducer.publishMessage({
-            eventType: "MESSAGE_SEND_FAILED",
-            senderId: req.body.senderId,
-            receiverId: req.body.receiverId,
-            content: req.body.content?.substring(0, 100),
-            error: error.message,
-            processingTime,
-          });
-        } catch (kafkaError) {
-          console.warn(
-            "⚠️ Erreur publication échec message:",
-            kafkaError.message
-          );
-        }
-      }
 
       res.status(500).json({
         success: false,
@@ -151,12 +104,12 @@ class MessageController {
 
     try {
       const { conversationId } = req.query;
-      const { page = 1, limit = 50 } = req.query;
+      const { cursor = null, limit = 50, direction = "older" } = req.query;
       const userId = req.user?.id || req.headers["user-id"];
 
-      console.log("req:", req.originalUrl);
-      console.log("userId:", userId);
-      console.log("conversationId:", conversationId);
+      console.log(
+        `🔍 getMessages: conversation=${conversationId}, cursor=${cursor}, direction=${direction}`
+      );
 
       if (!conversationId || !userId) {
         return res.status(400).json({
@@ -166,27 +119,24 @@ class MessageController {
         });
       }
 
-      // Force l'invalidation du cache pour cette conversation
-      if (this.cacheService) {
-        try {
-          await this.cacheService.del(`messages:${conversationId}:*`);
-          await this.cacheService.del(`conversation:${conversationId}:*`);
-        } catch (err) {
-          console.warn("⚠️ Erreur invalidation cache:", err.message);
-        }
-      }
-
-      // Force useCache à false pour relire depuis MongoDB
+      // ✅ DIRECTEMENT APPELER LE USE CASE (il gère le cache via les repositories)
       const result = await this.getMessagesUseCase.execute(conversationId, {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        cursor,
+        limit: Math.min(parseInt(limit), 100),
+        direction,
         userId,
-        useCache: false, // Forcer la lecture depuis MongoDB
+        useCache: !cursor, // Cache seulement première page
       });
 
-      console.log("Messages récupérés:", result);
-
       const processingTime = Date.now() - startTime;
+
+      // ✅ HEADERS BASÉS SUR LA RÉPONSE DU REPOSITORY
+      res.set({
+        "X-Cache": result.fromCache ? "HIT" : "MISS",
+        "Cache-Control": cursor ? "no-cache" : "public, max-age=60",
+        "X-Load-Source": result.fromCache ? "cache" : "database",
+        "X-Cursor": cursor || "none",
+      });
 
       res.json({
         success: true,
@@ -194,7 +144,8 @@ class MessageController {
         metadata: {
           processingTime: `${processingTime}ms`,
           fromCache: result.fromCache || false,
-          redisEnabled: !!this.cacheService,
+          cursor,
+          direction,
           timestamp: new Date().toISOString(),
         },
       });
@@ -215,6 +166,27 @@ class MessageController {
           timestamp: new Date().toISOString(),
         },
       });
+    }
+  }
+
+  /**
+   * ✅ VERSION INTERNE POUR WEBSOCKET (sans cache controller)
+   */
+  async getMessagesInternal(conversationId, userId, options = {}) {
+    const { cursor = null, limit = 50, direction = "older" } = options;
+
+    try {
+      // ✅ APPEL DIRECT AU USE CASE (qui gère le cache)
+      return await this.getMessagesUseCase.execute(conversationId, {
+        cursor,
+        limit: Math.min(parseInt(limit), 100),
+        direction,
+        userId,
+        useCache: !cursor,
+      });
+    } catch (error) {
+      console.error("❌ Erreur getMessagesInternal:", error);
+      throw error;
     }
   }
 

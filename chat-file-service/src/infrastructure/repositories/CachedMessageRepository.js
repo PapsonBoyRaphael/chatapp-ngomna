@@ -1,8 +1,7 @@
 /**
  * CachedMessageRepository - Repository pattern avec cache Redis
- * ✅ FUSIONNÉ : Unread counts intégrés directement
- * ✅ OPTIMISÉ : Cache STRATÉGIQUE uniquement
- * Gère la cohérence entre MongoDB et Redis
+ * ✅ SEUL RESPONSABLE du cache des messages
+ * ✅ OPTIMISÉ : Cache stratégique intelligent
  */
 class CachedMessageRepository {
   constructor(messageRepository, cacheService) {
@@ -10,18 +9,183 @@ class CachedMessageRepository {
     this.cache = cacheService;
     this.redis = cacheService?.redis || null;
 
-    this.defaultTTL = 3600;
-    this.shortTTL = 300;
-    this.unreadTTL = 86400;
+    // ✅ Configuration cache optimisée
+    this.defaultTTL = 3600; // 1 heure
+    this.shortTTL = 300; // 5 minutes
+    this.quickTTL = 60; // 1 minute pour quick load
+    this.unreadTTL = 86400; // 24 heures
 
     this.userUnreadPrefix = "unread:user";
     this.conversationUnreadPrefix = "unread:conv";
+    this.cacheKeyPrefix = "chat:msgs";
   }
 
-  // ===== SAUVEGARDER UN MESSAGE =====
-  /**
-   * ✅ Sauvegarde + Incrément unread inline + Invalidation
-   */
+  // ===== LIRE LES MESSAGES D'UNE CONVERSATION (CACHE INTELLIGENT) =====
+  async findByConversation(conversationId, options = {}) {
+    const {
+      cursor = null,
+      page = 1,
+      limit = 50,
+      direction = "older",
+      userId,
+      useCache = true,
+    } = options;
+
+    try {
+      // ✅ STRATÉGIE CACHE DIFFÉRENCIÉE
+      let cacheKey = null;
+      let ttl = this.shortTTL;
+
+      if (useCache && this.cache) {
+        if (cursor) {
+          // Pagination avec cursor - cache court
+          cacheKey = `${this.cacheKeyPrefix}:${conversationId}:cursor:${cursor}:${limit}`;
+          ttl = this.shortTTL;
+        } else if (page === 1) {
+          // Première page - cache long
+          cacheKey = `${this.cacheKeyPrefix}:${conversationId}:first:${limit}`;
+          ttl = this.defaultTTL;
+        } else {
+          // Autres pages - cache moyen
+          cacheKey = `${this.cacheKeyPrefix}:${conversationId}:p${page}:${limit}`;
+          ttl = this.shortTTL;
+        }
+
+        // ✅ VÉRIFIER LE CACHE
+        const cached = await this.cache.get(cacheKey);
+        if (cached) {
+          console.log(
+            `📦 Messages depuis cache: ${conversationId} (${cacheKey})`
+          );
+
+          // ✅ RENOUVELER TTL SUR HIT
+          await this.cache.renewTTL(cacheKey, ttl);
+
+          return {
+            messages: cached.messages || cached,
+            fromCache: true,
+            nextCursor: cached.nextCursor || null,
+            hasMore: cached.hasMore || false,
+          };
+        }
+      }
+
+      // ✅ CACHE MISS → MongoDB
+      console.log(
+        `🔍 Messages depuis MongoDB: ${conversationId} ${
+          cursor ? `(cursor: ${cursor})` : `(page: ${page})`
+        }`
+      );
+
+      let result;
+      if (cursor) {
+        // ✅ PAGINATION CURSOR-BASED
+        result = await this.primaryStore.findByConversationWithCursor(
+          conversationId,
+          { cursor, limit, direction, userId }
+        );
+      } else {
+        // ✅ PAGINATION PAGE-BASED (fallback)
+        const messages = await this.primaryStore.findByConversation(
+          conversationId,
+          { page, limit, userId }
+        );
+
+        result = {
+          messages,
+          nextCursor: null,
+          hasMore: messages.length === limit,
+        };
+      }
+
+      // ✅ METTRE EN CACHE SELON LA STRATÉGIE
+      if (useCache && this.cache && cacheKey && result.messages?.length > 0) {
+        await this.cache.set(cacheKey, result, ttl);
+        console.log(
+          `💾 Messages mis en cache: ${result.messages.length} (TTL: ${ttl}s)`
+        );
+      }
+
+      return {
+        ...result,
+        fromCache: false,
+      };
+    } catch (error) {
+      console.error("❌ Erreur findByConversation:", error.message);
+
+      // ✅ FALLBACK SANS CACHE
+      const messages = await this.primaryStore.findByConversation(
+        conversationId,
+        { page: 1, limit: 20 }
+      );
+
+      return {
+        messages,
+        fromCache: false,
+        hasMore: false,
+      };
+    }
+  }
+
+  // ===== RÉCUPÉRER LES DERNIERS MESSAGES (POUR QUICK LOAD) =====
+  async getLastMessagesWithPreload(conversationId, limit = 20) {
+    try {
+      const quickCacheKey = `${this.cacheKeyPrefix}:quick:${conversationId}:${limit}`;
+
+      // ✅ CACHE QUICK (très court TTL)
+      if (this.cache) {
+        const cached = await this.cache.get(quickCacheKey);
+        if (cached) {
+          console.log(`⚡ Quick messages depuis cache: ${conversationId}`);
+          return {
+            messages: cached.messages || cached,
+            fromCache: true,
+            isQuick: true,
+          };
+        }
+      }
+
+      // ✅ CACHE MISS → MongoDB
+      console.log(`⚡ Quick messages depuis MongoDB: ${conversationId}`);
+
+      const result = await this.primaryStore.findByConversation(
+        conversationId,
+        { page: 1, limit, useCache: false }
+      );
+
+      const messages = result.messages || result;
+
+      // ✅ METTRE EN CACHE QUICK (TTL court)
+      if (this.cache && messages.length > 0) {
+        await this.cache.set(quickCacheKey, { messages }, this.quickTTL);
+        console.log(
+          `⚡ Quick messages mis en cache: ${messages.length} (${this.quickTTL}s)`
+        );
+      }
+
+      return {
+        messages,
+        fromCache: false,
+        isQuick: true,
+      };
+    } catch (error) {
+      console.error("❌ Erreur getLastMessagesWithPreload:", error.message);
+
+      // Fallback
+      const result = await this.primaryStore.findByConversation(
+        conversationId,
+        { page: 1, limit: 20 }
+      );
+
+      return {
+        messages: result.messages || result,
+        fromCache: false,
+        isQuick: true,
+      };
+    }
+  }
+
+  // ===== SAUVEGARDER UN MESSAGE (avec invalidation intelligente) =====
   async save(messageOrData) {
     try {
       const startTime = Date.now();
@@ -33,7 +197,7 @@ class CachedMessageRepository {
         throw new Error("Message not saved");
       }
 
-      // 2. ✅ INCRÉMENTER LES COMPTEURS UNREAD (INTÉGRÉ)
+      // 2. ✅ INCRÉMENTER LES COMPTEURS UNREAD
       if (savedMessage.receiverId) {
         await this.incrementUnreadCount(
           savedMessage.conversationId,
@@ -41,12 +205,15 @@ class CachedMessageRepository {
         );
       }
 
-      // 3. ✅ INVALIDER LES CACHES STRATÉGIQUES
-      await this.invalidateConversationCaches(savedMessage.conversationId);
+      // 3. ✅ INVALIDATION CACHE INTELLIGENTE
+      await this.invalidateConversationCaches(savedMessage.conversationId, {
+        isNewMessage: true,
+        messageType: savedMessage.type,
+      });
 
       const processingTime = Date.now() - startTime;
       console.log(
-        `✅ Message sauvegardé: ${savedMessage._id} (${processingTime}ms)`
+        `✅ Message sauvegardé avec cache: ${savedMessage._id} (${processingTime}ms)`
       );
 
       return savedMessage;
@@ -56,97 +223,63 @@ class CachedMessageRepository {
     }
   }
 
-  // ===== RÉCUPÉRER LES 50 DERNIERS MESSAGES =====
-  /**
-   * ✅ UTILISER CacheService directement (pas de duplication)
-   */
-  async getLastMessagesWithPreload(conversationId, limit = 50) {
+  // ===== INVALIDATION CACHE INTELLIGENTE =====
+  async invalidateConversationCaches(conversationId, options = {}) {
+    if (!this.cache) return;
+
+    const { isNewMessage = false, messageType = "TEXT" } = options;
+
     try {
-      // 1. ✅ VÉRIFIER LE CACHE via CacheService
-      let messages = await this.cache.getCachedLastMessages(conversationId);
+      // ✅ PATTERNS D'INVALIDATION CIBLÉS
+      const patterns = [
+        // Messages paginés
+        `${this.cacheKeyPrefix}:${conversationId}:*`,
+        // Quick load
+        `${this.cacheKeyPrefix}:quick:${conversationId}:*`,
+        // Derniers messages classiques
+        `chat:last_messages:${conversationId}`,
+        // Métadonnées conversation
+        `chat:conversation:${conversationId}*`,
+      ];
 
-      if (!messages || messages.length === 0) {
-        // 2. ✅ CACHE MISS → Charger depuis MongoDB
-        console.log(`🔍 Last messages miss → MongoDB: ${conversationId}`);
-
-        const result = await this.primaryStore.findByConversation(
-          conversationId,
-          { page: 1, limit, useCache: false }
-        );
-
-        messages = result.messages || result;
-
-        if (messages.length > 0) {
-          // 3. ✅ METTRE EN CACHE via CacheService
-          await this.cache.cacheLastMessages(
-            conversationId,
-            messages,
-            this.defaultTTL
-          );
-          console.log(
-            `💾 Last messages cachés: ${messages.length} (${conversationId})`
-          );
-
-          // 4. ✅ PRÉ-CHARGEMENT MÉTADONNÉES EN FOND
-          this.preloadUserMetadata(messages);
+      let invalidated = 0;
+      for (const pattern of patterns) {
+        try {
+          const deleted = await this.cache.delete(pattern);
+          if (deleted > 0) {
+            invalidated += deleted;
+            console.log(`🗑️ Cache invalidé: ${pattern} (${deleted} clés)`);
+          }
+        } catch (error) {
+          console.warn(`⚠️ Erreur invalidation ${pattern}:`, error.message);
         }
-      } else {
-        // 5. ✅ CACHE HIT → Renouveler TTL
-        console.log(`📦 Last messages hit: ${conversationId}`);
-        await this.cache.renewTTL(
-          `last_messages:${conversationId}`,
-          this.defaultTTL
-        );
-        this.backgroundFreshnessCheck(conversationId, messages);
       }
 
-      return messages;
+      if (invalidated > 0) {
+        console.log(
+          `🗑️ Total cache invalidé: ${invalidated} clé(s) pour ${conversationId}`
+        );
+      }
+
+      // ✅ INVALIDATION PROACTIVE (pré-charger)
+      if (isNewMessage && this.cache) {
+        // Pré-charger les derniers messages en arrière-plan
+        setImmediate(async () => {
+          try {
+            console.log(`🔄 Pré-chargement cache pour: ${conversationId}`);
+            await this.getLastMessagesWithPreload(conversationId, 20);
+          } catch (preloadError) {
+            console.warn("⚠️ Erreur pré-chargement:", preloadError.message);
+          }
+        });
+      }
     } catch (error) {
-      console.error("❌ Erreur getLastMessages:", error.message);
-      // Fallback
-      const result = await this.primaryStore.findByConversation(
-        conversationId,
-        { page: 1, limit: 50, useCache: false }
-      );
-      return result.messages || result;
+      console.error("❌ Erreur invalidation cache:", error.message);
     }
   }
 
-  // ===== RÉCUPÉRER LE DERNIER MESSAGE =====
-  /**
-   * ✅ DIRECT MongoDB (pas de cache - trop volatile)
-   */
-  async getLastMessage(conversationId) {
-    try {
-      const message = await this.primaryStore.getLastMessage(conversationId);
-      console.log(`📖 Last message (direct): ${conversationId}`);
-      return message;
-    } catch (error) {
-      console.error("❌ Erreur getLastMessage:", error.message);
-      throw error;
-    }
-  }
+  // ===== MÉTHODES UNREAD (inchangées) =====
 
-  // ===== COMPTER LES MESSAGES =====
-  /**
-   * ✅ DIRECT MongoDB (pas de cache - peu demandé)
-   */
-  async getMessageCount(conversationId) {
-    try {
-      const count = await this.primaryStore.getMessageCount(conversationId);
-      console.log(`📊 Message count (direct): ${conversationId}`);
-      return count;
-    } catch (error) {
-      console.error("❌ Erreur getMessageCount:", error.message);
-      throw error;
-    }
-  }
-
-  // ===== UNREAD COUNTS (INTÉGRÉ) =====
-
-  /**
-   * ✅ Incrémenter le compteur non-lus
-   */
   async incrementUnreadCount(conversationId, userId) {
     if (!this.redis) return 0;
 
@@ -174,9 +307,6 @@ class CachedMessageRepository {
     }
   }
 
-  /**
-   * ✅ Réinitialiser le compteur non-lus
-   */
   async resetUnreadCount(conversationId, userId) {
     if (!this.redis) return true;
 
@@ -185,7 +315,6 @@ class CachedMessageRepository {
       const convKey = `${this.conversationUnreadPrefix}:${conversationId}:${userId}`;
 
       await Promise.all([this.redis.del(userKey), this.redis.del(convKey)]);
-
       console.log(`🔄 Unread réinitialisé: ${userId} dans ${conversationId}`);
       return true;
     } catch (error) {
@@ -194,9 +323,6 @@ class CachedMessageRepository {
     }
   }
 
-  /**
-   * ✅ Obtenir le compteur non-lus (Redis → MongoDB fallback)
-   */
   async getUnreadCount(conversationId, userId) {
     if (!this.redis) {
       return await this.primaryStore.countUnreadMessages(
@@ -207,23 +333,21 @@ class CachedMessageRepository {
 
     try {
       const userKey = `${this.userUnreadPrefix}:${userId}:${conversationId}`;
-
-      // 1. Redis d'abord
       let count = await this.redis.get(userKey);
+
       if (count !== null) {
         const result = parseInt(count) || 0;
         console.log(`📦 Unread depuis Redis: ${result}`);
         return result;
       }
 
-      // 2. CACHE MISS → MongoDB
+      // Fallback MongoDB
       console.log(`🔍 Unread miss → recalcul MongoDB`);
       const realCount = await this.primaryStore.countUnreadMessages(
         conversationId,
         userId
       );
 
-      // 3. Recréer le compteur Redis
       if (realCount > 0) {
         await this.redis.setEx(userKey, this.unreadTTL, realCount.toString());
       }
@@ -238,149 +362,18 @@ class CachedMessageRepository {
     }
   }
 
-  /**
-   * ✅ Obtenir le total unread pour un utilisateur (toutes conversations)
-   */
-  async getTotalUnreadCount(userId) {
-    if (!this.redis) {
-      return await this.primaryStore.countAllUnreadMessages(userId);
-    }
+  // ===== AUTRES MÉTHODES (déléguées au primaryStore) =====
 
-    try {
-      const pattern = `${this.userUnreadPrefix}:${userId}:*`;
-      let total = 0;
-      let cursor = 0;
-
-      do {
-        const result = await this.redis.scan(cursor, {
-          MATCH: pattern,
-          COUNT: 100,
-        });
-
-        cursor = result.cursor;
-
-        if (result.keys.length > 0) {
-          const counts = await Promise.all(
-            result.keys.map((key) => this.redis.get(key))
-          );
-
-          total += counts.reduce((sum, count) => {
-            return sum + (parseInt(count) || 0);
-          }, 0);
-        }
-      } while (cursor !== 0);
-
-      console.log(`📊 Total unread ${userId}: ${total}`);
-      return total;
-    } catch (error) {
-      console.warn("⚠️ Erreur getTotalUnreadCount:", error.message);
-      return await this.primaryStore.countAllUnreadMessages(userId);
-    }
+  async getLastMessage(conversationId) {
+    return await this.primaryStore.getLastMessage(conversationId);
   }
 
-  /**
-   * ✅ Nettoyer les compteurs expirés
-   */
-  async cleanupExpiredUnreadCounts() {
-    if (!this.redis) return 0;
-
-    try {
-      let deleted = 0;
-      const patterns = [
-        `${this.userUnreadPrefix}:*`,
-        `${this.conversationUnreadPrefix}:*`,
-      ];
-
-      for (const pattern of patterns) {
-        let cursor = 0;
-
-        do {
-          const result = await this.redis.scan(cursor, {
-            MATCH: pattern,
-            COUNT: 100,
-          });
-
-          cursor = result.cursor;
-
-          if (result.keys.length > 0) {
-            const expiredKeys = await Promise.all(
-              result.keys.map(async (key) => {
-                const ttl = await this.redis.ttl(key);
-                return ttl <= 0 ? key : null;
-              })
-            );
-
-            const toDelete = expiredKeys.filter(Boolean);
-            if (toDelete.length > 0) {
-              await this.redis.del(...toDelete);
-              deleted += toDelete.length;
-            }
-          }
-        } while (cursor !== 0);
-      }
-
-      if (deleted > 0) {
-        console.log(`🧹 Nettoyage unread: ${deleted} compteurs supprimés`);
-      }
-
-      return deleted;
-    } catch (error) {
-      console.warn("⚠️ Erreur cleanupExpiredUnreadCounts:", error.message);
-      return 0;
-    }
+  async getMessageCount(conversationId) {
+    return await this.primaryStore.getMessageCount(conversationId);
   }
 
-  // ===== LIRE LES MESSAGES D'UNE CONVERSATION =====
-  /**
-   * ✅ Cache paginez seulement
-   */
-  async findByConversation(conversationId, options = {}) {
-    const { page = 1, limit = 50, userId, useCache = true } = options;
-    const cacheKey = `messages:${conversationId}:p${page}:l${limit}`;
-
-    try {
-      // 1. ✅ VÉRIFIER LE CACHE PAGINÉ
-      if (useCache && this.cache) {
-        const cached = await this.cache.get(cacheKey);
-        if (cached) {
-          console.log(
-            `📦 Messages page ${page} depuis cache: ${conversationId}`
-          );
-          return { messages: cached, fromCache: true };
-        }
-      }
-
-      // 2. ✅ CACHE MISS → MongoDB
-      console.log(`🔍 Lecture page ${page} depuis MongoDB: ${conversationId}`);
-      const result = await this.primaryStore.findByConversation(
-        conversationId,
-        {
-          page: parseInt(page),
-          limit: parseInt(limit),
-          userId,
-        }
-      );
-
-      // 3. ✅ METTRE EN CACHE LA PAGE
-      if (useCache && this.cache && result.length > 0) {
-        await this.cache.set(cacheKey, result, this.shortTTL);
-        console.log(`💾 Page ${page} mise en cache: ${result.length} messages`);
-      }
-
-      return { messages: result, fromCache: false };
-    } catch (error) {
-      console.error("❌ Erreur findByConversation:", error.message);
-      throw error;
-    }
-  }
-
-  // ===== MARQUER COMME LU =====
-  /**
-   * ✅ Mise à jour + Reset unread + Invalidation
-   */
   async markMessagesAsRead(conversationId, userId, messageIds = null) {
     try {
-      // 1. ✅ Mise à jour MongoDB
       const result = await this.primaryStore.updateMessageStatus(
         conversationId,
         userId,
@@ -389,10 +382,7 @@ class CachedMessageRepository {
       );
 
       if (result.modifiedCount > 0) {
-        // 2. ✅ Réinitialiser unread
         await this.resetUnreadCount(conversationId, userId);
-
-        // 3. ✅ Invalider caches
         await this.invalidateConversationCaches(conversationId);
       }
 
@@ -403,34 +393,8 @@ class CachedMessageRepository {
     }
   }
 
-  // ===== MARQUER COMME LIVRÉ =====
-  async markMessagesAsDelivered(conversationId, userId, messageIds = null) {
-    try {
-      const result = await this.primaryStore.updateMessageStatus(
-        conversationId,
-        userId,
-        "DELIVERED",
-        messageIds
-      );
-
-      if (result.modifiedCount > 0) {
-        await this.invalidateConversationCaches(conversationId);
-      }
-
-      return result;
-    } catch (error) {
-      console.error("❌ Erreur markMessagesAsDelivered:", error.message);
-      throw error;
-    }
-  }
-
-  // ===== METTRE À JOUR LE STATUT =====
-  /**
-   * ✅ Mise à jour générique avec gestion unread conditionnelle
-   */
   async updateMessageStatus(conversationId, userId, status, messageIds = null) {
     try {
-      // 1. ✅ Mise à jour MongoDB
       const result = await this.primaryStore.updateMessageStatus(
         conversationId,
         userId,
@@ -438,10 +402,8 @@ class CachedMessageRepository {
         messageIds
       );
 
-      // 2. ✅ Invalider caches
       await this.invalidateConversationCaches(conversationId);
 
-      // 3. ✅ Gérer unread selon le statut
       if (status === "READ") {
         await this.resetUnreadCount(conversationId, userId);
       }
@@ -453,7 +415,6 @@ class CachedMessageRepository {
     }
   }
 
-  // ===== SUPPRIMER UN MESSAGE =====
   async deleteMessage(messageId) {
     try {
       const result = await this.primaryStore.deleteById(messageId);
@@ -469,63 +430,22 @@ class CachedMessageRepository {
     }
   }
 
-  // ===== METTRE À JOUR LE CONTENU =====
-  async updateMessageContent(messageId, newContent) {
-    try {
-      const result = await this.primaryStore.updateMessageContent(
-        messageId,
-        newContent
-      );
-
-      await this.invalidateConversationCaches(result.conversationId);
-
-      return result;
-    } catch (error) {
-      console.error("❌ Erreur updateMessageContent:", error.message);
-      throw error;
-    }
-  }
-
-  // ===== INVALIDATION STRATÉGIQUE =====
-  /**
-   * ✅ CORRIGER : Supprimer last_message et message_count patterns
-   */
-  async invalidateConversationCaches(conversationId) {
-    if (!this.cache) return;
-
-    const patterns = [
-      `messages:${conversationId}:*`, // Pages paginées
-      `last_messages:${conversationId}`, // Les 50 derniers
-      `conversation:${conversationId}*`, // Metas conversation
-    ];
-
-    let invalidated = 0;
-    for (const pattern of patterns) {
-      try {
-        const deleted = await this.cache.delete(pattern);
-        invalidated += deleted;
-        if (deleted > 0) {
-          console.log(`🗑️ Invalidé: ${pattern} (${deleted} keys)`);
-        }
-      } catch (error) {
-        console.warn(`⚠️ Erreur invalidation ${pattern}:`, error.message);
-      }
-    }
-
-    if (invalidated > 0) {
-      console.log(`🗑️ Total: ${invalidated} keys invalidées`);
-    }
-  }
-
-  // ===== NETTOYAGE GLOBAL =====
+  // ===== NETTOYAGE =====
   async clearCache() {
     if (!this.cache) return;
 
     try {
-      await this.cache.delete("messages:*");
-      await this.cache.delete("last_messages:*");
-      await this.cache.delete("conversation:*");
-      console.log("✅ Tous les caches messages nettoyés");
+      const patterns = [
+        `${this.cacheKeyPrefix}:*`,
+        "chat:last_messages:*",
+        "chat:conversation:*",
+      ];
+
+      for (const pattern of patterns) {
+        await this.cache.delete(pattern);
+      }
+
+      console.log("✅ Cache messages complètement nettoyé");
     } catch (error) {
       console.error("❌ Erreur clearCache:", error.message);
     }

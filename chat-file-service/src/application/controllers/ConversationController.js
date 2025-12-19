@@ -3,28 +3,31 @@ class ConversationController {
     getConversationsUseCase,
     getConversationUseCase,
     redisClient = null,
-    kafkaProducer = null,
     cacheService = null,
-    searchOccurrencesUseCase = null // Ajout du use-case
+    searchOccurrencesUseCase = null
   ) {
     this.getConversationsUseCase = getConversationsUseCase;
     this.getConversationUseCase = getConversationUseCase;
     this.redisClient = redisClient;
-    this.kafkaProducer = kafkaProducer;
-    this.cacheService = cacheService;
     this.searchOccurrencesUseCase = searchOccurrencesUseCase;
   }
 
-  // ✅ MÉTHODE PRINCIPALE POUR RÉCUPÉRER LES CONVERSATIONS
+  // ✅ MÉTHODE PRINCIPALE POUR RÉCUPÉRER LES CONVERSATIONS (SANS CACHE CONTROLLER)
   async getConversations(req, res) {
     const startTime = Date.now();
 
     try {
       const userId = req.user?.id || req.user?.userId || req.headers["user-id"];
-      const { page = 1, limit = 1, includeArchived = false } = req.query;
+      const {
+        page = 1,
+        limit = 20,
+        includeArchived = false,
+        cursor = null,
+        direction = "newer",
+      } = req.query;
 
       console.log(
-        `🔍 Récupération conversations page ${page} pour utilisateur ${userId}`
+        `🔍 getConversations: userId=${userId}, page=${page}, limit=${limit}, cursor=${cursor}`
       );
 
       if (!userId) {
@@ -48,16 +51,26 @@ class ConversationController {
         });
       }
 
-      // ✅ APPEL DU USE CASE AVEC LES PARAMÈTRES DE PAGINATION
+      // ✅ DIRECTEMENT APPELER LE USE CASE (il gère le cache via les repositories)
       const result = await this.getConversationsUseCase.execute(userId, {
         page: pageNum,
         limit: limitNum,
         includeArchived: includeArchived === "true",
+        cursor,
+        direction,
+        useCache: !cursor, // Cache seulement première page
       });
 
       const processingTime = Date.now() - startTime;
 
-      // ✅ STRUCTURE DE RÉPONSE
+      // ✅ HEADERS BASÉS SUR LA RÉPONSE DU REPOSITORY
+      res.set({
+        "X-Cache": result.fromCache ? "HIT" : "MISS",
+        "Cache-Control": cursor ? "no-cache" : "public, max-age=300",
+        "X-Load-Source": result.fromCache ? "cache" : "database",
+        "X-Cursor": cursor || "none",
+      });
+
       const response = {
         success: true,
         message: `Page ${pageNum} des conversations récupérée avec succès`,
@@ -67,11 +80,12 @@ class ConversationController {
           totalUnreadMessages: result.totalUnreadMessages || 0,
           unreadConversations: result.unreadConversations || 0,
           fromCache: result.fromCache || false,
-          cachedAt: result.cachedAt || new Date().toISOString(),
+          nextCursor: result.nextCursor || null,
+          hasMore: result.hasMore || false,
         },
         metadata: {
           userId: userId,
-          processingTime: processingTime,
+          processingTime: `${processingTime}ms`,
           timestamp: new Date().toISOString(),
           pagination: result.pagination || {
             currentPage: pageNum,
@@ -88,8 +102,9 @@ class ConversationController {
       console.log(
         `✅ Page ${pageNum}: ${
           result.conversations?.length || 0
-        } conversation(s) récupérée(s)`
+        } conversation(s) récupérée(s) (${result.fromCache ? "cache" : "db"})`
       );
+
       res.json(response);
     } catch (error) {
       const processingTime = Date.now() - startTime;
@@ -104,19 +119,24 @@ class ConversationController {
             : "Erreur interne",
         code: "GET_CONVERSATIONS_FAILED",
         metadata: {
-          processingTime: processingTime,
+          processingTime: `${processingTime}ms`,
           timestamp: new Date().toISOString(),
         },
       });
     }
   }
-  // ✅ RÉCUPÉRER UNE CONVERSATION SPÉCIFIQUE
+
+  // ✅ RÉCUPÉRER UNE CONVERSATION SPÉCIFIQUE (SANS CACHE CONTROLLER)
   async getConversation(req, res) {
     const startTime = Date.now();
 
     try {
       const { conversationId } = req.params;
-      const userId = req.user?.id || req.user?.userId;
+      const userId = req.user?.id || req.user?.userId || req.headers["user-id"];
+
+      console.log(
+        `🔍 getConversation: conversationId=${conversationId}, userId=${userId}`
+      );
 
       if (!conversationId) {
         return res.status(400).json({
@@ -126,17 +146,26 @@ class ConversationController {
         });
       }
 
+      // ✅ DIRECTEMENT APPELER LE USE CASE (il gère le cache via les repositories)
       const result = await this.getConversationUseCase.execute(conversationId, {
         userId: userId,
+        useCache: true, // Le repository décide du cache
       });
 
       const processingTime = Date.now() - startTime;
 
+      // ✅ HEADERS BASÉS SUR LA RÉPONSE DU REPOSITORY
+      res.set({
+        "X-Cache": result.fromCache ? "HIT" : "MISS",
+        "Cache-Control": "public, max-age=300",
+        "X-Load-Source": result.fromCache ? "cache" : "database",
+      });
+
       res.json({
         success: true,
-        data: result.conversation,
+        data: result.conversation || result,
         metadata: {
-          processingTime: processingTime,
+          processingTime: `${processingTime}ms`,
           fromCache: result.fromCache || false,
           timestamp: new Date().toISOString(),
         },
@@ -154,20 +183,20 @@ class ConversationController {
             : "Erreur interne",
         code: "GET_CONVERSATION_FAILED",
         metadata: {
-          processingTime: processingTime,
+          processingTime: `${processingTime}ms`,
           timestamp: new Date().toISOString(),
         },
       });
     }
   }
 
-  // ✅ CRÉER UNE NOUVELLE CONVERSATION
+  // ✅ CRÉER UNE NOUVELLE CONVERSATION (SANS CACHE CONTROLLER)
   async createConversation(req, res) {
     const startTime = Date.now();
 
     try {
       const { participantId, name } = req.body;
-      const userId = req.user?.id || req.user?.userId;
+      const userId = req.user?.id || req.user?.userId || req.headers["user-id"];
 
       if (!participantId) {
         return res.status(400).json({
@@ -177,7 +206,14 @@ class ConversationController {
         });
       }
 
-      // Pour l'instant, retourner une réponse simulée
+      // ✅ ICI VOUS POUVEZ AJOUTER UN USE CASE CreateConversation
+      // const result = await this.createConversationUseCase.execute({
+      //   userId,
+      //   participantId,
+      //   name
+      // });
+
+      // Pour l'instant, simulation
       const conversation = {
         id: `conv_${Date.now()}`,
         name: name || `Conversation avec ${participantId}`,
@@ -195,7 +231,7 @@ class ConversationController {
         data: conversation,
         message: "Conversation créée avec succès",
         metadata: {
-          processingTime: processingTime,
+          processingTime: `${processingTime}ms`,
           timestamp: new Date().toISOString(),
         },
       });
@@ -212,22 +248,32 @@ class ConversationController {
             : "Erreur interne",
         code: "CREATE_CONVERSATION_FAILED",
         metadata: {
-          processingTime: processingTime,
+          processingTime: `${processingTime}ms`,
           timestamp: new Date().toISOString(),
         },
       });
     }
   }
 
-  // ✅ MARQUER UNE CONVERSATION COMME LUE
+  // ✅ MARQUER UNE CONVERSATION COMME LUE (SANS CACHE CONTROLLER)
   async markAsRead(req, res) {
     const startTime = Date.now();
 
     try {
       const { conversationId } = req.params;
-      const userId = req.user?.id || req.user?.userId;
+      const userId = req.user?.id || req.user?.userId || req.headers["user-id"];
 
-      // Simulation pour l'instant
+      if (!conversationId || !userId) {
+        return res.status(400).json({
+          success: false,
+          message: "ID conversation et utilisateur requis",
+          code: "MISSING_PARAMS",
+        });
+      }
+
+      // ✅ ICI VOUS POUVEZ AJOUTER UN USE CASE MarkConversationAsRead
+      // const result = await this.markAsReadUseCase.execute(conversationId, userId);
+
       const processingTime = Date.now() - startTime;
 
       res.json({
@@ -239,7 +285,7 @@ class ConversationController {
           markedAt: new Date().toISOString(),
         },
         metadata: {
-          processingTime: processingTime,
+          processingTime: `${processingTime}ms`,
           timestamp: new Date().toISOString(),
         },
       });
@@ -256,14 +302,45 @@ class ConversationController {
             : "Erreur interne",
         code: "MARK_READ_FAILED",
         metadata: {
-          processingTime: processingTime,
+          processingTime: `${processingTime}ms`,
           timestamp: new Date().toISOString(),
         },
       });
     }
   }
 
-  // ✅ RECHERCHER DES OCCURRENCES
+  // ✅ VERSION INTERNE POUR WEBSOCKET (sans cache controller)
+  async getConversationsInternal(userId, options = {}) {
+    const { page = 1, limit = 20, includeArchived = false } = options;
+
+    try {
+      // ✅ APPEL DIRECT AU USE CASE (qui gère le cache)
+      return await this.getConversationsUseCase.execute(userId, {
+        page: Math.max(1, parseInt(page)),
+        limit: Math.min(parseInt(limit), 50),
+        includeArchived,
+        useCache: page === 1, // Cache seulement première page
+      });
+    } catch (error) {
+      console.error("❌ Erreur getConversationsInternal:", error);
+      throw error;
+    }
+  }
+
+  async getConversationInternal(conversationId, userId, options = {}) {
+    try {
+      // ✅ APPEL DIRECT AU USE CASE (qui gère le cache)
+      return await this.getConversationUseCase.execute(conversationId, {
+        userId,
+        useCache: true, // Le repository décide du cache
+      });
+    } catch (error) {
+      console.error("❌ Erreur getConversationInternal:", error);
+      throw error;
+    }
+  }
+
+  // ✅ RECHERCHER DES OCCURRENCES (inchangé)
   async searchOccurrences(req, res) {
     const startTime = Date.now();
     try {
@@ -275,6 +352,7 @@ class ConversationController {
         scope = "conversations",
       } = req.query;
       const userId = req.user?.id || req.headers["user-id"];
+
       if (!query || query.length < 2) {
         return res.status(400).json({
           success: false,
@@ -283,6 +361,7 @@ class ConversationController {
           code: "INVALID_QUERY",
         });
       }
+
       const result = await this.searchOccurrencesUseCase.execute(query, {
         userId,
         page: parseInt(page),
@@ -290,11 +369,12 @@ class ConversationController {
         useLike,
         scope,
       });
+
       res.json({
         success: true,
         data: result,
         metadata: {
-          processingTime: Date.now() - startTime,
+          processingTime: `${Date.now() - startTime}ms`,
           timestamp: new Date().toISOString(),
         },
       });

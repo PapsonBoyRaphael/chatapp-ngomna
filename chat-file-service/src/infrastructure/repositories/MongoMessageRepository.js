@@ -187,10 +187,9 @@ class MongoMessageRepository {
   }
 
   async findByConversation(conversationId, options = {}) {
-    const { page = 1, limit = 50 } = options;
+    const { page = 1, limit = 50, userId } = options;
 
     try {
-      // Corriger la création de l'ObjectId avec new
       const objectId = new mongoose.Types.ObjectId(conversationId);
 
       const filter = {
@@ -198,7 +197,7 @@ class MongoMessageRepository {
         deletedAt: null,
       };
 
-      console.log("🔍 Filtre MongoDB:", filter);
+      console.log("🔍 Filtre MongoDB (page-based):", filter);
 
       const messages = await Message.find(filter)
         .sort({ createdAt: -1 })
@@ -206,12 +205,80 @@ class MongoMessageRepository {
         .limit(limit)
         .lean();
 
-      console.log("🔍 Messages trouvés:", messages.length);
+      console.log("🔍 Messages trouvés (page-based):", messages.length);
 
       return messages;
     } catch (error) {
       console.error("❌ Erreur findByConversation:", error);
       return [];
+    }
+  }
+
+  // ===== AJOUTER SUPPORT CURSOR-BASED PAGINATION =====
+
+  /**
+   * ✅ PAGINATION AVEC CURSOR pour performances optimales
+   */
+  async findByConversationWithCursor(conversationId, options = {}) {
+    const { cursor = null, limit = 50, direction = "older", userId } = options;
+
+    try {
+      const objectId = new mongoose.Types.ObjectId(conversationId);
+
+      let filter = {
+        conversationId: objectId,
+        deletedAt: null,
+      };
+
+      // ✅ APPLIQUER LE CURSOR
+      if (cursor) {
+        if (direction === "older") {
+          filter.createdAt = { $lt: new Date(cursor) };
+        } else {
+          filter.createdAt = { $gt: new Date(cursor) };
+        }
+      }
+
+      console.log("🔍 Filtre MongoDB avec cursor:", {
+        conversationId: objectId,
+        cursor,
+        direction,
+        limit,
+      });
+
+      const messages = await Message.find(filter)
+        .sort({ createdAt: direction === "older" ? -1 : 1 })
+        .limit(limit + 1) // +1 pour détecter hasMore
+        .lean();
+
+      // ✅ DÉTERMINER hasMore ET nextCursor
+      const hasMore = messages.length > limit;
+      const resultMessages = hasMore ? messages.slice(0, limit) : messages;
+
+      let nextCursor = null;
+      if (hasMore && resultMessages.length > 0) {
+        const lastMessage = resultMessages[resultMessages.length - 1];
+        nextCursor = lastMessage.createdAt.toISOString();
+      }
+
+      console.log("✅ Messages trouvés avec cursor:", {
+        count: resultMessages.length,
+        hasMore,
+        nextCursor: nextCursor ? nextCursor.substring(0, 19) : null,
+      });
+
+      return {
+        messages: resultMessages,
+        nextCursor,
+        hasMore,
+      };
+    } catch (error) {
+      console.error("❌ Erreur findByConversationWithCursor:", error);
+      return {
+        messages: [],
+        nextCursor: null,
+        hasMore: false,
+      };
     }
   }
 

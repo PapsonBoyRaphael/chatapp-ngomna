@@ -151,9 +151,1097 @@ class ChatHandler {
         socket.on("error", (error) => {
           console.error(`❌ Erreur Socket ${socket.id}:`, error);
         });
+
+        // ✅ QUICK LOAD - Navigation rapide (SANS cache controller)
+        socket.on("messages:quickload", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const { conversationId, limit = 20 } = data;
+            const userId = socket.userId;
+
+            if (!conversationId || !userId) {
+              return socket.emit("messages:error", {
+                error: "Paramètres manquants",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            console.log(`⚡ QuickLoad: ${conversationId} pour ${userId}`);
+
+            // ✅ APPEL DIRECT AU USE CASE (cache géré par le repository)
+            const result = await this.getMessagesUseCase.execute(
+              conversationId,
+              {
+                limit,
+                userId,
+                useCache: true, // Le repository décide du cache
+              }
+            );
+
+            const quickData = {
+              messages: result.messages || [],
+              hasMore: (result.messages?.length || 0) === limit,
+              fromCache: result.fromCache || false,
+            };
+
+            socket.emit("messages:quick", {
+              conversationId,
+              ...quickData,
+              timestamp: Date.now(),
+            });
+          } catch (error) {
+            console.error("❌ Erreur messages:quickload:", error);
+            socket.emit("messages:error", {
+              error: "Erreur chargement rapide",
+              code: "QUICKLOAD_FAILED",
+            });
+          }
+        });
+
+        // ✅ FULL LOAD - Chargement complet (SANS cache controller)
+        socket.on("messages:fullload", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const { conversationId, cursor = null, limit = 50 } = data;
+            const userId = socket.userId;
+
+            // ✅ APPEL DIRECT AU USE CASE
+            const result = await this.getMessagesUseCase.execute(
+              conversationId,
+              {
+                cursor,
+                limit,
+                userId,
+                useCache: !cursor, // Cache seulement première page
+              }
+            );
+
+            socket.emit("messages:full", {
+              conversationId,
+              ...result,
+              timestamp: Date.now(),
+            });
+          } catch (error) {
+            console.error("❌ Erreur messages:fullload:", error);
+            socket.emit("messages:error", {
+              error: "Erreur chargement complet",
+              code: "FULLLOAD_FAILED",
+            });
+          }
+        });
+
+        // ✅ CONVERSATIONS QUICK LOAD - Navigation rapide (SANS cache controller)
+        socket.on("conversations:quickload", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const { limit = 10 } = data;
+            const userId = socket.userId;
+
+            if (!userId) {
+              return socket.emit("conversations:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            console.log(`⚡ Conversations QuickLoad pour ${userId}`);
+
+            // ✅ APPEL DIRECT AU USE CASE (cache géré par le repository)
+            const result = await this.getConversationsUseCase.execute(userId, {
+              page: 1,
+              limit,
+              useCache: true, // Le repository décide du cache
+            });
+
+            const quickData = {
+              conversations: result.conversations || [],
+              hasMore: (result.conversations?.length || 0) === limit,
+              fromCache: result.fromCache || false,
+              totalUnreadMessages: result.totalUnreadMessages || 0,
+              unreadConversations: result.unreadConversations || 0,
+            };
+
+            socket.emit("conversations:quick", {
+              ...quickData,
+              timestamp: Date.now(),
+            });
+          } catch (error) {
+            console.error("❌ Erreur conversations:quickload:", error);
+            socket.emit("conversations:error", {
+              error: "Erreur chargement rapide conversations",
+              code: "QUICKLOAD_FAILED",
+            });
+          }
+        });
+
+        // ✅ CONVERSATIONS FULL LOAD - Chargement complet (SANS cache controller)
+        socket.on("conversations:fullload", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const { page = 1, limit = 20, cursor = null } = data;
+            const userId = socket.userId;
+
+            if (!userId) {
+              return socket.emit("conversations:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            // ✅ APPEL DIRECT AU USE CASE
+            const result = await this.getConversationsUseCase.execute(userId, {
+              page: Math.max(1, parseInt(page)),
+              limit: Math.min(parseInt(limit), 50),
+              cursor,
+              useCache: !cursor, // Cache seulement première page
+            });
+
+            socket.emit("conversations:full", {
+              ...result,
+              timestamp: Date.now(),
+            });
+          } catch (error) {
+            console.error("❌ Erreur conversations:fullload:", error);
+            socket.emit("conversations:error", {
+              error: "Erreur chargement complet conversations",
+              code: "FULLLOAD_FAILED",
+            });
+          }
+        });
+
+        // ✅ CONVERSATION DETAIL LOAD - Charger une conversation spécifique (SANS cache)
+        socket.on("conversation:load", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const { conversationId } = data;
+            const userId = socket.userId;
+
+            if (!conversationId || !userId) {
+              return socket.emit("conversation:error", {
+                error: "Paramètres manquants",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            console.log(
+              `🔍 Chargement conversation ${conversationId} pour ${userId}`
+            );
+
+            // ✅ APPEL DIRECT AU USE CASE (cache géré par le repository)
+            const result = await this.getConversationUseCase.execute(
+              conversationId,
+              {
+                userId,
+                useCache: true, // Le repository décide du cache
+              }
+            );
+
+            socket.emit("conversation:loaded", {
+              conversation: result.conversation || result,
+              fromCache: result.fromCache || false,
+              timestamp: Date.now(),
+            });
+          } catch (error) {
+            console.error("❌ Erreur conversation:load:", error);
+            socket.emit("conversation:error", {
+              error: "Erreur chargement conversation",
+              code: "LOAD_FAILED",
+            });
+          }
+        });
+
+        // ✅ HANDLERS EXISTANTS MODIFIÉS (SANS CACHE)
+        socket.on("getConversations", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const userId = socket.userId;
+            const { page = 1, limit = 20 } = data || {};
+
+            if (!userId) {
+              return socket.emit("conversations_error", {
+                message: "ID utilisateur manquant",
+                code: "MISSING_USER_ID",
+              });
+            }
+
+            // ✅ APPEL DIRECT AU USE CASE (SANS cache controller)
+            const result = await this.getConversationsUseCase.execute(userId, {
+              page: Math.max(1, parseInt(page)),
+              limit: Math.min(parseInt(limit), 50),
+              useCache: page === 1, // Cache seulement première page
+            });
+
+            socket.emit("conversationsLoaded", {
+              conversations: result.conversations || [],
+              pagination: result.pagination || {},
+              totalUnreadMessages: result.totalUnreadMessages || 0,
+              unreadConversations: result.unreadConversations || 0,
+              fromCache: result.fromCache || false,
+              timestamp: Date.now(),
+            });
+          } catch (error) {
+            console.error("❌ Erreur getConversations:", error);
+            socket.emit("conversations_error", {
+              message: "Erreur lors de la récupération des conversations",
+              code: "GET_CONVERSATIONS_ERROR",
+            });
+          }
+        });
+
+        socket.on("getConversation", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const userId = socket.userId;
+            const { conversationId } = data || {};
+
+            if (!conversationId || !userId) {
+              return socket.emit("conversation_error", {
+                message: "ID conversation ou utilisateur manquant",
+                code: "MISSING_DATA",
+              });
+            }
+
+            // ✅ APPEL DIRECT AU USE CASE (SANS cache controller)
+            const result = await this.getConversationUseCase.execute(
+              conversationId,
+              {
+                userId,
+                useCache: true, // Le repository décide du cache
+              }
+            );
+
+            socket.emit("conversationLoaded", {
+              conversation: result.conversation || result,
+              metadata: {
+                fromCache: result.fromCache || false,
+                timestamp: new Date().toISOString(),
+              },
+            });
+          } catch (error) {
+            console.error("❌ Erreur getConversation:", error);
+            socket.emit("conversation_error", {
+              message: "Erreur lors de la récupération de la conversation",
+              code: "GET_CONVERSATION_ERROR",
+            });
+          }
+        });
+
+        // ========================================
+        // ✅ NOUVEAUX ÉVÉNEMENTS GROUPES ET DIFFUSION
+        // ========================================
+
+        // ✅ CRÉER UN GROUPE
+        socket.on("createGroup", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const userId = socket.userId;
+
+            if (!userId) {
+              return socket.emit("group:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { name, members, groupId } = data;
+
+            // ✅ VALIDATION
+            if (!name || typeof name !== "string" || name.trim().length === 0) {
+              return socket.emit("group:error", {
+                error: "Nom du groupe requis",
+                code: "MISSING_GROUP_NAME",
+              });
+            }
+
+            if (!Array.isArray(members) || members.length === 0) {
+              return socket.emit("group:error", {
+                error: "Liste des membres requise (minimum 1 membre)",
+                code: "MISSING_MEMBERS",
+              });
+            }
+
+            if (members.includes(userId)) {
+              return socket.emit("group:error", {
+                error:
+                  "Vous ne devez pas vous inclure dans la liste des membres",
+                code: "ADMIN_IN_MEMBERS",
+              });
+            }
+
+            console.log(
+              `👥 Création groupe "${name}" par ${userId} avec ${members.length} membre(s)`
+            );
+
+            // ✅ GÉNÉRER ID SI NON FOURNI
+            const finalGroupId = groupId || this.generateObjectId();
+
+            // ✅ APPEL USE CASE
+            const group = await this.createGroupUseCase.execute({
+              groupId: finalGroupId,
+              name: name.trim(),
+              adminId: userId,
+              members: members.filter((id) => id !== userId), // S'assurer que admin n'est pas dans members
+            });
+
+            // ✅ RÉPONSE SUCCÈS À L'ADMIN
+            socket.emit("group:created", {
+              success: true,
+              group: {
+                id: group._id,
+                name: group.name,
+                type: group.type,
+                participants: group.participants,
+                createdBy: group.createdBy,
+                createdAt: group.createdAt,
+                participantCount: group.participants.length,
+              },
+              timestamp: new Date().toISOString(),
+            });
+
+            // ✅ NOTIFIER TOUS LES PARTICIPANTS
+            const allParticipants = [userId, ...members];
+            for (const participantId of allParticipants) {
+              const participantRoom = `user_${participantId}`;
+
+              socket.to(participantRoom).emit("group:invitation", {
+                group: {
+                  id: group._id,
+                  name: group.name,
+                  type: group.type,
+                  createdBy: group.createdBy,
+                  createdAt: group.createdAt,
+                },
+                invitedBy: {
+                  userId: userId,
+                  matricule: socket.matricule,
+                },
+                timestamp: new Date().toISOString(),
+              });
+            }
+
+            // ✅ JOINDRE AUTOMATIQUEMENT LA ROOM DU GROUPE
+            const groupRoom = `conversation_${group._id}`;
+            socket.join(groupRoom);
+
+            console.log(`✅ Groupe "${name}" créé avec succès: ${group._id}`);
+          } catch (error) {
+            console.error("❌ Erreur createGroup:", error);
+            socket.emit("group:error", {
+              error: "Erreur lors de la création du groupe",
+              code: "CREATE_GROUP_FAILED",
+              details:
+                process.env.NODE_ENV === "development"
+                  ? error.message
+                  : undefined,
+            });
+          }
+        });
+
+        // ✅ CRÉER UNE LISTE DE DIFFUSION
+        socket.on("createBroadcast", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const userId = socket.userId;
+
+            if (!userId) {
+              return socket.emit("broadcast:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { name, recipients, broadcastId, admins = [] } = data;
+
+            // ✅ VALIDATION
+            if (!name || typeof name !== "string" || name.trim().length === 0) {
+              return socket.emit("broadcast:error", {
+                error: "Nom de la diffusion requis",
+                code: "MISSING_BROADCAST_NAME",
+              });
+            }
+
+            if (!Array.isArray(recipients) || recipients.length === 0) {
+              return socket.emit("broadcast:error", {
+                error:
+                  "Liste des destinataires requise (minimum 1 destinataire)",
+                code: "MISSING_RECIPIENTS",
+              });
+            }
+
+            if (recipients.includes(userId)) {
+              return socket.emit("broadcast:error", {
+                error:
+                  "Vous ne devez pas vous inclure dans la liste des destinataires",
+                code: "ADMIN_IN_RECIPIENTS",
+              });
+            }
+
+            console.log(
+              `📢 Création diffusion "${name}" par ${userId} avec ${recipients.length} destinataire(s)`
+            );
+
+            // ✅ GÉNÉRER ID SI NON FOURNI
+            const finalBroadcastId = broadcastId || this.generateObjectId();
+
+            // ✅ PRÉPARER LES ADMINS
+            const finalAdmins =
+              Array.isArray(admins) && admins.length > 0
+                ? [
+                    ...new Set([
+                      userId,
+                      ...admins.filter((id) => id !== userId),
+                    ]),
+                  ]
+                : [userId];
+
+            // ✅ APPEL USE CASE
+            const broadcast = await this.createBroadcastUseCase.execute({
+              broadcastId: finalBroadcastId,
+              name: name.trim(),
+              adminIds: finalAdmins,
+              recipientIds: recipients.filter(
+                (id) => !finalAdmins.includes(id)
+              ),
+            });
+
+            // ✅ RÉPONSE SUCCÈS À L'ADMIN
+            socket.emit("broadcast:created", {
+              success: true,
+              broadcast: {
+                id: broadcast._id,
+                name: broadcast.name,
+                type: broadcast.type,
+                participants: broadcast.participants,
+                createdBy: broadcast.createdBy,
+                createdAt: broadcast.createdAt,
+                participantCount: broadcast.participants.length,
+                adminIds: finalAdmins,
+                recipientIds: recipients,
+              },
+              timestamp: new Date().toISOString(),
+            });
+
+            // ✅ NOTIFIER TOUS LES ADMINS (sauf le créateur)
+            for (const adminId of finalAdmins) {
+              if (adminId !== userId) {
+                const adminRoom = `user_${adminId}`;
+                socket.to(adminRoom).emit("broadcast:admin_added", {
+                  broadcast: {
+                    id: broadcast._id,
+                    name: broadcast.name,
+                    type: broadcast.type,
+                    createdBy: broadcast.createdBy,
+                    createdAt: broadcast.createdAt,
+                  },
+                  addedBy: {
+                    userId: userId,
+                    matricule: socket.matricule,
+                  },
+                  timestamp: new Date().toISOString(),
+                });
+              }
+            }
+
+            // ✅ NOTIFIER TOUS LES DESTINATAIRES
+            for (const recipientId of recipients) {
+              const recipientRoom = `user_${recipientId}`;
+
+              socket.to(recipientRoom).emit("broadcast:subscription", {
+                broadcast: {
+                  id: broadcast._id,
+                  name: broadcast.name,
+                  type: broadcast.type,
+                  createdBy: broadcast.createdBy,
+                  createdAt: broadcast.createdAt,
+                },
+                subscribedBy: {
+                  userId: userId,
+                  matricule: socket.matricule,
+                },
+                timestamp: new Date().toISOString(),
+              });
+            }
+
+            // ✅ JOINDRE AUTOMATIQUEMENT LA ROOM DE LA DIFFUSION
+            const broadcastRoom = `conversation_${broadcast._id}`;
+            socket.join(broadcastRoom);
+
+            console.log(
+              `✅ Diffusion "${name}" créée avec succès: ${broadcast._id}`
+            );
+          } catch (error) {
+            console.error("❌ Erreur createBroadcast:", error);
+            socket.emit("broadcast:error", {
+              error: "Erreur lors de la création de la diffusion",
+              code: "CREATE_BROADCAST_FAILED",
+              details:
+                process.env.NODE_ENV === "development"
+                  ? error.message
+                  : undefined,
+            });
+          }
+        });
+
+        // ✅ REJOINDRE UN GROUPE/DIFFUSION EXISTANT
+        socket.on("joinGroup", async (data) => {
+          try {
+            const userId = socket.userId;
+            const { conversationId, accept = true } = data;
+
+            if (!userId || !conversationId) {
+              return socket.emit("group:error", {
+                error: "Paramètres manquants",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            if (accept) {
+              // ✅ JOINDRE LA ROOM
+              const groupRoom = `conversation_${conversationId}`;
+              socket.join(groupRoom);
+
+              // ✅ NOTIFIER LES AUTRES PARTICIPANTS
+              socket.to(groupRoom).emit("group:member_joined", {
+                conversationId,
+                user: {
+                  userId: userId,
+                  matricule: socket.matricule,
+                },
+                timestamp: new Date().toISOString(),
+              });
+
+              socket.emit("group:joined", {
+                success: true,
+                conversationId,
+                timestamp: new Date().toISOString(),
+              });
+
+              console.log(
+                `✅ ${socket.matricule} a rejoint le groupe/diffusion: ${conversationId}`
+              );
+            } else {
+              // ✅ REFUSER L'INVITATION
+              socket.emit("group:invitation_declined", {
+                conversationId,
+                timestamp: new Date().toISOString(),
+              });
+
+              console.log(
+                `❌ ${socket.matricule} a refusé l'invitation: ${conversationId}`
+              );
+            }
+          } catch (error) {
+            console.error("❌ Erreur joinGroup:", error);
+            socket.emit("group:error", {
+              error: "Erreur lors de la jointure",
+              code: "JOIN_GROUP_FAILED",
+            });
+          }
+        });
+
+        // ✅ QUITTER UN GROUPE/DIFFUSION
+        socket.on("leaveGroup", async (data) => {
+          try {
+            const userId = socket.userId;
+            const { conversationId } = data;
+
+            if (!userId || !conversationId) {
+              return socket.emit("group:error", {
+                error: "Paramètres manquants",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            // ✅ QUITTER LA ROOM
+            const groupRoom = `conversation_${conversationId}`;
+            socket.leave(groupRoom);
+
+            // ✅ NOTIFIER LES AUTRES PARTICIPANTS
+            socket.to(groupRoom).emit("group:member_left", {
+              conversationId,
+              user: {
+                userId: userId,
+                matricule: socket.matricule,
+              },
+              timestamp: new Date().toISOString(),
+            });
+
+            socket.emit("group:left", {
+              success: true,
+              conversationId,
+              timestamp: new Date().toISOString(),
+            });
+
+            console.log(
+              `👋 ${socket.matricule} a quitté le groupe/diffusion: ${conversationId}`
+            );
+
+            // ✅ TODO: Implémenter la suppression du participant de la conversation en DB
+            // if (this.leaveGroupUseCase) {
+            //   await this.leaveGroupUseCase.execute({ conversationId, userId });
+            // }
+          } catch (error) {
+            console.error("❌ Erreur leaveGroup:", error);
+            socket.emit("group:error", {
+              error: "Erreur lors de la sortie du groupe",
+              code: "LEAVE_GROUP_FAILED",
+            });
+          }
+        });
+
+        // ✅ OBTENIR INFO D'UN GROUPE/DIFFUSION
+        socket.on("getGroupInfo", async (data) => {
+          try {
+            const userId = socket.userId;
+            const { conversationId } = data;
+
+            if (!userId || !conversationId) {
+              return socket.emit("group:error", {
+                error: "Paramètres manquants",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            // ✅ APPEL USE CASE POUR RÉCUPÉRER INFO
+            const result = await this.getConversationUseCase.execute(
+              conversationId,
+              {
+                userId,
+                useCache: true,
+              }
+            );
+
+            if (!result.conversation) {
+              return socket.emit("group:error", {
+                error: "Groupe/Diffusion non trouvé",
+                code: "GROUP_NOT_FOUND",
+              });
+            }
+
+            const conversation = result.conversation;
+
+            // ✅ VÉRIFIER QUE L'UTILISATEUR EST PARTICIPANT
+            if (!conversation.participants.includes(userId)) {
+              return socket.emit("group:error", {
+                error: "Vous n'êtes pas membre de ce groupe/diffusion",
+                code: "NOT_MEMBER",
+              });
+            }
+
+            socket.emit("group:info", {
+              success: true,
+              group: {
+                id: conversation._id,
+                name: conversation.name,
+                type: conversation.type,
+                participants: conversation.participants,
+                participantCount: conversation.participants.length,
+                createdBy: conversation.createdBy,
+                createdAt: conversation.createdAt,
+                lastMessage: conversation.lastMessage,
+                settings: conversation.settings,
+                metadata: conversation.metadata,
+              },
+              fromCache: result.fromCache || false,
+              timestamp: new Date().toISOString(),
+            });
+          } catch (error) {
+            console.error("❌ Erreur getGroupInfo:", error);
+            socket.emit("group:error", {
+              error: "Erreur lors de la récupération des informations",
+              code: "GET_GROUP_INFO_FAILED",
+            });
+          }
+        });
+
+        // ========================================
+        // ✅ NOUVEAUX HANDLERS DE PRÉSENCE
+        // ========================================
+
+        // ✅ OBTENIR LES UTILISATEURS EN LIGNE D'UNE CONVERSATION
+        socket.on("getConversationOnlineUsers", async (data) => {
+          try {
+            const { conversationId } = data;
+            const userId = socket.userId;
+
+            if (!conversationId || !userId) {
+              return socket.emit("conversation_users:error", {
+                error: "Paramètres manquants",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            if (!this.roomManager) {
+              return socket.emit("conversation_users:error", {
+                error: "Service de présence non disponible",
+                code: "PRESENCE_SERVICE_UNAVAILABLE",
+              });
+            }
+
+            const roomName = `conv_${conversationId}`;
+
+            // Vérifier que l'utilisateur fait partie de la conversation
+            const roomUsers = await this.roomManager.getRoomUsers(roomName);
+            const isMember = roomUsers.some((user) => user.userId === userId);
+
+            if (!isMember) {
+              return socket.emit("conversation_users:error", {
+                error: "Vous n'êtes pas membre de cette conversation",
+                code: "NOT_A_MEMBER",
+              });
+            }
+
+            // Récupérer les statistiques de présence
+            const presenceStats = await this.roomManager.getRoomPresenceStats(
+              roomName
+            );
+
+            socket.emit("conversation_online_users", {
+              conversationId,
+              ...presenceStats,
+              userRole: await this.roomManager.getUserRoleInRoom(
+                roomName,
+                userId
+              ),
+              currentUserStatus: presenceStats.users.find(
+                (u) => u.userId === userId
+              ),
+            });
+
+            console.log(
+              `👥 Statistiques envoyées pour ${conversationId}: ${presenceStats.onlineUsers}/${presenceStats.totalUsers}`
+            );
+          } catch (error) {
+            console.error("❌ Erreur getConversationOnlineUsers:", error);
+            socket.emit("conversation_users:error", {
+              error: "Erreur lors de la récupération des utilisateurs",
+              code: "GET_USERS_ERROR",
+              details:
+                process.env.NODE_ENV === "development"
+                  ? error.message
+                  : undefined,
+            });
+          }
+        });
+
+        // ✅ OBTENIR TOUTES LES CONVERSATIONS AVEC PRÉSENCE
+        socket.on("getConversationsWithPresence", async () => {
+          try {
+            const userId = socket.userId;
+
+            if (!userId) {
+              return socket.emit("conversations_presence:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            if (!this.roomManager) {
+              return socket.emit("conversations_presence:error", {
+                error: "Service de présence non disponible",
+                code: "PRESENCE_SERVICE_UNAVAILABLE",
+              });
+            }
+
+            const conversations =
+              await this.roomManager.getConversationsWithPresence(userId);
+
+            socket.emit("conversations_with_presence", {
+              userId,
+              conversations,
+              count: conversations.length,
+              summary: {
+                totalConversations: conversations.length,
+                activeConversations: conversations.filter((c) => c.isActive)
+                  .length,
+                totalOnlineUsers: conversations.reduce(
+                  (sum, c) => sum + c.onlineUsers,
+                  0
+                ),
+                averageHealth:
+                  conversations.length > 0
+                    ? conversations.reduce((sum, c) => {
+                        const healthScore =
+                          c.roomHealth === "healthy"
+                            ? 3
+                            : c.roomHealth === "moderate"
+                            ? 2
+                            : c.roomHealth === "low"
+                            ? 1
+                            : 0;
+                        return sum + healthScore;
+                      }, 0) / conversations.length
+                    : 0,
+              },
+              timestamp: new Date().toISOString(),
+            });
+
+            console.log(
+              `📋 Conversations avec présence envoyées à ${socket.matricule}: ${conversations.length}`
+            );
+          } catch (error) {
+            console.error("❌ Erreur getConversationsWithPresence:", error);
+            socket.emit("conversations_presence:error", {
+              error: "Erreur lors de la récupération des conversations",
+              code: "GET_CONVERSATIONS_ERROR",
+              details:
+                process.env.NODE_ENV === "development"
+                  ? error.message
+                  : undefined,
+            });
+          }
+        });
+
+        // ✅ SURVEILLANCE EN TEMPS RÉEL (subscribe aux updates)
+        socket.on("subscribeToPresence", async (data) => {
+          try {
+            const { conversationId } = data;
+            const userId = socket.userId;
+
+            if (!conversationId || !userId) {
+              return socket.emit("presence:error", {
+                error: "Paramètres manquants",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            if (!this.roomManager) {
+              return socket.emit("presence:error", {
+                error: "Service de présence non disponible",
+                code: "PRESENCE_SERVICE_UNAVAILABLE",
+              });
+            }
+
+            const roomName = `conv_${conversationId}`;
+
+            // Joindre la room de présence
+            socket.join(`presence_${roomName}`);
+
+            // Envoyer les données initiales
+            const presenceStats = await this.roomManager.getRoomPresenceStats(
+              roomName
+            );
+
+            socket.emit("presence:initial", {
+              conversationId,
+              ...presenceStats,
+              subscribed: true,
+              timestamp: new Date().toISOString(),
+            });
+
+            // Broadcast la mise à jour à tous les abonnés
+            await this.roomManager.broadcastPresenceUpdate(roomName);
+
+            console.log(
+              `👁️ ${socket.matricule} surveille la présence de ${conversationId}`
+            );
+          } catch (error) {
+            console.error("❌ Erreur subscribeToPresence:", error);
+            socket.emit("presence:error", {
+              error: "Erreur lors de l'abonnement",
+              code: "SUBSCRIBE_ERROR",
+              details:
+                process.env.NODE_ENV === "development"
+                  ? error.message
+                  : undefined,
+            });
+          }
+        });
+
+        // ✅ SE DÉSABONNER DE LA SURVEILLANCE
+        socket.on("unsubscribeFromPresence", (data) => {
+          try {
+            const { conversationId } = data;
+
+            if (conversationId) {
+              const roomName = `conv_${conversationId}`;
+              socket.leave(`presence_${roomName}`);
+
+              socket.emit("presence:unsubscribed", {
+                conversationId,
+                timestamp: new Date().toISOString(),
+              });
+
+              console.log(
+                `🚫 ${socket.matricule} ne surveille plus ${conversationId}`
+              );
+            }
+          } catch (error) {
+            console.error("❌ Erreur unsubscribeFromPresence:", error);
+          }
+        });
+
+        // ✅ DASHBOARD GLOBAL DE PRÉSENCE
+        socket.on("getPresenceDashboard", async () => {
+          try {
+            const userId = socket.userId;
+
+            if (!userId) {
+              return socket.emit("presence_dashboard:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            if (!this.roomManager) {
+              return socket.emit("presence_dashboard:error", {
+                error: "Service de présence non disponible",
+                code: "PRESENCE_SERVICE_UNAVAILABLE",
+              });
+            }
+
+            const dashboard =
+              await this.roomManager.getGlobalPresenceDashboard();
+
+            socket.emit("presence_dashboard", dashboard);
+
+            console.log(
+              `📊 Dashboard de présence envoyé à ${socket.matricule}`
+            );
+          } catch (error) {
+            console.error("❌ Erreur getPresenceDashboard:", error);
+            socket.emit("presence_dashboard:error", {
+              error: "Erreur lors de la génération du dashboard",
+              code: "DASHBOARD_ERROR",
+            });
+          }
+        });
+
+        // ✅ DÉFINIR LE RÔLE D'UN UTILISATEUR
+        socket.on("setUserRole", async (data) => {
+          try {
+            const { conversationId, targetUserId, role } = data;
+            const adminUserId = socket.userId;
+
+            if (!conversationId || !targetUserId || !role || !adminUserId) {
+              return socket.emit("role:error", {
+                error: "Paramètres manquants",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            if (!this.roomManager) {
+              return socket.emit("role:error", {
+                error: "Service non disponible",
+                code: "SERVICE_UNAVAILABLE",
+              });
+            }
+
+            const roomName = `conv_${conversationId}`;
+
+            // Vérifier que l'admin a les droits
+            const adminRole = await this.roomManager.getUserRoleInRoom(
+              roomName,
+              adminUserId
+            );
+            if (adminRole !== "admin" && adminRole !== "moderator") {
+              return socket.emit("role:error", {
+                error: "Permissions insuffisantes",
+                code: "INSUFFICIENT_PERMISSIONS",
+              });
+            }
+
+            // Valider le rôle
+            const validRoles = ["member", "moderator", "admin"];
+            if (!validRoles.includes(role)) {
+              return socket.emit("role:error", {
+                error: "Rôle invalide",
+                code: "INVALID_ROLE",
+              });
+            }
+
+            // Définir le rôle
+            const success = await this.roomManager.setUserRoleInRoom(
+              roomName,
+              targetUserId,
+              role
+            );
+
+            if (success) {
+              socket.emit("role:updated", {
+                conversationId,
+                targetUserId,
+                role,
+                updatedBy: adminUserId,
+                timestamp: new Date().toISOString(),
+              });
+
+              // Notifier la room
+              socket.to(roomName).emit("user:role_changed", {
+                conversationId,
+                userId: targetUserId,
+                newRole: role,
+                changedBy: {
+                  userId: adminUserId,
+                  matricule: socket.matricule,
+                },
+                timestamp: new Date().toISOString(),
+              });
+
+              // Broadcast la mise à jour de présence
+              await this.roomManager.broadcastPresenceUpdate(roomName);
+            } else {
+              socket.emit("role:error", {
+                error: "Erreur lors de la mise à jour du rôle",
+                code: "UPDATE_FAILED",
+              });
+            }
+          } catch (error) {
+            console.error("❌ Erreur setUserRole:", error);
+            socket.emit("role:error", {
+              error: "Erreur lors de la définition du rôle",
+              code: "ROLE_ERROR",
+            });
+          }
+        });
+
+        // ✅ METTRE À JOUR automatiquement la présence lors des interactions
+        const originalHandlers = {
+          joinConversation: this.handleJoinConversation.bind(this),
+          sendMessage: this.handleSendMessage.bind(this),
+          typing: this.handleTyping.bind(this),
+          stopTyping: this.handleStopTyping.bind(this),
+        };
+
+        // Override joinConversation
+        socket.on("joinConversation", async (data) => {
+          try {
+            // Appeler le handler original
+            await originalHandlers.joinConversation(socket, data);
+
+            // Mettre à jour la présence
+            if (this.roomManager && data.conversationId) {
+              const roomName = `conv_${data.conversationId}`;
+              await this.roomManager.updateRoomActivity(roomName);
+              await this.roomManager.broadcastPresenceUpdate(roomName);
+            }
+          } catch (error) {
+            console.error("❌ Erreur joinConversation avec présence:", error);
+          }
+        });
+
+        // ... autres overrides si nécessaire ...
       });
 
-      console.log("✅ Gestionnaires Socket.IO configurés");
+      console.log("✅ Gestionnaires Socket.IO configurés avec présence");
     } catch (error) {
       console.error("❌ Erreur configuration Socket.IO:", error);
     }
@@ -214,6 +1302,7 @@ class ChatHandler {
           nom: data.nom || "",
           prenom: data.prenom || "",
           ministere: data.ministere || "",
+          departement: data.departement || "",
         };
       }
 
@@ -222,6 +1311,7 @@ class ChatHandler {
       socket.nom = userPayload.nom || "";
       socket.prenom = userPayload.prenom || "";
       socket.ministere = userPayload.ministere || "";
+      socket.departement = userPayload.departement || "";
       socket.isAuthenticated = true;
 
       const userIdString = socket.matricule;
@@ -445,6 +1535,7 @@ class ChatHandler {
     try {
       if (userId && this.onlineUserManager) {
         await this.onlineUserManager.setUserOffline(userId);
+        
 
         socket.broadcast.emit("user_disconnected", {
           userId,
@@ -458,6 +1549,20 @@ class ChatHandler {
     } catch (error) {
       console.error("❌ Erreur déconnexion:", error);
     }
+
+    // ✅ BROADCASTER LES MISES À JOUR DE PRÉSENCE
+    if (this.roomManager && socket.userId) {
+      const userRooms = await this.roomManager.getUserRooms(socket.userId);
+
+      for (const roomName of userRooms) {
+        if (roomName.startsWith("conv_")) {
+          setTimeout(() => {
+            this.roomManager.broadcastPresenceUpdate(roomName);
+          }, 500);
+        }
+      }
+    }
+
   }
 
   // ✅ SYNC REDIS - Via OnlineUserManager UNIQUEMENT

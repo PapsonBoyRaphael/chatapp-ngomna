@@ -1,146 +1,344 @@
 /**
- * CachedConversationRepository - Pattern Repository avec cache Redis
- * ✅ UNIFIÉE : Utilise RoomManager comme source unique pour conversations
- * Gère la cohérence entre MongoDB et Redis
+ * CachedConversationRepository - Repository pattern avec cache Redis
+ * ✅ SEUL RESPONSABLE du cache des conversations
+ * ✅ OPTIMISÉ : Cache stratégique intelligent
  */
 class CachedConversationRepository {
-  constructor(conversationRepository, cacheService, roomManager = null) {
-    this.primaryStore = conversationRepository; // MongoDB
-    this.cache = cacheService; // Redis basique
-    this.roomManager = roomManager; // ✅ Source unique temps-réel
+  constructor(conversationRepository, cacheService) {
+    this.primaryStore = conversationRepository;
+    this.cache = cacheService;
+    this.redis = cacheService?.redis || null;
 
-    this.defaultTTL = 3600;
-    this.shortTTL = 300;
+    // ✅ Configuration cache optimisée
+    this.defaultTTL = 3600; // 1 heure
+    this.shortTTL = 300; // 5 minutes
+    this.quickTTL = 60; // 1 minute pour quick load
+    this.listTTL = 600; // 10 minutes pour listes
+
+    this.cacheKeyPrefix = "chat:convs";
   }
 
-  // ===== SAUVEGARDER UNE CONVERSATION =====
-  /**
-   * ✅ MongoDB + Initialiser dans RoomManager
-   */
+  // ===== LIRE LES CONVERSATIONS D'UN UTILISATEUR (CACHE INTELLIGENT) =====
+  async findByParticipant(userId, options = {}) {
+    const {
+      page = 1,
+      limit = 20,
+      cursor = null,
+      includeArchived = false,
+      useCache = true,
+    } = options;
+
+    try {
+      // ✅ STRATÉGIE CACHE DIFFÉRENCIÉE
+      let cacheKey = null;
+      let ttl = this.shortTTL;
+
+      if (useCache && this.cache) {
+        if (cursor) {
+          // Pagination avec cursor - cache court
+          cacheKey = `${this.cacheKeyPrefix}:user:${userId}:cursor:${cursor}:${limit}`;
+          ttl = this.shortTTL;
+        } else if (page === 1) {
+          // Première page - cache long
+          cacheKey = `${this.cacheKeyPrefix}:user:${userId}:first:${limit}`;
+          ttl = this.listTTL;
+        } else {
+          // Autres pages - cache moyen
+          cacheKey = `${this.cacheKeyPrefix}:user:${userId}:p${page}:${limit}`;
+          ttl = this.shortTTL;
+        }
+
+        // ✅ VÉRIFIER LE CACHE
+        const cached = await this.cache.get(cacheKey);
+        if (cached) {
+          console.log(`📦 Conversations depuis cache: ${userId} (${cacheKey})`);
+
+          // ✅ RENOUVELER TTL SUR HIT
+          await this.cache.renewTTL(cacheKey, ttl);
+
+          return {
+            ...cached,
+            fromCache: true,
+          };
+        }
+      }
+
+      // ✅ CACHE MISS → MongoDB
+      console.log(
+        `🔍 Conversations depuis MongoDB: ${userId} ${
+          cursor ? `(cursor: ${cursor})` : `(page: ${page})`
+        }`
+      );
+
+      const result = await this.primaryStore.findByParticipant(userId, {
+        page,
+        limit,
+        cursor,
+        includeArchived,
+        useCache: false,
+      });
+
+      // ✅ METTRE EN CACHE SELON LA STRATÉGIE
+      if (
+        useCache &&
+        this.cache &&
+        cacheKey &&
+        result.conversations?.length > 0
+      ) {
+        await this.cache.set(cacheKey, result, ttl);
+        console.log(
+          `💾 Conversations mises en cache: ${result.conversations.length} (TTL: ${ttl}s)`
+        );
+      }
+
+      return {
+        ...result,
+        fromCache: false,
+      };
+    } catch (error) {
+      console.error("❌ Erreur findByParticipant:", error.message);
+
+      // ✅ FALLBACK SANS CACHE
+      const result = await this.primaryStore.findByParticipant(userId, {
+        page: 1,
+        limit: 20,
+        includeArchived: false,
+      });
+
+      return {
+        ...result,
+        fromCache: false,
+      };
+    }
+  }
+
+  // ===== RÉCUPÉRER LES CONVERSATIONS RAPIDES (POUR QUICK LOAD) =====
+  async getQuickConversations(userId, limit = 10) {
+    try {
+      const quickCacheKey = `${this.cacheKeyPrefix}:quick:${userId}:${limit}`;
+
+      // ✅ CACHE QUICK (très court TTL)
+      if (this.cache) {
+        const cached = await this.cache.get(quickCacheKey);
+        if (cached) {
+          console.log(`⚡ Quick conversations depuis cache: ${userId}`);
+          return {
+            ...cached,
+            fromCache: true,
+            isQuick: true,
+          };
+        }
+      }
+
+      // ✅ CACHE MISS → MongoDB
+      console.log(`⚡ Quick conversations depuis MongoDB: ${userId}`);
+
+      const result = await this.primaryStore.findByParticipant(userId, {
+        page: 1,
+        limit,
+        useCache: false,
+      });
+
+      const quickData = {
+        conversations: result.conversations || [],
+        totalUnreadMessages: result.totalUnreadMessages || 0,
+        unreadConversations: result.unreadConversations || 0,
+      };
+
+      // ✅ METTRE EN CACHE QUICK (TTL court)
+      if (this.cache && quickData.conversations.length > 0) {
+        await this.cache.set(quickCacheKey, quickData, this.quickTTL);
+        console.log(
+          `⚡ Quick conversations mises en cache: ${quickData.conversations.length} (${this.quickTTL}s)`
+        );
+      }
+
+      return {
+        ...quickData,
+        fromCache: false,
+        isQuick: true,
+      };
+    } catch (error) {
+      console.error("❌ Erreur getQuickConversations:", error.message);
+
+      // Fallback
+      const result = await this.primaryStore.findByParticipant(userId, {
+        page: 1,
+        limit: 10,
+      });
+
+      return {
+        conversations: result.conversations || [],
+        totalUnreadMessages: 0,
+        unreadConversations: 0,
+        fromCache: false,
+        isQuick: true,
+      };
+    }
+  }
+
+  // ===== RÉCUPÉRER UNE CONVERSATION SPÉCIFIQUE =====
+  async findById(conversationId, options = {}) {
+    const { useCache = true } = options;
+
+    try {
+      let cacheKey = null;
+
+      if (useCache && this.cache) {
+        cacheKey = `${this.cacheKeyPrefix}:id:${conversationId}`;
+
+        const cached = await this.cache.get(cacheKey);
+        if (cached) {
+          console.log(`📦 Conversation depuis cache: ${conversationId}`);
+
+          // ✅ RENOUVELER TTL
+          await this.cache.renewTTL(cacheKey, this.defaultTTL);
+
+          return {
+            conversation: cached,
+            fromCache: true,
+          };
+        }
+      }
+
+      // ✅ CACHE MISS → MongoDB
+      console.log(`🔍 Conversation depuis MongoDB: ${conversationId}`);
+
+      const conversation = await this.primaryStore.findById(conversationId);
+
+      if (!conversation) {
+        throw new Error(`Conversation ${conversationId} non trouvée`);
+      }
+
+      // ✅ METTRE EN CACHE
+      if (useCache && this.cache && cacheKey) {
+        await this.cache.set(cacheKey, conversation, this.defaultTTL);
+        console.log(`💾 Conversation mise en cache: ${conversationId}`);
+      }
+
+      return {
+        conversation,
+        fromCache: false,
+      };
+    } catch (error) {
+      console.error("❌ Erreur findById conversation:", error.message);
+      throw error;
+    }
+  }
+
+  // ===== SAUVEGARDER UNE CONVERSATION (avec invalidation intelligente) =====
   async save(conversationData) {
     try {
-      // 1. Sauvegarder dans MongoDB
+      const startTime = Date.now();
+
+      // 1. ✅ SAUVEGARDE MongoDB
       const savedConversation = await this.primaryStore.save(conversationData);
 
       if (!savedConversation) {
         throw new Error("Conversation not saved");
       }
 
-      // 2. ✅ INITIALISER DANS ROOM MANAGER (source unique)
-      if (this.roomManager) {
-        await this.roomManager.initializeConversationRoom(savedConversation);
-      }
+      // 2. ✅ INVALIDATION CACHE INTELLIGENTE
+      await this.invalidateConversationCaches(savedConversation._id, {
+        isNewConversation: true,
+        participants: savedConversation.participants,
+      });
 
-      // 3. Invalider les caches de liste
-      await this.invalidateListCaches();
+      const processingTime = Date.now() - startTime;
+      console.log(
+        `✅ Conversation sauvegardée avec cache: ${savedConversation._id} (${processingTime}ms)`
+      );
 
-      console.log(`✅ Conversation sauvegardée: ${savedConversation._id}`);
       return savedConversation;
     } catch (error) {
-      console.error("❌ Erreur save:", error.message);
+      console.error("❌ Erreur save conversation (cached):", error.message);
       throw error;
     }
   }
 
-  // ===== RÉCUPÉRER UNE CONVERSATION =====
-  /**
-   * ✅ Stratégie :
-   * 1. Si RoomManager existe → données complètes + temps-réel
-   * 2. Sinon → MongoDB + créer room
-   */
-  async findById(conversationId) {
-    try {
-      // 1. ✅ D'ABORD RoomManager (données unifiées)
-      if (this.roomManager) {
-        const roomData = await this.roomManager.getConversationData(
-          conversationId
-        );
+  // ===== INVALIDATION CACHE INTELLIGENTE =====
+  async invalidateConversationCaches(conversationId, options = {}) {
+    if (!this.cache) return;
 
-        if (roomData) {
-          console.log(`📦 Conversation depuis RoomManager: ${conversationId}`);
-          return roomData;
+    const { isNewConversation = false, participants = [] } = options;
+
+    try {
+      // ✅ PATTERNS D'INVALIDATION CIBLÉS
+      const patterns = [
+        // Conversation spécifique
+        `${this.cacheKeyPrefix}:id:${conversationId}`,
+      ];
+
+      // ✅ INVALIDER POUR TOUS LES PARTICIPANTS
+      for (const participantId of participants) {
+        patterns.push(
+          // Listes utilisateur
+          `${this.cacheKeyPrefix}:user:${participantId}:*`,
+          // Quick loads
+          `${this.cacheKeyPrefix}:quick:${participantId}:*`
+        );
+      }
+
+      let invalidated = 0;
+      for (const pattern of patterns) {
+        try {
+          const deleted = await this.cache.delete(pattern);
+          if (deleted > 0) {
+            invalidated += deleted;
+            console.log(
+              `🗑️ Cache conversation invalidé: ${pattern} (${deleted} clés)`
+            );
+          }
+        } catch (error) {
+          console.warn(`⚠️ Erreur invalidation ${pattern}:`, error.message);
         }
       }
 
-      // 2. FALLBACK → MongoDB
-      console.log(`🔍 Room n'existe pas → MongoDB: ${conversationId}`);
-      const mongoData = await this.primaryStore.findById(conversationId);
-
-      if (mongoData && this.roomManager) {
-        // 3. Créer la room pour synchroniser
-        await this.roomManager.initializeConversationRoom(mongoData);
-      }
-
-      return mongoData;
-    } catch (error) {
-      console.error("❌ Erreur findById:", error.message);
-      throw error;
-    }
-  }
-
-  // ===== RÉCUPÉRER LES CONVERSATIONS D'UN UTILISATEUR =====
-  /**
-   * ✅ Utiliser cache CacheService (liste changue rarement)
-   */
-  async findByParticipant(userId, options = {}) {
-    const cacheKey = `conversations:${userId}`;
-
-    try {
-      // 1. Vérifier le cache
-      let cached = await this.cache.get(cacheKey);
-      if (cached) {
-        console.log(`📦 Conversations depuis cache: ${userId}`);
-        return cached;
-      }
-
-      // 2. MongoDB
-      console.log(`🔍 Lectures conversations: ${userId}`);
-      const conversations = await this.primaryStore.findByParticipant(
-        userId,
-        options
-      );
-
-      // 3. Mettre en cache
-      if (conversations.length > 0) {
-        await this.cache.set(cacheKey, conversations, this.shortTTL);
-      }
-
-      return conversations;
-    } catch (error) {
-      console.error("❌ Erreur findByParticipant:", error.message);
-      throw error;
-    }
-  }
-
-  // ===== METTRE À JOUR UNE CONVERSATION =====
-  /**
-   * ✅ MongoDB + Synchroniser RoomManager
-   */
-  async update(conversationId, updateData) {
-    try {
-      // 1. Mettre à jour MongoDB
-      const result = await this.primaryStore.update(conversationId, updateData);
-
-      // 2. Synchroniser RoomManager
-      if (this.roomManager && result) {
-        await this.roomManager.updateConversationMetadata(
-          conversationId,
-          updateData
+      if (invalidated > 0) {
+        console.log(
+          `🗑️ Total cache conversation invalidé: ${invalidated} clé(s) pour ${conversationId}`
         );
       }
 
-      // 3. Invalider les caches
-      await this.invalidateConversationCaches(conversationId);
+      // ✅ INVALIDATION PROACTIVE (pré-charger)
+      if (isNewConversation && this.cache) {
+        setImmediate(async () => {
+          try {
+            console.log(
+              `🔄 Pré-chargement cache conversations pour participants: ${participants.join(
+                ", "
+              )}`
+            );
 
-      console.log(`✅ Conversation mise à jour: ${conversationId}`);
-      return result;
+            // Pré-charger pour chaque participant
+            for (const participantId of participants) {
+              try {
+                await this.getQuickConversations(participantId, 10);
+              } catch (preloadError) {
+                console.warn(
+                  `⚠️ Erreur pré-chargement ${participantId}:`,
+                  preloadError.message
+                );
+              }
+            }
+          } catch (preloadError) {
+            console.warn(
+              "⚠️ Erreur pré-chargement conversations:",
+              preloadError.message
+            );
+          }
+        });
+      }
     } catch (error) {
-      console.error("❌ Erreur update:", error.message);
-      throw error;
+      console.error(
+        "❌ Erreur invalidation cache conversations:",
+        error.message
+      );
     }
   }
 
-  // ===== METTRE À JOUR LE DERNIER MESSAGE =====
+  // ===== AUTRES MÉTHODES (déléguées au primaryStore) =====
+
   async updateLastMessage(conversationId, messageData) {
     try {
       const result = await this.primaryStore.updateLastMessage(
@@ -148,14 +346,12 @@ class CachedConversationRepository {
         messageData
       );
 
-      if (this.roomManager && result) {
-        await this.roomManager.updateConversationMetadata(conversationId, {
-          lastMessage: messageData,
-          updatedAt: new Date(),
+      if (result) {
+        // Invalider le cache de cette conversation
+        await this.invalidateConversationCaches(conversationId, {
+          participants: result.participants || [],
         });
       }
-
-      await this.invalidateConversationCaches(conversationId);
 
       return result;
     } catch (error) {
@@ -164,106 +360,6 @@ class CachedConversationRepository {
     }
   }
 
-  // ===== AJOUTER UN PARTICIPANT =====
-  /**
-   * ✅ Ajouter en MongoDB + Ajouter à la room temps-réel
-   */
-  async addParticipant(conversationId, userData) {
-    try {
-      // 1. Ajouter dans MongoDB
-      const result = await this.primaryStore.addParticipant(
-        conversationId,
-        userData
-      );
-
-      if (this.roomManager && result) {
-        const roomName = `conv_${conversationId}`;
-
-        // 2. Ajouter à la room temps-réel
-        await this.roomManager.addUserToRoom(roomName, userData.userId, {
-          matricule: userData.matricule,
-          conversationId: conversationId,
-        });
-
-        // 3. Mettre à jour métadonnées participants
-        const conversation = await this.primaryStore.findById(conversationId);
-        if (conversation) {
-          await this.roomManager.updateConversationMetadata(conversationId, {
-            participants: conversation.participants,
-          });
-        }
-      }
-
-      await this.invalidateConversationCaches(conversationId);
-
-      return result;
-    } catch (error) {
-      console.error("❌ Erreur addParticipant:", error.message);
-      throw error;
-    }
-  }
-
-  // ===== SUPPRIMER UN PARTICIPANT =====
-  /**
-   * ✅ Supprimer de MongoDB + Retirer de la room temps-réel
-   */
-  async removeParticipant(conversationId, userId) {
-    try {
-      // 1. Supprimer de MongoDB
-      const result = await this.primaryStore.removeParticipant(
-        conversationId,
-        userId
-      );
-
-      if (this.roomManager && result) {
-        const roomName = `conv_${conversationId}`;
-
-        // 2. Retirer de la room temps-réel
-        await this.roomManager.removeUserFromRoom(roomName, userId);
-
-        // 3. Mettre à jour métadonnées participants
-        const conversation = await this.primaryStore.findById(conversationId);
-        if (conversation) {
-          await this.roomManager.updateConversationMetadata(conversationId, {
-            participants: conversation.participants,
-          });
-        }
-      }
-
-      await this.invalidateConversationCaches(conversationId);
-
-      return result;
-    } catch (error) {
-      console.error("❌ Erreur removeParticipant:", error.message);
-      throw error;
-    }
-  }
-
-  // ===== ARCHIVER UNE CONVERSATION =====
-  async archiveConversation(conversationId, archiveData) {
-    try {
-      const result = await this.primaryStore.archiveConversation(
-        conversationId,
-        archiveData
-      );
-
-      if (this.roomManager) {
-        await this.roomManager.updateConversationMetadata(conversationId, {
-          archived: true,
-          archivedAt: new Date(),
-        });
-      }
-
-      await this.invalidateConversationCaches(conversationId);
-
-      return result;
-    } catch (error) {
-      console.error("❌ Erreur archiveConversation:", error.message);
-      throw error;
-    }
-  }
-
-  // ===== INCRÉMENTER COMPTEUR UNREAD =====
   async incrementUnreadCountInUserMetadata(conversationId, userId, amount = 1) {
     try {
       const result = await this.primaryStore.incrementUnreadCountInUserMetadata(
@@ -272,15 +368,10 @@ class CachedConversationRepository {
         amount
       );
 
-      if (this.roomManager && result) {
-        const conversation = await this.primaryStore.findById(conversationId);
-        if (conversation) {
-          await this.roomManager.updateConversationMetadata(conversationId, {
-            unreadCounts: conversation.unreadCounts,
-            userMetadata: conversation.userMetadata,
-          });
-        }
-      }
+      // Invalider le cache pour cet utilisateur
+      await this.invalidateConversationCaches(conversationId, {
+        participants: [userId],
+      });
 
       return result;
     } catch (error) {
@@ -292,7 +383,6 @@ class CachedConversationRepository {
     }
   }
 
-  // ===== RÉINITIALISER COMPTEUR UNREAD =====
   async resetUnreadCountInUserMetadata(conversationId, userId) {
     try {
       const result = await this.primaryStore.resetUnreadCountInUserMetadata(
@@ -300,17 +390,10 @@ class CachedConversationRepository {
         userId
       );
 
-      if (this.roomManager && result) {
-        const conversation = await this.primaryStore.findById(conversationId);
-        if (conversation) {
-          await this.roomManager.updateConversationMetadata(conversationId, {
-            unreadCounts: conversation.unreadCounts,
-            userMetadata: conversation.userMetadata,
-          });
-        }
-      }
-
-      await this.invalidateConversationCaches(conversationId);
+      // Invalider le cache pour cet utilisateur
+      await this.invalidateConversationCaches(conversationId, {
+        participants: [userId],
+      });
 
       return result;
     } catch (error) {
@@ -319,45 +402,31 @@ class CachedConversationRepository {
     }
   }
 
-  // ===== INVALIDER LES CACHES =====
-  /**
-   * ✅ SIMPLIFIÉ : Supprimer cache liste + laisser RoomManager comme source
-   */
-  async invalidateConversationCaches(conversationId) {
-    if (!this.cache) return;
+  // ===== RECHERCHE =====
+  async searchConversations(query, options = {}) {
+    const { userId, useCache = false } = options;
 
-    const patterns = [
-      `conversations:*`, // Listes d'utilisateurs
-      `conversation:*`, // Recherches
-    ];
-
-    for (const pattern of patterns) {
-      try {
-        await this.cache.delete(pattern);
-      } catch (error) {
-        console.warn(`⚠️ Erreur invalidation ${pattern}:`, error.message);
-      }
-    }
+    // Pour la recherche, on évite généralement le cache car les résultats peuvent changer
+    return await this.primaryStore.searchConversations(query, {
+      ...options,
+      useCache: false,
+    });
   }
 
-  async invalidateListCaches() {
-    if (!this.cache) return;
-
-    try {
-      await this.cache.delete("conversations:*");
-    } catch (error) {
-      console.warn("⚠️ Erreur invalidation listes:", error.message);
-    }
-  }
-
+  // ===== NETTOYAGE =====
   async clearCache() {
     if (!this.cache) return;
 
     try {
-      await this.cache.delete("conversations:*");
-      console.log("✅ Caches conversations nettoyés");
+      const patterns = [`${this.cacheKeyPrefix}:*`];
+
+      for (const pattern of patterns) {
+        await this.cache.delete(pattern);
+      }
+
+      console.log("✅ Cache conversations complètement nettoyé");
     } catch (error) {
-      console.error("❌ Erreur clearCache:", error.message);
+      console.error("❌ Erreur clearCache conversations:", error.message);
     }
   }
 }
