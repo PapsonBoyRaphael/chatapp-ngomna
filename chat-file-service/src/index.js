@@ -21,6 +21,18 @@ if (!envValidator.validate()) {
 const connectDB = require("./infrastructure/mongodb/connection");
 const redisConfig = require("./infrastructure/redis/redisConfig");
 
+// ✅ SHARED MODULE - Composants partagés
+const {
+  CacheService,
+  OnlineUserManager,
+  RoomManager,
+  UnreadMessageManager,
+  CircuitBreaker,
+  StreamManager,
+  WorkerManager,
+  RedisManager,
+} = require("@chatapp-ngomna/shared");
+
 // Services
 const ThumbnailService = require("./infrastructure/services/ThumbnailService");
 const FileStorageService = require("./infrastructure/services/FileStorageService");
@@ -32,11 +44,7 @@ const CachedMessageRepository = require("./infrastructure/repositories/CachedMes
 const CachedConversationRepository = require("./infrastructure/repositories/CachedConversationRepository");
 const CachedFileRepository = require("./infrastructure/repositories/CachedFileRepository");
 
-// Redis Services
-const CacheService = require("./infrastructure/redis/CacheService");
-const RoomManager = require("./infrastructure/redis/RoomManager");
-const OnlineUserManager = require("./infrastructure/redis/OnlineUserManager");
-const UnreadManager = require("./infrastructure/redis/UnreadMessageManager");
+// Redis Services (locaux uniquement)
 const MessageDeliveryService = require("./infrastructure/services/MessageDeliveryService");
 
 // Use Cases
@@ -113,24 +121,16 @@ const startServer = async () => {
       if (redisConnected) {
         redisClient = redisConfig.getClient();
 
-        // Initialiser CacheService
-        cacheServiceInstance = new CacheService(redisClient, {
+        // ✅ INITIALISER CacheService depuis shared
+        cacheServiceInstance = new CacheService({
           defaultTTL: 3600,
           keyPrefix: "chat",
           maxScanCount: 1000,
         });
-
-        // Initialiser RoomManager
-        roomManager = new RoomManager(redisClient);
-        app.locals.roomManager = roomManager;
-
-        // ✅ INITIALISER OnlineUserManager
-        onlineUserManager = new OnlineUserManager(redisClient, io);
+        await cacheServiceInstance.initializeWithClient(redisClient);
 
         console.log("✅ Services Redis initialisés:");
-        console.log("   ✅ CacheService");
-        console.log("   ✅ RoomManager");
-        console.log("   ✅ OnlineUserManager");
+        console.log("   ✅ CacheService (shared)");
       }
     } catch (error) {
       console.warn("⚠️ Redis non disponible:", error.message);
@@ -186,13 +186,26 @@ const startServer = async () => {
       }
     }
 
-    // Initialiser OnlineUserManager
-    onlineUserManager = new OnlineUserManager(redisClient, io, {
-      keyPrefix: "chat:online",
-      userTTL: 3600,
-      heartbeatInterval: 30000,
-      maxScanCount: 1000,
-    });
+    // ✅ INITIALISER OnlineUserManager depuis shared
+    if (redisClient) {
+      onlineUserManager = new OnlineUserManager(io, {
+        keyPrefix: "chat:online",
+        userTTL: 3600,
+        heartbeatInterval: 30000,
+        maxScanCount: 1000,
+      });
+      await onlineUserManager.initializeWithClient(redisClient);
+      console.log("   ✅ OnlineUserManager (shared)");
+
+      // ✅ INITIALISER RoomManager depuis shared
+      roomManager = new RoomManager(io, {
+        keyPrefix: "chat:rooms",
+        defaultTTL: 86400,
+      });
+      await roomManager.initializeWithClient(redisClient);
+      app.locals.roomManager = roomManager;
+      console.log("   ✅ RoomManager (shared)");
+    }
 
     // ✅ INITIALISER MessageDeliveryService MAINTENANT QUE IO EST CRÉÉ
     let messageDeliveryService = null;

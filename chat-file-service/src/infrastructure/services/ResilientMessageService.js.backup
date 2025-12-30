@@ -5,14 +5,56 @@
  * ✅ Nettoie la mémoire
  * ✅ MULTI-STREAMS PAR TYPE (privé, groupe, typing, etc.)
  * ✅ Un seul point de vérité pour la logique résiliente
- * ✅ UTILISE SHARED MODULE pour CircuitBreaker, StreamManager, WorkerManager
  */
 
-const {
-  CircuitBreaker,
-  StreamManager,
-  WorkerManager,
-} = require("@chatapp-ngomna/shared");
+class CircuitBreaker {
+  constructor(options = {}) {
+    this.failureThreshold = options.failureThreshold || 5;
+    this.resetTimeout = options.resetTimeout || 30000;
+    this.fallback = options.fallback || null;
+
+    this.failureCount = 0;
+    this.lastFailureTime = null;
+    this.state = "CLOSED";
+  }
+
+  async execute(operation) {
+    if (this.state === "OPEN") {
+      if (Date.now() - this.lastFailureTime > this.resetTimeout) {
+        this.state = "HALF_OPEN";
+      } else {
+        if (this.fallback) {
+          console.warn("⚠️ Circuit ouvert, utilisation du fallback");
+          return await this.fallback();
+        }
+        throw new Error("Circuit breaker ouvert");
+      }
+    }
+
+    try {
+      const result = await operation();
+
+      if (this.state === "HALF_OPEN") {
+        this.state = "CLOSED";
+        this.failureCount = 0;
+      }
+
+      return result;
+    } catch (error) {
+      this.failureCount++;
+      this.lastFailureTime = Date.now();
+
+      if (this.failureCount >= this.failureThreshold) {
+        this.state = "OPEN";
+        console.error(
+          `❌ Circuit breaker ouvert après ${this.failureCount} échecs`
+        );
+      }
+
+      throw error;
+    }
+  }
+}
 
 class ResilientMessageService {
   constructor(
@@ -28,7 +70,6 @@ class ResilientMessageService {
     this.mongoConversationRepository = mongoConversationRepository;
     this.io = io;
 
-    // ✅ UTILISER CircuitBreaker du shared
     this.circuitBreaker = new CircuitBreaker({
       failureThreshold: 5,
       resetTimeout: 30000,
