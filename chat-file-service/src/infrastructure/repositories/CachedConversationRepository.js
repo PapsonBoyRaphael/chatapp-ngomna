@@ -9,6 +9,18 @@ class CachedConversationRepository {
     this.cache = cacheService;
     this.redis = cacheService?.redis || null;
 
+    // ✅ VÉRIFICATION DU CACHE
+    if (!this.cache) {
+      console.warn(
+        "⚠️ CachedConversationRepository: cacheService est null - CACHE DÉSACTIVÉ"
+      );
+      console.warn(
+        "   Cela signifie que chaque conversation sera récupérée depuis MongoDB"
+      );
+    } else {
+      console.log("✅ CachedConversationRepository: Cache activé");
+    }
+
     // ✅ Configuration cache optimisée
     this.defaultTTL = 3600; // 1 heure
     this.shortTTL = 300; // 5 minutes
@@ -184,23 +196,33 @@ class CachedConversationRepository {
     try {
       let cacheKey = null;
 
+      // ✅ ÉTAPE 1 : VÉRIFIER LE CACHE
       if (useCache && this.cache) {
         cacheKey = `${this.cacheKeyPrefix}:id:${conversationId}`;
+        console.log(`🔍 Vérification cache pour: ${conversationId}`);
 
         const cached = await this.cache.get(cacheKey);
         if (cached) {
-          console.log(`📦 Conversation depuis cache: ${conversationId}`);
+          console.log(`📦 ✅ HIT CACHE: Conversation trouvée en cache`);
 
           // ✅ RENOUVELER TTL
           await this.cache.renewTTL(cacheKey, this.defaultTTL);
 
           // ✅ RETOURNER DIRECTEMENT LA CONVERSATION (pas de wrapper)
           return cached;
+        } else {
+          console.log(`📦 ❌ MISS CACHE: Conversation non en cache`);
+        }
+      } else {
+        if (!useCache) {
+          console.log(`⏭️ Cache désactivé pour cette requête (useCache=false)`);
+        } else {
+          console.log(`⚠️ Cache non disponible (this.cache est null)`);
         }
       }
 
-      // ✅ CACHE MISS → MongoDB
-      console.log(`🔍 Conversation depuis MongoDB: ${conversationId}`);
+      // ✅ ÉTAPE 2 : CACHE MISS → MONGODB
+      console.log(`🔍 Récupération depuis MongoDB: ${conversationId}`);
 
       const conversation = await this.primaryStore.findById(conversationId);
 
@@ -208,10 +230,17 @@ class CachedConversationRepository {
         throw new Error(`Conversation ${conversationId} non trouvée`);
       }
 
-      // ✅ METTRE EN CACHE
+      // ✅ ÉTAPE 3 : METTRE EN CACHE
       if (useCache && this.cache && cacheKey) {
-        await this.cache.set(cacheKey, conversation, this.defaultTTL);
-        console.log(`💾 Conversation mise en cache: ${conversationId}`);
+        try {
+          await this.cache.set(cacheKey, conversation, this.defaultTTL);
+          console.log(
+            `💾 ✅ Conversation mise en cache (TTL: ${this.defaultTTL}s)`
+          );
+        } catch (cacheError) {
+          console.warn(`⚠️ Erreur mise en cache:`, cacheError.message);
+          // Continue même si le cache échoue - on retourne quand même la conversation
+        }
       }
 
       // ✅ RETOURNER DIRECTEMENT LA CONVERSATION (pas de wrapper)
@@ -238,6 +267,7 @@ class CachedConversationRepository {
       await this.invalidateConversationCaches(savedConversation._id, {
         isNewConversation: true,
         participants: savedConversation.participants,
+        invalidateConversation: true, // Invalider car c'est une nouvelle conversation
       });
 
       const processingTime = Date.now() - startTime;
@@ -256,14 +286,23 @@ class CachedConversationRepository {
   async invalidateConversationCaches(conversationId, options = {}) {
     if (!this.cache) return;
 
-    const { isNewConversation = false, participants = [] } = options;
+    const {
+      isNewConversation = false,
+      participants = [],
+      invalidateConversation = false,
+    } = options;
 
     try {
       // ✅ PATTERNS D'INVALIDATION CIBLÉS
-      const patterns = [
-        // Conversation spécifique
-        `${this.cacheKeyPrefix}:id:${conversationId}`,
-      ];
+      const patterns = [];
+
+      // ✅ INVALIDER LA CONVERSATION SEULEMENT SI EXPLICITEMENT DEMANDÉ
+      if (invalidateConversation) {
+        patterns.push(
+          // Conversation spécifique
+          `${this.cacheKeyPrefix}:id:${conversationId}`
+        );
+      }
 
       // ✅ INVALIDER POUR TOUS LES PARTICIPANTS
       for (const participantId of participants) {
@@ -343,10 +382,10 @@ class CachedConversationRepository {
       );
 
       if (result) {
-        // Invalider le cache de cette conversation
-        await this.invalidateConversationCaches(conversationId, {
-          participants: result.participants || [],
-        });
+        // ✅ NE PAS invalider le cache de conversation (chat:convs:id:${conversationId})
+        // Raison: La conversation reste valide, seul le lastMessage change
+        // CachedMessageRepository gère l'invalidation des caches de messages
+        console.log(`🔄 Derniers messages mis à jour: ${conversationId}`);
       }
 
       return result;

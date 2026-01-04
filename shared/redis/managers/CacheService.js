@@ -78,12 +78,30 @@ class CacheService {
 
   // ✅ CACHE BASIQUE
   async get(key) {
-    if (!this.redis) return null;
+    if (!this.redis) {
+      console.warn("⚠️ Cache get: Redis n'est pas disponible");
+      return null;
+    }
 
     try {
       const cacheKey = `${this.options.keyPrefix}:${this.sanitizeKey(key)}`;
       const value = await this.redis.get(cacheKey);
-      return value ? JSON.parse(value) : null;
+
+      if (!value) {
+        return null;
+      }
+
+      try {
+        return JSON.parse(value);
+      } catch (parseErr) {
+        console.error(
+          `❌ Erreur parsing JSON en cache pour clé '${cacheKey}':`,
+          parseErr.message
+        );
+        // Supprimer la clé corrompue
+        await this.redis.del(cacheKey);
+        return null;
+      }
     } catch (err) {
       console.warn("⚠️ Cache get error:", err.message);
       return null;
@@ -91,11 +109,26 @@ class CacheService {
   }
 
   async set(key, value, ttl = this.options.defaultTTL) {
-    if (!this.redis) return false;
+    if (!this.redis) {
+      console.warn("⚠️ Cache set: Redis n'est pas disponible");
+      return false;
+    }
 
     try {
       const cacheKey = `${this.options.keyPrefix}:${this.sanitizeKey(key)}`;
-      await this.redis.setEx(cacheKey, ttl, JSON.stringify(value));
+
+      let jsonValue;
+      try {
+        jsonValue = JSON.stringify(value);
+      } catch (stringifyErr) {
+        console.error(
+          `❌ Erreur stringify JSON pour clé '${cacheKey}':`,
+          stringifyErr.message
+        );
+        return false;
+      }
+
+      await this.redis.setEx(cacheKey, ttl, jsonValue);
       return true;
     } catch (err) {
       console.warn("⚠️ Cache set error:", err.message);

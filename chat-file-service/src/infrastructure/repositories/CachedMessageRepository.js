@@ -231,15 +231,18 @@ class CachedMessageRepository {
 
     try {
       // ✅ PATTERNS D'INVALIDATION CIBLÉS
+      // NOTE: On N'invalide PAS la clé `chat:convs:id:${conversationId}`
+      // car elle est gérée par CachedConversationRepository
       const patterns = [
-        // Messages paginés
+        // Messages paginés UNIQUEMENT
         `${this.cacheKeyPrefix}:${conversationId}:*`,
-        // Quick load
+        // Quick load messages UNIQUEMENT
         `${this.cacheKeyPrefix}:quick:${conversationId}:*`,
-        // Derniers messages classiques
+        // Derniers messages classiques UNIQUEMENT
         `chat:last_messages:${conversationId}`,
-        // Métadonnées conversation
-        `chat:conversation:${conversationId}*`,
+        // ❌ SUPPRIMÉ: `chat:conversation:${conversationId}*`
+        // Raison: Cela invalide aussi `chat:convs:id:${conversationId}` de CachedConversationRepository
+        // Les conversations doivent rester en cache après la sauvegarde d'un message
       ];
 
       let invalidated = 0;
@@ -248,7 +251,9 @@ class CachedMessageRepository {
           const deleted = await this.cache.delete(pattern);
           if (deleted > 0) {
             invalidated += deleted;
-            console.log(`🗑️ Cache invalidé: ${pattern} (${deleted} clés)`);
+            console.log(
+              `🗑️ Cache invalidé (messages): ${pattern} (${deleted} clés)`
+            );
           }
         } catch (error) {
           console.warn(`⚠️ Erreur invalidation ${pattern}:`, error.message);
