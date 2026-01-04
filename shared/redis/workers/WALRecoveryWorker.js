@@ -113,17 +113,10 @@ class WALRecoveryWorker {
             this.metrics.checked++;
 
             // Vérifier si le message existe
-            let messageExists = false;
-            if (this.findMessageCallback) {
-              try {
-                const existingMessage = await this.findMessageCallback(
-                  walData.messageId
-                );
-                messageExists = !!existingMessage;
-              } catch (e) {
-                messageExists = false;
-              }
-            }
+            const existingMessage = await this.findMessageCallback(
+              walData.messageId
+            ).catch(() => null);
+            const messageExists = !!existingMessage;
 
             if (messageExists) {
               console.log(`✅ Message retrouvé: ${walData.messageId}`);

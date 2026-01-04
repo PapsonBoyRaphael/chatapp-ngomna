@@ -37,40 +37,23 @@ class ResilientMessageService {
 
     this.maxRetries = 5;
 
-    // ✅ STREAMS CONFIGURATION - RÉSILIENCE
-    this.STREAMS = {
-      WAL: "wal:stream",
-      RETRY: "retry:stream",
-      DLQ: "dlq:stream",
-      FALLBACK: "fallback:stream",
-      MESSAGES: "messages:stream",
-    };
+    // ✅ NOUVEAU : Instancier StreamManager (remplace les configs dupliquées)
+    try {
+      this.streamManager = new StreamManager(this.redis, {
+        // Options personnalisées si besoin, sinon defaults du partagé
+      });
+      console.log("✅ StreamManager instancié avec succès");
+    } catch (err) {
+      console.error("❌ Erreur instanciation StreamManager:", err.message);
+      throw err;
+    }
 
-    // ✅ NOUVEAU : MULTI-STREAMS PAR TYPE
-    this.MULTI_STREAMS = {
-      PRIVATE: "stream:messages:private",
-      GROUP: "stream:messages:group",
-      TYPING: "stream:events:typing",
-      READ_RECEIPTS: "stream:events:read",
-      NOTIFICATIONS: "stream:messages:system",
-    };
+    // ✅ Utiliser les configs de StreamManager au lieu de les dupliquer
+    this.STREAMS = this.streamManager.STREAMS;
+    this.MULTI_STREAMS = this.streamManager.MULTI_STREAMS;
+    this.STREAM_MAXLEN = this.streamManager.STREAM_MAXLEN;
 
-    // ✅ CONFIGURATION SIMPLE DES TAILLES
-    this.STREAM_MAXLEN = {
-      [this.STREAMS.MESSAGES]: 5000,
-      [this.STREAMS.RETRY]: 5000,
-      [this.STREAMS.WAL]: 10000,
-      [this.STREAMS.FALLBACK]: 5000,
-      [this.STREAMS.DLQ]: 1000,
-      // Multi-streams
-      [this.MULTI_STREAMS.PRIVATE]: 10000,
-      [this.MULTI_STREAMS.GROUP]: 20000,
-      [this.MULTI_STREAMS.TYPING]: 2000,
-      [this.MULTI_STREAMS.READ_RECEIPTS]: 5000,
-      [this.MULTI_STREAMS.NOTIFICATIONS]: 2000,
-    };
-
-    // ✅ MÉTRIQUES
+    // ✅ MÉTRIQUES (garder les spécifiques au service)
     this.metrics = {
       totalMessages: 0,
       successfulSaves: 0,
@@ -89,109 +72,169 @@ class ResilientMessageService {
     this.memoryLimitMB = parseInt(process.env.REDIS_MEMORY_LIMIT_MB) || 512;
     this.memoryWarningThreshold = 0.8;
 
-    this.workers = {
-      retryWorker: null,
-      fallbackWorker: null,
-      walRecoveryWorker: null,
-      dlqMonitor: null,
-    };
-
     this.isRunning = false;
     this.batchSize = 10;
     this.processingDelayMs = 1000;
     this.consumerGroupsInitialized = false;
 
-    if (this.redis) {
-      this.startMemoryMonitor();
-      this.startMetricsReporting();
-      this.startStreamMonitoring();
+    // ✅ NOUVEAU : Instancier WorkerManager pour orchestrer les workers
+    try {
+      this.workerManager = new WorkerManager(this.streamManager, this.redis, {
+        maxRetries: this.maxRetries,
+        batchSize: this.batchSize,
+      });
+      console.log("✅ WorkerManager instancié avec succès");
+    } catch (err) {
+      console.error("❌ Erreur instanciation WorkerManager:", err.message);
+      throw err;
     }
 
+    // ✅ Les workers seront initialisés explicitement depuis index.js
+
     console.log(
-      "✅ ResilientMessageService initialisé (Auto-trim Redis MAXLEN + Multi-Streams)"
+      "✅ ResilientMessageService initialisé (Intégration shared + StreamManager + WorkerManager)"
     );
   }
 
-  // ===== DETECTION REDIS CLIENT =====
-
-  isIoRedis() {
-    if (!this.redis) return false;
-    if (typeof this.redis.getBuiltinCommands === "function") return true;
-    if (this.redis.status !== undefined) return true;
-    return false;
-  }
-
-  // ===== WRAPPER UNIVERSEL - LA CLEF ! =====
-
-  /**
-   * ✅ AJOUTER À UN STREAM AVEC MAXLEN APPLIQUÉ IMMÉDIATEMENT
-   * Redis gère le trim automatiquement à chaque écriture
-   */
-  async addToStream(streamName, fields) {
-    if (!this.redis) return null;
-
+  // ✅ INITIALISER LES WORKERS AVEC CALLBACKS PERSONNALISÉS
+  initializeResilienceWorkers(customCallbacks = {}) {
     try {
-      // ✅ NORMALISER LES CHAMPS - TOUS LES CHAMPS DOIVENT ÊTRE DES CHAÎNES
-      const normalizedFields = {};
-
-      for (const [key, value] of Object.entries(fields || {})) {
-        let stringValue = "";
-
-        if (value === null || value === undefined) {
-          stringValue = "";
-        } else if (typeof value === "string") {
-          stringValue = value;
-        } else if (typeof value === "object") {
-          stringValue = JSON.stringify(value);
-        } else {
-          stringValue = String(value);
-        }
-
-        normalizedFields[key] = stringValue;
+      if (!this.workerManager) {
+        throw new Error("WorkerManager n'est pas initialisé");
       }
 
-      // ✅ VÉRIFIER QUE LES CHAMPS CRITIQUES NE SONT PAS VIDES
-      if (
-        normalizedFields.data === "" ||
-        normalizedFields.data === "undefined"
-      ) {
-        console.warn(
-          `⚠️ ATTENTION: Champ 'data' vide ou undefined dans ${streamName}`,
-          { fields: Object.keys(fields) }
-        );
-      }
+      const defaultCallbacks = {
+        save: this.saveMessage.bind(this),
+        publish: this.publishMessage.bind(this),
+        dlq: this.addToDLQ.bind(this),
+        notify: this.notify.bind(this),
+        findMessage: this.findMessageById.bind(this),
+        alert: this.alertCallback.bind(this),
+      };
 
-      // ✅ ÉCRIRE DANS LE STREAM
-      const streamId = await this.redis.xAdd(streamName, "*", normalizedFields);
+      const callbacks = { ...defaultCallbacks, ...customCallbacks };
 
-      // ✅ TRIMMER LE STREAM APRÈS (ne pas ralentir la rédaction)
-      const maxLen = this.STREAM_MAXLEN[streamName];
-      if (maxLen !== undefined) {
-        try {
-          this.redis.xTrim(streamName, "~", maxLen).catch(() => {
-            // Ignorer les erreurs de trim
-          });
-        } catch (trimErr) {
-          // Ignorer
-        }
-      }
-
-      return streamId;
-    } catch (err) {
-      console.warn(`⚠️ Erreur addToStream ${streamName}:`, err.message);
-      try {
-        const normalizedFields = {};
-        for (const [key, value] of Object.entries(fields || {})) {
-          normalizedFields[key] = String(
-            value === null || value === undefined ? "" : value
+      // Vérifier que tous les callbacks sont des fonctions
+      for (const [key, callback] of Object.entries(callbacks)) {
+        if (typeof callback !== "function") {
+          console.warn(
+            `⚠️ Callback '${key}' n'est pas une fonction:`,
+            typeof callback
           );
         }
-        return await this.redis.xAdd(streamName, "*", normalizedFields);
-      } catch (finalErr) {
-        console.error(`❌ xAdd échoué:`, finalErr.message);
-        return null;
       }
+
+      this.workerManager.initialize(callbacks);
+      console.log("✅ Callbacks des workers de résilience initialisés");
+    } catch (error) {
+      console.error(
+        "❌ Erreur initialisation callbacks workers:",
+        error.message
+      );
+      throw error;
     }
+  }
+
+  // ✅ DÉMARRER TOUS LES WORKERS VIA WORKERMANAGER
+  startAllWorkers() {
+    if (this.isRunning) {
+      console.warn("⚠️ Workers déjà en cours");
+      return;
+    }
+
+    try {
+      this.workerManager.startAll();
+      this.isRunning = true;
+      console.log(
+        "✅ Tous les workers de résilience démarrés via WorkerManager"
+      );
+    } catch (error) {
+      console.error("❌ Erreur démarrage workers:", error.message);
+      throw error;
+    }
+  }
+
+  // ✅ OBTENIR LES MÉTRIQUES DES WORKERS
+  getWorkerMetrics() {
+    if (!this.workerManager) return null;
+    return this.workerManager.getAllMetrics
+      ? this.workerManager.getAllMetrics()
+      : {};
+  }
+
+  // ✅ OBTENIR LE STATUT DE SANTÉ DES WORKERS
+  getHealthStatus() {
+    if (!this.workerManager) return null;
+    return this.workerManager.getHealthStatus
+      ? this.workerManager.getHealthStatus()
+      : {};
+  }
+
+  // ✅ STUB METHODS POUR LES CALLBACKS (à adapter à votre logique)
+  async saveMessage(messageData) {
+    return this.messageRepository.save(messageData);
+  }
+
+  async publishMessage(messageData) {
+    return this.publishToMessageStream(messageData);
+  }
+
+  async notify(message) {
+    if (this.io) {
+      this.io.emit("notification", message);
+    }
+  }
+
+  async findMessageById(messageId) {
+    return this.messageRepository.findById(messageId);
+  }
+
+  async alertCallback(alert) {
+    console.warn("⚠️ Alert:", alert);
+  }
+
+  // ===== WRAPPER UNIVERSEL - DÉLÉGUÉ À STREAMMANAGER =====
+
+  /**
+   * ✅ AJOUTER À UN STREAM - DÉLÉGUÉ À STREAMMANAGER
+   * StreamManager gère la normalisation, trimming et erreurs
+   */
+  async addToStream(streamName, fields) {
+    return this.streamManager.addToStream(streamName, fields);
+  }
+
+  /**
+   * ✅ LIRE DEPUIS UN STREAM - DÉLÉGUÉ À STREAMMANAGER
+   */
+  async readFromStream(streamName, options = {}) {
+    const messages = await this.streamManager.readFromStream(
+      streamName,
+      options
+    );
+    return messages.map((entry) =>
+      this.streamManager.parseStreamMessage(entry)
+    );
+  }
+
+  /**
+   * ✅ SUPPRIMER DU STREAM - DÉLÉGUÉ À STREAMMANAGER
+   */
+  async deleteFromStream(streamName, messageId) {
+    return this.streamManager.deleteFromStream(streamName, messageId);
+  }
+
+  /**
+   * ✅ LONGUEUR DU STREAM - DÉLÉGUÉ À STREAMMANAGER
+   */
+  async getStreamLength(streamName) {
+    return this.streamManager.getStreamLength(streamName);
+  }
+
+  /**
+   * ✅ PLAGE DU STREAM - DÉLÉGUÉ À STREAMMANAGER
+   */
+  async getStreamRange(streamName, start, end, limit) {
+    return this.streamManager.getStreamRange(streamName, start, end, limit);
   }
 
   // ===== INITIALISATION =====
@@ -234,144 +277,6 @@ class ResilientMessageService {
       console.warn("⚠️ Erreur init consumer groups:", err.message);
       this.consumerGroupsInitialized = false;
     }
-  }
-
-  // ===== MONITORING MÉMOIRE =====
-
-  async startMemoryMonitor() {
-    if (!this.redis) return;
-
-    this.memoryMonitorInterval = setInterval(async () => {
-      try {
-        const info = await this.redis.info("memory");
-        const usedMemoryMatch = info.match(/used_memory:(\d+)/);
-        if (!usedMemoryMatch) return;
-
-        const usedMemoryMB = parseInt(usedMemoryMatch[1]) / 1024 / 1024;
-        this.metrics.peakMemoryMB = Math.max(
-          this.metrics.peakMemoryMB,
-          usedMemoryMB
-        );
-
-        const warningLevel = this.memoryLimitMB * this.memoryWarningThreshold;
-
-        if (usedMemoryMB > warningLevel) {
-          console.warn(
-            `⚠️ Mémoire Redis: ${usedMemoryMB.toFixed(2)}MB / ${
-              this.memoryLimitMB
-            }MB`
-          );
-
-          if (usedMemoryMB > this.memoryLimitMB * 0.9) {
-            console.warn(
-              "🚨 Alerte mémoire critique (Redis gère automatiquement via MAXLEN)"
-            );
-          }
-        }
-      } catch (err) {
-        console.warn("⚠️ Erreur monitoring mémoire:", err.message);
-      }
-    }, 60000);
-
-    console.log("✅ Memory monitor démarré");
-  }
-
-  // ===== MONITORING DES STREAMS =====
-
-  async startStreamMonitoring() {
-    if (!this.redis) return;
-
-    console.log("🚀 Démarrage du monitoring des streams...");
-
-    this.monitoringInterval = setInterval(async () => {
-      try {
-        const streamSizes = {};
-        let totalSize = 0;
-
-        for (const [streamName, maxLen] of Object.entries(this.STREAM_MAXLEN)) {
-          try {
-            const length = await this.redis.xLen(streamName);
-            streamSizes[streamName] = {
-              current: length,
-              max: maxLen,
-              usage: ((length / maxLen) * 100).toFixed(2) + "%",
-            };
-            totalSize += length;
-
-            if (length > maxLen * 1.5) {
-              console.warn(
-                `⚠️ ${streamName} dépasse limites: ${length}/${maxLen}`
-              );
-            }
-          } catch (err) {
-            // Stream n'existe pas encore
-          }
-        }
-
-        // Log toutes les 5 minutes
-        if (Date.now() - this.metrics.lastReportTime > 300000) {
-          console.log("📊 === ÉTAT DES STREAMS ===");
-          console.table(streamSizes);
-          console.log(`📊 Total: ${totalSize} entrées`);
-        }
-      } catch (error) {
-        console.error("❌ Erreur stream monitoring:", error.message);
-      }
-    }, 60000);
-
-    console.log("✅ Stream monitoring démarré");
-  }
-
-  // ===== MÉTRIQUES =====
-
-  startMetricsReporting() {
-    this.metricsInterval = setInterval(() => {
-      const now = Date.now();
-      const intervalMinutes = (now - this.metrics.lastReportTime) / 60000;
-
-      console.log("📊 === MÉTRIQUES RÉSILIENCE ===");
-      console.log(`📈 Période: ${intervalMinutes.toFixed(1)} min`);
-      console.log(`📝 Messages traités: ${this.metrics.totalMessages}`);
-      console.log(
-        `✅ Saves réussies: ${this.metrics.successfulSaves} (${
-          this.metrics.totalMessages > 0
-            ? (
-                (this.metrics.successfulSaves / this.metrics.totalMessages) *
-                100
-              ).toFixed(2)
-            : 0
-        }%)`
-      );
-      console.log(`🔄 Retries: ${this.metrics.retryCount}`);
-      console.log(`⚠️ Fallback: ${this.metrics.fallbackActivations}`);
-      console.log(`❌ DLQ: ${this.metrics.dlqCount}`);
-      console.log(
-        `⏱️ Temps moyen: ${this.metrics.avgProcessingTime.toFixed(2)}ms`
-      );
-      console.log(`💾 Mémoire pic: ${this.metrics.peakMemoryMB.toFixed(2)}MB`);
-      console.log(`🔌 Circuit breaker: ${this.circuitBreaker.state}`);
-      // Multi-streams metrics
-      console.log(
-        `📨 Messages privés: ${this.metrics.privateMessagesPublished}`
-      );
-      console.log(`👥 Messages groupe: ${this.metrics.groupMessagesPublished}`);
-      console.log(`⌨️ Typing events: ${this.metrics.typingEventsPublished}`);
-      console.log("================================");
-
-      // Reset metrics
-      this.metrics.totalMessages = 0;
-      this.metrics.successfulSaves = 0;
-      this.metrics.retryCount = 0;
-      this.metrics.fallbackActivations = 0;
-      this.metrics.dlqCount = 0;
-      this.metrics.privateMessagesPublished = 0;
-      this.metrics.groupMessagesPublished = 0;
-      this.metrics.typingEventsPublished = 0;
-      this.metrics.lastReportTime = now;
-      this.metrics.peakMemoryMB = 0;
-    }, 3600000);
-
-    console.log("✅ Metrics reporting démarré");
   }
 
   // ===== LOGGING =====
@@ -549,42 +454,11 @@ class ResilientMessageService {
     }
 
     this.isRunning = true;
-    console.log("🚀 Démarrage des workers internes...");
+    console.log("🚀 Démarrage des workers via WorkerManager...");
 
     try {
-      this.workers.retryWorker = setInterval(
-        () =>
-          this.processRetries().catch((err) =>
-            console.error("❌ processRetries:", err.message)
-          ),
-        this.processingDelayMs
-      );
-
-      this.workers.fallbackWorker = setInterval(
-        () =>
-          this.processFallback().catch((err) =>
-            console.error("❌ processFallback:", err.message)
-          ),
-        this.processingDelayMs * 2
-      );
-
-      this.workers.walRecoveryWorker = setInterval(
-        () =>
-          this.processWALRecovery().catch((err) =>
-            console.error("❌ processWALRecovery:", err.message)
-          ),
-        this.processingDelayMs * 3
-      );
-
-      this.workers.dlqMonitor = setInterval(
-        () =>
-          this.monitorDLQ().catch((err) =>
-            console.error("❌ monitorDLQ:", err.message)
-          ),
-        5000
-      );
-
-      console.log("✅ Tous les workers démarrés");
+      this.workerManager.startAll();
+      console.log("✅ Tous les workers démarrés via WorkerManager");
     } catch (error) {
       console.error("❌ Erreur démarrage workers:", error);
       this.isRunning = false;
@@ -594,11 +468,8 @@ class ResilientMessageService {
   stopWorkers() {
     if (!this.isRunning) return;
 
-    console.log("🛑 Arrêt des workers...");
-    Object.values(this.workers).forEach((worker) => {
-      if (worker) clearInterval(worker);
-    });
-
+    console.log("🛑 Arrêt des workers via WorkerManager...");
+    this.workerManager.stopAll();
     this.isRunning = false;
     console.log("✅ Workers arrêtés");
   }
@@ -1369,6 +1240,74 @@ class ResilientMessageService {
     }
   }
 
+  // ===== MÉTRIQUES ET SANTÉ =====
+
+  /**
+   * ✅ OBTENIR LES MÉTRIQUES DU SERVICE
+   * Fusionne les metrics locales du service avec celles des workers
+   */
+  getMetrics() {
+    try {
+      const workerMetrics = this.workerManager
+        ? this.workerManager.getAllMetrics()
+        : {};
+
+      return {
+        // Métriques du service
+        service: {
+          totalMessages: this.metrics.totalMessages,
+          successfulSaves: this.metrics.successfulSaves,
+          fallbackActivations: this.metrics.fallbackActivations,
+          retryCount: this.metrics.retryCount,
+          dlqCount: this.metrics.dlqCount,
+          avgProcessingTime: this.metrics.avgProcessingTime,
+          peakMemoryMB: this.metrics.peakMemoryMB,
+          privateMessagesPublished: this.metrics.privateMessagesPublished,
+          groupMessagesPublished: this.metrics.groupMessagesPublished,
+          typingEventsPublished: this.metrics.typingEventsPublished,
+          lastReportTime: this.metrics.lastReportTime,
+        },
+        // Métriques des workers (orchestrées par WorkerManager)
+        workers: workerMetrics.workers || {},
+        uptime: workerMetrics.uptime || process.uptime(),
+        circuitBreakerState: this.circuitBreaker?.state || "CLOSED",
+      };
+    } catch (error) {
+      console.error("❌ Erreur getMetrics:", error);
+      return {
+        error: error.message,
+        service: this.metrics,
+      };
+    }
+  }
+
+  /**
+   * ✅ OBTENIR L'ÉTAT DE SANTÉ DU SERVICE
+   */
+  getHealthStatus() {
+    try {
+      const workerHealth = this.workerManager
+        ? this.workerManager.getHealthStatus()
+        : {};
+      const streamStats = this.getStreamStats ? this.getStreamStats() : {};
+
+      return {
+        status: this.isRunning ? "RUNNING" : "STOPPED",
+        circuitBreaker: this.circuitBreaker?.state || "UNKNOWN",
+        workers: workerHealth,
+        streams: streamStats,
+        redis: this.redis ? "CONNECTED" : "DISCONNECTED",
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      console.error("❌ Erreur getHealthStatus:", error);
+      return {
+        status: "ERROR",
+        error: error.message,
+      };
+    }
+  }
+
   // ===== GESTION DES DOUBLONS =====
 
   /**
@@ -1860,14 +1799,63 @@ class ResilientMessageService {
   stopAll() {
     console.log("🛑 Arrêt complet du service...");
 
-    this.stopWorkers();
-    this.stopDuplicateCleanup(); // ✅ AJOUTER L'ARRÊT DU NETTOYAGE
+    // ✅ Arrêter les workers via WorkerManager (gère MemoryMonitor, MetricsReporting, StreamMonitoring)
+    this.workerManager.stopAll();
 
-    clearInterval(this.memoryMonitorInterval);
-    clearInterval(this.metricsInterval);
-    clearInterval(this.monitoringInterval);
+    // ✅ Arrêter le nettoyage des doublons si actif
+    if (this.stopDuplicateCleanup) {
+      this.stopDuplicateCleanup();
+    }
 
     console.log("✅ Service arrêté complètement");
+  }
+
+  async findById(conversationId, options = {}) {
+    const { useCache = true } = options;
+
+    try {
+      let cacheKey = null;
+
+      console.log("📌 [CACHED] conversationId:", conversationId);
+      console.log("📌 [CACHED] useCache:", useCache);
+
+      if (useCache && this.cache) {
+        cacheKey = `${this.cacheKeyPrefix}:id:${conversationId}`;
+
+        const cached = await this.cache.get(cacheKey);
+        console.log(`📌 [CACHED] Résultat cache:`, cached ? "HIT" : "MISS");
+
+        if (cached) {
+          console.log(
+            `✅ [CACHED] Conversation depuis cache: ${conversationId}`
+          );
+          await this.cache.renewTTL(cacheKey, this.defaultTTL);
+          // ✅ RETOURNER DIRECTEMENT LA CONVERSATION (pas d'objet wrapper)
+          return cached;
+        }
+      }
+
+      // ✅ CACHE MISS → MongoDB
+      console.log(`🔍 Conversation depuis MongoDB: ${conversationId}`);
+
+      const conversation = await this.primaryStore.findById(conversationId);
+
+      if (!conversation) {
+        throw new Error(`Conversation ${conversationId} non trouvée`);
+      }
+
+      // ✅ METTRE EN CACHE
+      if (useCache && this.cache && cacheKey) {
+        await this.cache.set(cacheKey, conversation, this.defaultTTL);
+        console.log(`💾 Conversation mise en cache: ${conversationId}`);
+      }
+
+      // ✅ RETOURNER DIRECTEMENT LA CONVERSATION (CORRECTION MAJEURE)
+      return conversation;
+    } catch (error) {
+      console.error("❌ [CACHED] Erreur findById conversation:", error.message);
+      throw error;
+    }
   }
 }
 

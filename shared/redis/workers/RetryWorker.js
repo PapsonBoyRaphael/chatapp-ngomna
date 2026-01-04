@@ -196,14 +196,18 @@ class RetryWorker {
    */
   async addRetry(messageData, attempt, error) {
     if (!this.redis || !messageData) {
-      console.warn("⚠️ addRetry: messageData undefined ou Redis absent");
+      console.warn("⚠️ addRetry: messageData est undefined ou Redis absent");
       return;
     }
 
     try {
+      this.metrics.retryCount++;
+
       const dataStr = JSON.stringify(messageData);
       if (!dataStr || dataStr === "undefined" || dataStr.trim() === "") {
-        console.error("❌ addRetry: impossible de stringifier messageData");
+        console.error("❌ addRetry: impossible de stringifier messageData", {
+          messageData,
+        });
         return;
       }
 
@@ -220,7 +224,7 @@ class RetryWorker {
         }
       );
 
-      console.log(`🔄 Retry #${attempt} planifié: ${retryEntry}`);
+      console.log(`🔄 Retry #${attempt}: ${retryEntry}`);
       return retryEntry;
     } catch (err) {
       console.warn("⚠️ Erreur addRetry:", err.message);

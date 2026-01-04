@@ -48,127 +48,73 @@ class StreamManager {
   }
 
   /**
-   * ✅ AJOUTER À UN STREAM AVEC MAXLEN AUTOMATIQUE
+   * ✅ AJOUTER À UN STREAM AVEC MAXLEN APPLIQUÉ IMMÉDIATEMENT
+   * Redis gère le trim automatiquement à chaque écriture
    */
   async addToStream(streamName, fields) {
-    if (!this.redis) {
-      console.warn(
-        "⚠️ [StreamManager.addToStream] Redis client non disponible"
-      );
-      return null;
-    }
-
-    console.log(`📝 [StreamManager.addToStream] Début - Stream: ${streamName}`);
-    const startTime = Date.now();
+    if (!this.redis) return null;
 
     try {
-      console.log(`📝 [StreamManager.addToStream] Normalisation des champs...`);
-      const normalizeStart = Date.now();
+      // ✅ NORMALISER LES CHAMPS - TOUS LES CHAMPS DOIVENT ÊTRE DES CHAÎNES
+      const normalizedFields = {};
 
-      // Normaliser les champs - tous doivent être des chaînes
-      const normalizedFields = this._normalizeFields(fields);
+      for (const [key, value] of Object.entries(fields || {})) {
+        let stringValue = "";
 
-      console.log(
-        `✅ [StreamManager.addToStream] Normalisation terminée en ${
-          Date.now() - normalizeStart
-        }ms`
-      );
+        if (value === null || value === undefined) {
+          stringValue = "";
+        } else if (typeof value === "string") {
+          stringValue = value;
+        } else if (typeof value === "object") {
+          stringValue = JSON.stringify(value);
+        } else {
+          stringValue = String(value);
+        }
 
-      console.log(`📝 [StreamManager.addToStream] Appel xAdd avec timeout...`);
-      const xAddStart = Date.now();
-
-      // ✅ TIMEOUT DE 2 SECONDES POUR ÉVITER LE BLOCAGE
-      let streamId;
-      try {
-        streamId = await Promise.race([
-          this.redis.xAdd(streamName, "*", normalizedFields),
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error("xAdd timeout (2000ms)")), 2000)
-          ),
-        ]);
-      } catch (timeoutErr) {
-        // ✅ CAPTURER L'ERREUR DE TIMEOUT
-        throw timeoutErr;
+        normalizedFields[key] = stringValue;
       }
 
-      console.log(
-        `✅ [StreamManager.addToStream] xAdd terminé en ${
-          Date.now() - xAddStart
-        }ms, streamId: ${streamId}`
-      );
-
-      // Trimmer le stream ASYNCHRONE (non-bloquant)
-      const maxLen = this.STREAM_MAXLEN[streamName];
-      if (maxLen !== undefined && streamId) {
-        console.log(
-          `📝 [StreamManager.addToStream] Trim async (maxLen: ${maxLen})...`
+      // ✅ VÉRIFIER QUE LES CHAMPS CRITIQUES NE SONT PAS VIDES
+      if (
+        normalizedFields.data === "" ||
+        normalizedFields.data === "undefined"
+      ) {
+        console.warn(
+          `⚠️ ATTENTION: Champ 'data' vide ou undefined dans ${streamName}`,
+          { fields: Object.keys(fields) }
         );
-
-        // ✅ NE PAS ATTENDRE LE TRIM
-        this.redis
-          .xTrim(streamName, "MAXLEN", "~", maxLen)
-          .then(() => {
-            console.log(`✅ [StreamManager.addToStream] Trim complété`);
-          })
-          .catch((err) => {
-            console.warn(
-              `⚠️ [StreamManager.addToStream] Erreur trim:`,
-              err.message
-            );
-          });
       }
 
-      console.log(
-        `✅ [StreamManager.addToStream] Complet en ${Date.now() - startTime}ms`
-      );
+      // ✅ ÉCRIRE DANS LE STREAM
+      const streamId = await this.redis.xAdd(streamName, "*", normalizedFields);
+
+      // ✅ TRIMMER LE STREAM APRÈS (ne pas ralentir la rédaction)
+      const maxLen = this.STREAM_MAXLEN[streamName];
+      if (maxLen !== undefined) {
+        try {
+          this.redis.xTrim(streamName, "~", maxLen).catch(() => {
+            // Ignorer les erreurs de trim
+          });
+        } catch (trimErr) {
+          // Ignorer
+        }
+      }
+
       return streamId;
     } catch (err) {
-      console.error(
-        `❌ [StreamManager.addToStream] Erreur après ${
-          Date.now() - startTime
-        }ms:`,
-        err.message
-      );
-
-      // Retry avec normalisation forcée
+      console.warn(`⚠️ Erreur addToStream ${streamName}:`, err.message);
       try {
-        console.log(`📝 [StreamManager.addToStream] Retry avec timeout...`);
-        const retryStart = Date.now();
-
         const normalizedFields = {};
         for (const [key, value] of Object.entries(fields || {})) {
           normalizedFields[key] = String(
             value === null || value === undefined ? "" : value
           );
         }
-
-        let streamId;
-        try {
-          streamId = await Promise.race([
-            this.redis.xAdd(streamName, "*", normalizedFields),
-            new Promise((_, reject) =>
-              setTimeout(
-                () => reject(new Error("Retry xAdd timeout (2000ms)")),
-                2000
-              )
-            ),
-          ]);
-        } catch (retryTimeoutErr) {
-          throw retryTimeoutErr;
-        }
-
-        console.log(
-          `✅ [StreamManager.addToStream] Retry réussi après ${
-            Date.now() - retryStart
-          }ms`
-        );
-        return streamId;
-      } catch (finalErr) {
+        return await this.redis.xAdd(streamName, "*", normalizedFields);
+      } catch (retryErr) {
         console.error(
-          `❌ [StreamManager.addToStream] Retry échoué après ${
-            Date.now() - startTime
-          }ms:`,
-          finalErr.message
+          `❌ Échec complet addToStream ${streamName}:`,
+          retryErr.message
         );
         return null;
       }

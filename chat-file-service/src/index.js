@@ -117,11 +117,14 @@ const startServer = async () => {
     let cacheServiceInstance = null;
 
     try {
-      const redisConnected = await redisConfig.connect();
-      if (redisConnected) {
-        redisClient = redisConfig.getClient();
+      // ✅ UTILISER RedisManager DU SHARED (singleton) COMME CLIENT PRINCIPAL
+      // Cela assure que StreamManager, WorkerManager, etc. utilisent le même client
+      await RedisManager.connect();
+      if (RedisManager.isConnected) {
+        redisClient = RedisManager.getMainClient();
+        console.log("✅ RedisManager (shared) connecté et prêt");
 
-        // ✅ INITIALISER CacheService depuis shared
+        // ✅ INITIALISER CacheService depuis shared avec le client partagé
         cacheServiceInstance = new CacheService({
           defaultTTL: 3600,
           keyPrefix: "chat",
@@ -131,10 +134,30 @@ const startServer = async () => {
 
         console.log("✅ Services Redis initialisés:");
         console.log("   ✅ CacheService (shared)");
+      } else {
+        throw new Error("RedisManager non connecté");
       }
     } catch (error) {
       console.warn("⚠️ Redis non disponible:", error.message);
-      onlineUserManager = null;
+      console.warn("⚠️ Tentative avec redisConfig local en fallback...");
+
+      try {
+        const redisConnected = await redisConfig.connect();
+        if (redisConnected) {
+          redisClient = redisConfig.getClient();
+          console.log("✅ Redis connecté via redisConfig (fallback local)");
+
+          cacheServiceInstance = new CacheService({
+            defaultTTL: 3600,
+            keyPrefix: "chat",
+            maxScanCount: 1000,
+          });
+          await cacheServiceInstance.initializeWithClient(redisClient);
+        }
+      } catch (fallbackError) {
+        console.error("❌ Fallback Redis échoué:", fallbackError.message);
+        console.error("⚠️ Service démarrera en mode dégradé (sans Redis)");
+      }
     }
 
     // ===============================

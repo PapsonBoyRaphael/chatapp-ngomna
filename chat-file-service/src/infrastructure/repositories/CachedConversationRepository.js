@@ -194,10 +194,8 @@ class CachedConversationRepository {
           // ✅ RENOUVELER TTL
           await this.cache.renewTTL(cacheKey, this.defaultTTL);
 
-          return {
-            conversation: cached,
-            fromCache: true,
-          };
+          // ✅ RETOURNER DIRECTEMENT LA CONVERSATION (pas de wrapper)
+          return cached;
         }
       }
 
@@ -216,10 +214,8 @@ class CachedConversationRepository {
         console.log(`💾 Conversation mise en cache: ${conversationId}`);
       }
 
-      return {
-        conversation,
-        fromCache: false,
-      };
+      // ✅ RETOURNER DIRECTEMENT LA CONVERSATION (pas de wrapper)
+      return conversation;
     } catch (error) {
       console.error("❌ Erreur findById conversation:", error.message);
       throw error;
