@@ -93,9 +93,19 @@ class ThumbnailService {
 
   async downloadImageForProcessing(remotePath) {
     try {
-      const stream = await this.fileStorageService.download(null, remotePath); // null pour localName si pas needed
-      const buffer = await streamToBuffer(stream); // Helper pour convertir stream à buffer
-      return buffer; // Retourne buffer pour processing in-memory
+      const stream = await this.fileStorageService.download(null, remotePath);
+      const buffer = await this.streamToBuffer(stream);
+
+      // ✅ CRÉER UN FICHIER TEMPORAIRE AVEC LE BUFFER
+      const tempDir = "./storage/temp";
+      await fs.ensureDir(tempDir);
+      const tempFilePath = path.join(
+        tempDir,
+        `temp_${Date.now()}_${Math.random().toString(36).substring(7)}.tmp`
+      );
+      await fs.writeFile(tempFilePath, buffer);
+
+      return tempFilePath; // Retourne le chemin du fichier temporaire
     } catch (error) {
       console.error("❌ Erreur téléchargement image pour traitement:", error);
       throw error;

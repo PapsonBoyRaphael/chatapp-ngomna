@@ -13,12 +13,7 @@ class FileStorageService {
     this.encryptionKey = config.encryptionKey || crypto.randomBytes(32); // Clé si server-side fallback
     this.compression = config.compression || true; // Active compression
     this.maxFileSize = config.maxFileSize || 100 * 1024 * 1024; // 100MB limit
-    this.allowedMimes = config.allowedMimes || [
-      "image/*",
-      "video/*",
-      "audio/*",
-      "application/pdf",
-    ];
+    this.allowedMimes = config.allowedMimes || []; // ✅ ACCEPTE TOUS LES FICHIERS
     this.maxRetries = 3;
 
     if (this.env === "development") {
@@ -40,12 +35,8 @@ class FileStorageService {
   // Validation générique
   async validateFile(buffer, mimeType) {
     if (buffer.length > this.maxFileSize) throw new Error("Fichier trop grand");
-    if (
-      !this.allowedMimes.some((m) =>
-        mimeType.match(new RegExp(m.replace("*", ".*")))
-      )
-    )
-      throw new Error("Type MIME non autorisé");
+    // ✅ ACCEPTER TOUS LES TYPES DE FICHIERS
+    // Aucune restriction sur le MIME type
   }
 
   // Chiffrement buffer (server-side fallback ; prefer client-side)
@@ -168,7 +159,13 @@ class FileStorageService {
     try {
       let stream;
       if (this.env === "development") {
-        stream = await this.minioClient.getObject(this.bucket, remoteFileName);
+        // ✅ EXTRAIRE LE NOM DU FICHIER SI LE CHEMIN COMPLET EST PASSÉ
+        // Ex: "chat-files/1234_file.png" → "1234_file.png"
+        const fileNameOnly = remoteFileName.includes("/")
+          ? remoteFileName.split("/").pop()
+          : remoteFileName;
+
+        stream = await this.minioClient.getObject(this.bucket, fileNameOnly);
       } else if (this.env === "production") {
         const sftp = new Client();
         await sftp.connect(this.sftpConfig);

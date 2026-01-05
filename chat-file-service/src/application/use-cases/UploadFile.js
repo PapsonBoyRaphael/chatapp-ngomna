@@ -52,28 +52,6 @@ class UploadFile {
       //   await processAudioFile(savedFile);
       // }
 
-      // ✅ PUBLIER ÉVÉNEMENT KAFKA VIA LE USE CASE
-      if (
-        this.kafkaProducer &&
-        typeof this.kafkaProducer.publishMessage === "function"
-      ) {
-        try {
-          await this.kafkaProducer.publishMessage({
-            eventType: "FILE_UPLOADED_SUCCESS",
-            fileId: savedFile._id?.toString(),
-            userId: fileData.uploadedBy,
-            filename: fileData.originalName,
-            size: fileData.size?.toString(),
-            mimeType: fileData.mimeType,
-            conversationId: fileData.conversationId?.toString() || "",
-            timestamp: new Date().toISOString(),
-          });
-          console.log("✅ Événement Kafka publié depuis UploadFile");
-        } catch (kafkaError) {
-          console.warn("⚠️ Erreur Kafka UploadFile:", kafkaError.message);
-        }
-      }
-
       return {
         id: savedFile._id,
         originalName: savedFile.originalName,

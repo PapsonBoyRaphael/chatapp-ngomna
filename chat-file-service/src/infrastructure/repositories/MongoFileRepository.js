@@ -90,13 +90,30 @@ class MongoFileRepository {
           );
         });
 
-        await this.kafkaProducer.publishMessage({
-          eventType: "GENERATE_THUMBNAILS",
-          fileId: savedFile._id.toString(),
-          originalPath: savedFile.path, // Ou remotePath
-          mimeType: savedFile.mimeType,
-          originalName: savedFile.originalName,
-        });
+        // ✅ PUBLIER MESSAGE KAFKA SEULEMENT SI KAFKA EST DISPONIBLE
+        if (
+          this.kafkaProducer &&
+          typeof this.kafkaProducer.publishMessage === "function"
+        ) {
+          try {
+            await this.kafkaProducer.publishMessage({
+              eventType: "GENERATE_THUMBNAILS",
+              fileId: savedFile._id.toString(),
+              originalPath: savedFile.path, // Ou remotePath
+              mimeType: savedFile.mimeType,
+              originalName: savedFile.originalName,
+            });
+          } catch (kafkaError) {
+            console.warn(
+              "⚠️ Erreur publication Kafka GENERATE_THUMBNAILS:",
+              kafkaError.message
+            );
+          }
+        } else {
+          console.log(
+            "ℹ️ Kafka non disponible, génération thumbnails en mode local"
+          );
+        }
       }
 
       // ✅ KAFKA AVEC VÉRIFICATION DE LA MÉTHODE
