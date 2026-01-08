@@ -343,32 +343,76 @@ class MessageDeliveryService {
     try {
       const conversationId = String(message.conversationId);
       const senderId = String(message.senderId);
+      const isSystemMessage = message.type === "SYSTEM";
 
-      // ✅ RÉCUPÉRER TOUS LES UTILISATEURS CONNECTÉS DE LA CONVERSATION
-      const connectedUsers = [];
+      // ✅ DÉTERMINER LES DESTINATAIRES
+      let targetParticipants = [];
 
-      for (const [userId, socketIds] of this.userSockets.entries()) {
-        // ✅ IGNORER L'EXPÉDITEUR
-        if (userId === senderId) continue;
+      if (isSystemMessage && message.participants) {
+        // ✅ CAS 1 : MESSAGE SYSTÈME AVEC LISTE DE PARTICIPANTS (création groupe, etc.)
+        try {
+          const participants =
+            typeof message.participants === "string"
+              ? JSON.parse(message.participants)
+              : message.participants;
 
-        // ✅ VÉRIFIER SI L'UTILISATEUR EST DANS LA CONVERSATION
-        const userConversations = this.userConversations.get(userId) || [];
-        if (userConversations.includes(conversationId)) {
-          connectedUsers.push(userId);
+          console.log(
+            `📢 Message système trouvé avec ${
+              participants.length
+            } participant(s): ${participants.join(", ")}`
+          );
+
+          // Livrer à chaque participant connecté
+          for (const participantId of participants) {
+            const userIdStr = String(participantId);
+            if (this.userSockets.has(userIdStr)) {
+              targetParticipants.push(userIdStr);
+              console.log(
+                `✅ Participant ${userIdStr} connecté - sera notifié`
+              );
+            } else {
+              console.log(
+                `⏳ Participant ${userIdStr} non connecté - message en attente`
+              );
+              // Ajouter en queue pour délivrance ultérieure
+              await this.addToPendingQueue(userIdStr, message);
+            }
+          }
+        } catch (parseErr) {
+          console.warn(
+            "⚠️ Erreur parsing participants du message système:",
+            parseErr.message
+          );
+        }
+      } else {
+        // ✅ CAS 2 : MESSAGE NORMAL - CHERCHER DANS userConversations
+        for (const [userId, socketIds] of this.userSockets.entries()) {
+          // ✅ IGNORER L'EXPÉDITEUR
+          if (userId === senderId) continue;
+
+          // ✅ VÉRIFIER SI L'UTILISATEUR EST DANS LA CONVERSATION
+          const userConversations = this.userConversations.get(userId) || [];
+          if (userConversations.includes(conversationId)) {
+            targetParticipants.push(userId);
+          }
         }
       }
 
       console.log(
-        `👥 Livraison message groupe à ${connectedUsers.length} utilisateur(s) connecté(s)`
+        `👥 Livraison message ${isSystemMessage ? "SYSTÈME" : "groupe"} à ${
+          targetParticipants.length
+        } utilisateur(s) connecté(s)`
       );
 
       // ✅ LIVRER À CHAQUE UTILISATEUR CONNECTÉ
-      for (const userId of connectedUsers) {
+      for (const userId of targetParticipants) {
         await this.deliverGroupMessage(message, userId);
       }
 
       console.log(
-        `✅ Message groupe livré: ${senderId} → conv:${conversationId} (${connectedUsers.length} destinataires)`
+        `✅ Message ${isSystemMessage ? "SYSTÈME" : "groupe"} livré: ${
+          isSystemMessage ? message.subType : senderId
+        } → conv:${conversationId} (${targetParticipants.length} destinataires)`
       );
     } catch (error) {
       console.error("❌ Erreur livraison message groupe:", error);
@@ -503,30 +547,45 @@ class MessageDeliveryService {
     try {
       const room = `conversation_${message.conversationId}`;
       const socketIds = this.userSockets.get(userId);
+      const isSystemMessage = message.type === "SYSTEM";
 
       if (!socketIds || socketIds.length === 0) {
         return;
       }
 
+      // ✅ CONSTRUIRE LES DONNÉES DU MESSAGE
+      const messageData = {
+        messageId: message.messageId,
+        conversationId: message.conversationId,
+        senderId: message.senderId,
+        senderName: message.senderName || "Système",
+        content: message.content,
+        type: message.type,
+        subType: message.subType,
+        status: message.status || "DELIVERED",
+        timestamp: message.timestamp || message.createdAt,
+        metadata: message.metadata,
+      };
+
+      // ✅ ENVOYER À TOUTES LES CONNEXIONS DE L'UTILISATEUR
       for (const socketId of socketIds) {
         const socket = this.io.sockets.sockets.get(socketId);
         if (socket) {
-          socket.emit("message:group", {
-            messageId: message.messageId,
-            conversationId: message.conversationId,
-            senderId: message.senderId,
-            content: message.content,
-            type: message.type,
-            status: message.status || "SENT",
-            timestamp: message.timestamp,
-            metadata: message.metadata,
-          });
+          // ✅ CAS 1 : MESSAGE SYSTÈME - UTILISER EVENT 'newMessage' POUR UNIFORMITÉ
+          if (isSystemMessage) {
+            socket.emit("newMessage", messageData);
+            console.log(
+              `📢 Message SYSTÈME livré: ${message.subType} → userId:${userId}`
+            );
+          } else {
+            // ✅ CAS 2 : MESSAGE NORMAL - EVENT 'message:group'
+            socket.emit("message:group", messageData);
+            console.log(
+              `📬 Message groupe livré: ${message.senderId} → userId:${userId}`
+            );
+          }
         }
       }
-
-      console.log(
-        `✅ Message groupe livré à ${userId} (${message.conversationId})`
-      );
     } catch (error) {
       console.error("❌ Erreur deliverGroupMessage:", error);
     }

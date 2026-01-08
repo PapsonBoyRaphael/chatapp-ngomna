@@ -1,19 +1,40 @@
-const UserCacheService = require("../../infrastructure/services/UserCacheService");
+const axios = require("axios");
+
+async function fetchUsersInfo(userIds) {
+  // Adapter l’URL selon la config réseau/déploiement
+  const baseUrl = process.env.AUTH_USER_SERVICE_URL || "http://localhost:8001";
+  // Si tu as une route batch, préfère /users?ids=1,2,3
+  // Sinon, fais plusieurs requêtes en parallèle
+  const requests = userIds.map((id) =>
+    axios
+      .get(`${baseUrl}/${id}`)
+      .then((res) => ({
+        userId: id,
+        name: res.data.nom
+          ? `${res.data.prenom || ""} ${res.data.nom}`.trim()
+          : res.data.name || res.data.username || "",
+        avatar: res.data.profile_pic || res.data.avatar || null,
+      }))
+      .catch(() => ({
+        userId: id,
+        name: null,
+        avatar: null,
+      }))
+  );
+  return Promise.all(requests);
+}
 
 class SendMessage {
   constructor(
     messageRepository,
     conversationRepository,
     cacheService = null,
-    resilientService = null,
-    userCacheService = null
+    resilientService = null
   ) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
     this.cacheService = cacheService;
     this.resilientService = resilientService;
-    // ✅ Service intelligent avec Redis cache + fallback HTTP
-    this.userCacheService = userCacheService || new UserCacheService();
   }
 
   // ✅ MODIFIER LA MÉTHODE execute() - RETIRER KAFKA
@@ -336,69 +357,7 @@ class SendMessage {
   ) {
     try {
       const participants = [senderId, receiverId];
-
-      // ✅ Récupérer les infos utilisateurs via UserCacheService
-      let usersInfo = [];
-      try {
-        console.log(
-          `🔍 Récupération infos participants de la conversation privée...`
-        );
-        usersInfo = await this.userCacheService.fetchUsersInfo(participants);
-
-        // Vérifier que tous les utilisateurs existent
-        const invalidUsers = usersInfo.filter(
-          (u) => u.name === "Utilisateur inconnu"
-        );
-        if (invalidUsers.length > 0) {
-          const invalidIds = invalidUsers.map((u) => u.matricule).join(", ");
-          throw new Error(`Utilisateurs invalides: ${invalidIds}`);
-        }
-        console.log(`✅ Infos participants récupérées:`, {
-          count: usersInfo.length,
-          users: usersInfo.map((u) => ({ id: u.userId, name: u.name })),
-        });
-      } catch (fetchError) {
-        console.error(
-          `❌ Erreur récupération infos participants:`,
-          fetchError.message
-        );
-        throw new Error(
-          `Impossible de récupérer les infos participants: ${fetchError.message}`
-        );
-      }
-
       const type = "PRIVATE";
-
-      // ✅ CRÉER userMetadata AVEC LES INFOS UTILISATEURS
-      const userMetadata = participants.map((participantId) => {
-        const userInfo = usersInfo.find((u) => u.userId === participantId) || {
-          userId: participantId,
-          name: "Utilisateur inconnu",
-          avatar: null,
-          matricule: participantId,
-          departement: null,
-          ministere: null,
-        };
-
-        return {
-          userId: participantId,
-          unreadCount: 0,
-          lastReadAt: null,
-          isMuted: false,
-          isPinned: false,
-          customName: null,
-          notificationSettings: {
-            enabled: true,
-            sound: true,
-            vibration: true,
-          },
-          // ✅ POPULATED À PARTIR DE UserCacheService
-          name: userInfo.name,
-          avatar: userInfo.avatar,
-          departement: userInfo.departement || null,
-          ministere: userInfo.ministere || null,
-        };
-      });
 
       const conversationData = {
         _id: conversationId,
@@ -407,8 +366,6 @@ class SendMessage {
         participants,
         createdBy: senderId,
         isPrivate: true,
-        // ✅ REMPLIR userMetadata AVEC LES INFOS DES PARTICIPANTS
-        userMetadata,
         settings: {
           allowInvites: true,
           isPublic: false,

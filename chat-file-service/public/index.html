@@ -139,6 +139,110 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
           </div>
         </div>
 
+        <!-- ✅ NOUVELLE SECTION: Récupération Conversations -->
+        <div class="section get-conversations-section">
+          <h2>📋 Récupération Conversations</h2>
+          <div class="form-group">
+            <input
+              type="number"
+              id="conversationsPage"
+              placeholder="Page (défaut: 1)"
+              value="1"
+              min="1"
+            />
+            <input
+              type="number"
+              id="conversationsLimit"
+              placeholder="Limite (défaut: 20)"
+              value="20"
+              min="1"
+              max="100"
+            />
+            <div class="button-grid">
+              <button onclick="getConversations()" class="btn-primary">
+                📥 Récupérer Conversations
+              </button>
+              <button onclick="getConversationsQuickload()" class="btn-success">
+                ⚡ Quick Load
+              </button>
+              <button
+                onclick="getConversationsFullload()"
+                class="btn-secondary"
+              >
+                📚 Full Load
+              </button>
+            </div>
+          </div>
+
+          <!-- Affichage des résultats -->
+          <div
+            class="conversations-results"
+            id="conversationsResults"
+            style="display: none"
+          >
+            <!-- Contexte utilisateur -->
+            <div class="user-context" id="userContext"></div>
+
+            <!-- Statistiques globales -->
+            <div class="conversations-stats" id="conversationsStats"></div>
+
+            <!-- Onglets par catégorie -->
+            <div class="conversation-tabs">
+              <button
+                class="tab-btn active"
+                onclick="switchConversationTab('all')"
+                id="convAllTab"
+              >
+                📋 Toutes (<span id="convAllCount">0</span>)
+              </button>
+              <button
+                class="tab-btn"
+                onclick="switchConversationTab('unread')"
+                id="convUnreadTab"
+              >
+                📬 Non lues (<span id="convUnreadCount">0</span>)
+              </button>
+              <button
+                class="tab-btn"
+                onclick="switchConversationTab('groups')"
+                id="convGroupsTab"
+              >
+                👥 Groupes (<span id="convGroupsCount">0</span>)
+              </button>
+              <button
+                class="tab-btn"
+                onclick="switchConversationTab('broadcasts')"
+                id="convBroadcastsTab"
+              >
+                📢 Diffusions (<span id="convBroadcastsCount">0</span>)
+              </button>
+              <button
+                class="tab-btn"
+                onclick="switchConversationTab('departement')"
+                id="convDepartementTab"
+              >
+                🏢 Département (<span id="convDepartementCount">0</span>)
+              </button>
+              <button
+                class="tab-btn"
+                onclick="switchConversationTab('private')"
+                id="convPrivateTab"
+              >
+                💬 Privées (<span id="convPrivateCount">0</span>)
+              </button>
+            </div>
+
+            <!-- Liste des conversations par catégorie -->
+            <div class="conversations-list" id="conversationsList"></div>
+
+            <!-- Pagination -->
+            <div
+              class="conversations-pagination"
+              id="conversationsPagination"
+            ></div>
+          </div>
+        </div>
+
         <!-- Section Tests Avancés -->
         <div class="section advanced-section">
           <h2>🔬 Tests Avancés</h2>
@@ -377,6 +481,12 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
               placeholder="Nom de la diffusion (optionnel)"
             />
             <div class="button-grid">
+              <button onclick="createGroup()" class="btn-primary">
+                ➕ Créer Groupe
+              </button>
+              <button onclick="createBroadcast()" class="btn-primary">
+                ➕ Créer Diffusion
+              </button>
               <button onclick="sendGroupMessage()" class="btn-success">
                 📤 Envoyer au Groupe
               </button>

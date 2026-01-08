@@ -259,16 +259,29 @@ class CachedConversationRepository {
       // 1. ✅ SAUVEGARDE MongoDB
       const savedConversation = await this.primaryStore.save(conversationData);
 
+      console.log(
+        `📦 [CachedConversationRepository] Conversation reçue de MongoDB:`,
+        {
+          _id: savedConversation?._id,
+          name: savedConversation?.name,
+          participantsCount: savedConversation?.participants?.length,
+        }
+      );
+
       if (!savedConversation) {
         throw new Error("Conversation not saved");
       }
 
       // 2. ✅ INVALIDATION CACHE INTELLIGENTE
+      console.log(`🔄 Début invalidation cache pour: ${savedConversation._id}`);
       await this.invalidateConversationCaches(savedConversation._id, {
         isNewConversation: true,
         participants: savedConversation.participants,
         invalidateConversation: true, // Invalider car c'est une nouvelle conversation
       });
+      console.log(
+        `✅ Invalidation cache terminée pour: ${savedConversation._id}`
+      );
 
       const processingTime = Date.now() - startTime;
       console.log(
@@ -284,7 +297,13 @@ class CachedConversationRepository {
 
   // ===== INVALIDATION CACHE INTELLIGENTE =====
   async invalidateConversationCaches(conversationId, options = {}) {
-    if (!this.cache) return;
+    console.log(
+      `🔍 invalidateConversationCaches début pour: ${conversationId}`
+    );
+    if (!this.cache) {
+      console.log(`⚠️ Cache non disponible, skip invalidation`);
+      return;
+    }
 
     const {
       isNewConversation = false,
@@ -314,10 +333,15 @@ class CachedConversationRepository {
         );
       }
 
+      console.log(`🔍 ${patterns.length} patterns à invalider:`, patterns);
       let invalidated = 0;
       for (const pattern of patterns) {
+        console.log(`🗑️ Tentative suppression cache: ${pattern}`);
         try {
           const deleted = await this.cache.delete(pattern);
+          console.log(
+            `✅ Suppression terminée pour ${pattern}: ${deleted} clés`
+          );
           if (deleted > 0) {
             invalidated += deleted;
             console.log(
@@ -335,8 +359,12 @@ class CachedConversationRepository {
         );
       }
 
+      console.log(
+        `✅ Boucle d'invalidation terminée. Total: ${invalidated} clés`
+      );
       // ✅ INVALIDATION PROACTIVE (pré-charger)
       if (isNewConversation && this.cache) {
+        console.log(`🔄 Lancement setImmediate pour pré-chargement`);
         setImmediate(async () => {
           try {
             console.log(

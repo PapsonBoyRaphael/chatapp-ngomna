@@ -978,6 +978,70 @@ class ResilientMessageService {
     }
   }
 
+  /**
+   * ✅ PUBLIER UN MESSAGE SYSTÈME (groupe créé, membre ajouté, etc.)
+   */
+  async publishSystemMessage(messageData, options = {}) {
+    if (!this.redis) return null;
+
+    try {
+      const streamName = options.stream || this.MULTI_STREAMS.MESSAGES_GROUP;
+
+      // ✅ CONSTRUIRE LES CHAMPS DU STREAM
+      const fields = {
+        messageId: `system_${Date.now()}`,
+        conversationId: messageData.conversationId,
+        senderId: messageData.senderId || "system",
+        senderName: messageData.senderName || "Système",
+        type: messageData.type || "SYSTEM",
+        subType: messageData.subType || "INFO",
+        content: messageData.content,
+        participants: JSON.stringify(messageData.participants || []),
+        metadata: JSON.stringify(messageData.metadata || {}),
+        createdAt: new Date().toISOString(),
+        ts: Date.now().toString(),
+      };
+
+      // ✅ AJOUTER AU STREAM (résilient avec WAL, retry, etc.)
+      const streamId = await this.addToStream(streamName, fields);
+      console.log(
+        `📢 Message système publié (${messageData.subType}): ${streamId}`
+      );
+
+      // ✅ OPTIONNEL : ÉMETTRE IMMÉDIATEMENT VIA SOCKET.IO AUX CONNECTÉS
+      if (this.io && messageData.conversationId) {
+        try {
+          this.io.to(messageData.conversationId).emit("newMessage", {
+            id: fields.messageId,
+            conversationId: messageData.conversationId,
+            senderId: messageData.senderId || "system",
+            senderName: messageData.senderName || "Système",
+            type: messageData.type || "SYSTEM",
+            subType: messageData.subType,
+            content: messageData.content,
+            participants: messageData.participants,
+            metadata: messageData.metadata,
+            createdAt: fields.createdAt,
+            status: "DELIVERED",
+          });
+          console.log(
+            `✅ Message système émis Socket.IO à ${messageData.conversationId}`
+          );
+        } catch (socketError) {
+          console.warn(
+            "⚠️ Erreur émission Socket.IO message système:",
+            socketError.message
+          );
+        }
+      }
+
+      return streamId;
+    } catch (error) {
+      console.error("❌ Erreur publication message système:", error.message);
+      return null;
+    }
+  }
+
   // ===== RECEIVE MESSAGE =====
 
   async receiveMessage(messageData) {

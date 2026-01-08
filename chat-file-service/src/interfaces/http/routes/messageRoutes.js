@@ -89,7 +89,6 @@ function createMessageRoutes(messageController) {
       "/",
       authMiddleware.authenticate,
       rateLimitMiddleware.apiLimit,
-      cacheMiddleware.checkMessagesCache,
       async (req, res) => {
         try {
           await messageController.getMessages(req, res);
@@ -114,7 +113,6 @@ function createMessageRoutes(messageController) {
       authMiddleware.authenticate,
       rateLimitMiddleware.apiLimit,
       validationMiddleware.validateMongoId("messageId"),
-      cacheMiddleware.checkMessageCache,
       async (req, res) => {
         try {
           await messageController.getMessage(req, res);

@@ -4,6 +4,7 @@
  * ✅ PAS DE REDIS, PAS DE KAFKA → Déléguer aux Use Cases
  */
 const AuthMiddleware = require("../../interfaces/http/middleware/authMiddleware");
+const UserCacheService = require("../../infrastructure/services/UserCacheService");
 
 class ChatHandler {
   constructor(
@@ -23,7 +24,8 @@ class ChatHandler {
     markMessageDeliveredUseCase,
     markMessageReadUseCase,
     resilientMessageService = null,
-    messageDeliveryService = null
+    messageDeliveryService = null,
+    userCacheService = null
   ) {
     this.io = io;
     this.sendMessageUseCase = sendMessageUseCase;
@@ -42,6 +44,7 @@ class ChatHandler {
     this.markMessageDeliveredUseCase = markMessageDeliveredUseCase;
     this.markMessageReadUseCase = markMessageReadUseCase;
     this.messageDeliveryService = messageDeliveryService;
+    this.userCacheService = userCacheService || new UserCacheService();
 
     // ✅ LOG DE DEBUG
     console.log(
@@ -1259,10 +1262,11 @@ class ChatHandler {
       );
 
       let userPayload = null;
-      if (data.token) {
+      if (socket.handshake.auth.token) {
+        const token = socket.handshake.auth.token;
         try {
           const fakeReq = {
-            headers: { authorization: `Bearer ${data.token}` },
+            headers: { authorization: `Bearer ${token}` },
           };
           const fakeRes = {};
           await new Promise((resolve, reject) => {
@@ -1272,7 +1276,33 @@ class ChatHandler {
             });
           });
           if (fakeReq.user) {
-            userPayload = fakeReq.user;
+            const cacheUserId =
+              fakeReq.user.id || fakeReq.user.userId || fakeReq.user.matricule;
+
+            let cachedUserInfo = null;
+            if (this.userCacheService && cacheUserId) {
+              try {
+                cachedUserInfo = await this.userCacheService.fetchUserInfo(
+                  cacheUserId
+                );
+              } catch (cacheError) {
+                console.warn(
+                  `⚠️ [Auth] Erreur UserCacheService pour ${cacheUserId}:`,
+                  cacheError.message
+                );
+              }
+            }
+
+            userPayload = {
+              ...fakeReq.user,
+              name: cachedUserInfo?.name || fakeReq.user.name,
+              fullName: cachedUserInfo?.name || fakeReq.user.fullName,
+              avatar: cachedUserInfo?.avatar || fakeReq.user.avatar,
+              matricule:
+                fakeReq.user.matricule ||
+                cachedUserInfo?.matricule ||
+                cacheUserId,
+            };
           } else {
             socket.emit("auth_error", {
               message: "Token JWT invalide ou expiré",
@@ -1306,10 +1336,21 @@ class ChatHandler {
         };
       }
 
-      socket.userId = userPayload.id || userPayload.userId;
-      socket.matricule = userPayload.matricule || "";
-      socket.nom = userPayload.nom || "";
+      const resolvedMatricule =
+        userPayload.matricule || userPayload.userId || userPayload.id || "";
+      const resolvedUserId =
+        userPayload.id || userPayload.userId || resolvedMatricule;
+      const resolvedFullName =
+        userPayload.fullName ||
+        userPayload.name ||
+        [userPayload.prenom, userPayload.nom].filter(Boolean).join(" ");
+
+      socket.userId = resolvedUserId;
+      socket.matricule = resolvedMatricule;
+      socket.nom = userPayload.nom || resolvedFullName || "";
       socket.prenom = userPayload.prenom || "";
+      socket.fullName = resolvedFullName || "";
+      socket.avatar = userPayload.avatar || null;
       socket.ministere = userPayload.ministere || "";
       socket.departement = userPayload.departement || "";
       socket.isAuthenticated = true;
@@ -1535,7 +1576,6 @@ class ChatHandler {
     try {
       if (userId && this.onlineUserManager) {
         await this.onlineUserManager.setUserOffline(userId);
-        
 
         socket.broadcast.emit("user_disconnected", {
           userId,
@@ -1562,7 +1602,6 @@ class ChatHandler {
         }
       }
     }
-
   }
 
   // ✅ SYNC REDIS - Via OnlineUserManager UNIQUEMENT

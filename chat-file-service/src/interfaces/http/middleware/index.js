@@ -2,7 +2,7 @@
 const rateLimitMiddleware = require("./rateLimitMiddleware");
 
 // Middlewares optionnels (créés si manquants)
-let authMiddleware, validationMiddleware, cacheMiddleware;
+let authMiddleware, validationMiddleware;
 
 try {
   authMiddleware = require("./authMiddleware");
@@ -98,34 +98,14 @@ try {
   };
 }
 
-try {
-  const CacheMiddleware = require("./cacheMiddleware");
-  cacheMiddleware = new CacheMiddleware(); // Instancier sans Redis pour l'instant
-  console.log("✅ cacheMiddleware chargé");
-} catch (error) {
-  console.warn("⚠️ cacheMiddleware non trouvé, utilisation du fallback");
-  cacheMiddleware = {
-    checkCache:
-      (ttl = 300000) =>
-      (req, res, next) =>
-        next(),
-    checkMessagesCache: (req, res, next) => next(),
-    checkConversationsCache: (req, res, next) => next(),
-    checkConversationCache: (req, res, next) => next(),
-    checkMessageCache: (req, res, next) => next(),
-  };
-}
-
 console.log("🔧 Middlewares initialisés:", {
   authMiddleware: !!authMiddleware?.authenticate,
   rateLimitMiddleware: !!rateLimitMiddleware?.apiLimit,
   validationMiddleware: !!validationMiddleware?.sanitizeInput,
-  cacheMiddleware: !!cacheMiddleware?.checkCache,
 });
 
 module.exports = {
   authMiddleware,
   rateLimitMiddleware,
   validationMiddleware,
-  cacheMiddleware,
 };

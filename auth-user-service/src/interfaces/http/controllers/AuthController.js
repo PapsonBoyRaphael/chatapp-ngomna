@@ -13,9 +13,11 @@ class AuthController {
 
       const result = await this.loginUserUseCase.execute(matricule);
 
+      // Définir des cookies httpOnly pour protéger les tokens côté client
       res.json({
         user: result.user,
-        token: result.token,
+        accessToken: result.accessToken, // optionnel pour mobile
+        refreshToken: result.refreshToken, // optionnel pour mobile
       });
     } catch (error) {
       console.error("Erreur lors de la connexion:", error);

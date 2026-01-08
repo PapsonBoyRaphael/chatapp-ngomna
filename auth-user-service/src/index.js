@@ -2,6 +2,7 @@ const express = require("express");
 const chalk = require("chalk");
 const cors = require("cors");
 const path = require("path");
+const cookieParser = require("cookie-parser");
 const { testConnection } = require("./infrastructure/config/database");
 
 // Repositories
@@ -28,6 +29,7 @@ require("dotenv").config();
 const app = express();
 app.use(express.json());
 app.use(cors());
+app.use(cookieParser());
 
 const PORT = process.env.AUTH_USER_SERVICE_PORT || 8001;
 
@@ -60,7 +62,7 @@ const startServer = async () => {
 
     // Routes
     app.use("/", createUserRoutes(userController));
-    app.use("/", createAuthRoutes(authController));
+    app.use("/", createAuthRoutes(authController, jwtService));
 
     app.listen(PORT, () => {
       console.log(

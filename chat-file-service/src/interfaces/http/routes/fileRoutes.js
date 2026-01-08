@@ -54,7 +54,7 @@ function createFileRoutes(fileController) {
   }
 
   // Middleware d'authentification pour toutes les routes
-  router.use(authMiddleware.validateToken);
+  // router.use(authMiddleware.validateToken);
 
   // Routes des fichiers avec gestion d'erreurs
   try {

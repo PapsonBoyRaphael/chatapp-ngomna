@@ -105,6 +105,14 @@ const userMetadataSchema = new Schema(
       type: String,
       default: null,
     },
+    departement: {
+      type: String,
+      default: null,
+    },
+    ministere: {
+      type: String,
+      default: null,
+    },
     avatar: {
       type: String,
       default: null,

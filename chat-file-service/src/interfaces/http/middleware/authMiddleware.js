@@ -4,60 +4,65 @@ const JWT_SECRET = process.env.JWT_SECRET;
 
 class AuthMiddleware {
   // Middleware pour valider le token JWT
-  static authenticate = async (req, res, next) => {
-    next();
-    // try {
-    //   const authHeader = req.headers.authorization;
-    //   const userIdHeader = req.headers["user-id"];
+  static authenticate = (req, res, next) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const bearerToken =
+        authHeader && authHeader.startsWith("Bearer ")
+          ? authHeader.substring(7)
+          : null;
 
-    //   // 1. Vérifier la présence du token
-    //   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    //     // ✅ RETURN après la réponse
-    //     return res.status(401).json({
-    //       success: false,
-    //       message: "Token d'authentification requis",
-    //       code: "MISSING_TOKEN",
-    //     });
-    //   }
+      const cookieToken = req.cookies?.accessToken;
 
-    //   const token = authHeader.substring(7);
+      const token = bearerToken || cookieToken;
 
-    //   // 2. Valider le token JWT
-    //   try {
-    //     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    //     req.user = decoded;
+      console.log("[AuthMiddleware] Incoming auth check", {
+        hasAuthHeader: !!authHeader,
+        hasBearer: !!bearerToken,
+        hasCookieToken: !!cookieToken,
+        path: req.path,
+        method: req.method,
+      });
 
-    //     // ✅ APPELER next() seulement si authentification réussie
-    //     return next();
-    //   } catch (jwtError) {
-    //     console.warn("⚠️ Token JWT invalide:", jwtError.message);
+      if (!token) {
+        return res.status(401).json({
+          success: false,
+          message: "Token d'authentification requis",
+          code: "MISSING_TOKEN",
+        });
+      }
 
-    //     // ✅ RETURN après la réponse d'erreur JWT
-    //     return res.status(401).json({
-    //       success: false,
-    //       message: "Token invalide ou expiré",
-    //       code: "INVALID_TOKEN",
-    //       error:
-    //         process.env.NODE_ENV === "development"
-    //           ? jwtError.message
-    //           : undefined,
-    //     });
-    //   }
-    // } catch (error) {
-    //   console.error("❌ Erreur validation token:", error);
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      console.log("[AuthMiddleware] JWT décodé", {
+        userId: decoded.id || decoded.matricule,
+        matricule: decoded.matricule,
+        hasNom: !!decoded.nom,
+        hasPrenom: !!decoded.prenom,
+      });
+      req.user = {
+        id: decoded.id || decoded.matricule,
+        userId: decoded.id || decoded.matricule,
+        matricule: decoded.matricule,
+      };
 
-    //   // ✅ VÉRIFIER si la réponse n'a pas déjà été envoyée
-    //   if (!res.headersSent) {
-    //     return res.status(500).json({
-    //       success: false,
-    //       message: "Erreur serveur lors de l'authentification",
-    //       code: "AUTH_SERVER_ERROR",
-    //     });
-    //   }
+      return next();
+    } catch (error) {
+      console.warn("⚠️ Token JWT invalide", {
+        message: error.message,
+        path: req.path,
+        method: req.method,
+      });
 
-    //   // Si headers déjà envoyés, ne pas essayer d'envoyer une réponse
-    //   return;
-    // }
+      if (!res.headersSent) {
+        return res.status(401).json({
+          success: false,
+          message: "Token invalide ou expiré",
+          code: "INVALID_TOKEN",
+        });
+      }
+
+      return;
+    }
   };
 
   // ✅ ALIAS EXPLICITE POUR COMPATIBILITÉ
@@ -65,7 +70,6 @@ class AuthMiddleware {
 
   // Middleware pour vérifier les rôles
   static requireRole = (roles) => {
-    next();
     return (req, res, next) => {
       if (!req.user) {
         return res.status(401).json({
@@ -92,18 +96,21 @@ class AuthMiddleware {
 
   // Middleware optionnel (continue même sans token)
   static optional = async (req, res, next) => {
-    next();
     try {
       const authHeader = req.headers.authorization;
+      const bearerToken =
+        authHeader && authHeader.startsWith("Bearer ")
+          ? authHeader.substring(7)
+          : null;
+      const cookieToken = req.cookies?.accessToken;
+      const token = bearerToken || cookieToken;
 
-      if (authHeader && authHeader.startsWith("Bearer ")) {
-        const token = authHeader.substring(7);
-
+      if (token) {
         try {
           const decoded = jwt.verify(token, JWT_SECRET);
           req.user = {
-            id: decoded.id,
-            userId: decoded.id, // Compatibilité
+            id: decoded.id || decoded.matricule,
+            userId: decoded.id || decoded.matricule,
             matricule: decoded.matricule,
             nom: decoded.nom,
             prenom: decoded.prenom,
@@ -117,7 +124,7 @@ class AuthMiddleware {
         req.user = null;
       }
 
-      // next();
+      next();
     } catch (error) {
       console.error("❌ Erreur auth optionnelle:", error);
       req.user = null;

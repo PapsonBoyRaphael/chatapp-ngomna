@@ -7,19 +7,18 @@ class LoginUser {
   async execute(matricule) {
     const user = await this.userRepository.findByMatricule(matricule);
 
+    console.log("LoginUser: Utilisateur trouvé:", user);
     if (!user) {
       throw new Error("Utilisateur non trouvé");
     }
 
-    const token = this.jwtService.generateToken({
-      id: user.id,
-      matricule: user.matricule,
-      nom: user.nom,
-      prenom: user.prenom,
-      ministere: user.ministere,
-    });
+    // Seul le matricule est nécessaire pour générer les tokens
+    const payload = { matricule: user.matricule };
 
-    return { user, token };
+    const accessToken = this.jwtService.generateToken(payload, "15m");
+    const refreshToken = this.jwtService.generateRefreshToken(payload, "7d");
+
+    return { user, accessToken, refreshToken };
   }
 }
 

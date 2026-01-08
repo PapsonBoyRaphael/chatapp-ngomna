@@ -2,8 +2,10 @@ const express = require("express");
 const { createServer } = require("http");
 const cors = require("cors");
 const path = require("path");
+const cookieParser = require("cookie-parser");
 const { Server } = require("socket.io");
 const { createAdapter } = require("@socket.io/redis-adapter");
+const jwt = require("jsonwebtoken");
 
 // Configuration
 require("dotenv").config();
@@ -38,6 +40,7 @@ const ThumbnailService = require("./infrastructure/services/ThumbnailService");
 const FileStorageService = require("./infrastructure/services/FileStorageService");
 const MediaProcessingService = require("./infrastructure/services/MediaProcessingService");
 const ResilientMessageService = require("./infrastructure/services/ResilientMessageService");
+const UserCacheService = require("./infrastructure/services/UserCacheService");
 
 // Repositories - Cached
 const CachedMessageRepository = require("./infrastructure/repositories/CachedMessageRepository");
@@ -87,7 +90,10 @@ const createBroadcastRoutes = require("./interfaces/http/routes/broadcastRoutes"
 const ChatHandler = require("./application/websocket/chatHandler");
 
 // Middleware
-const { rateLimitMiddleware } = require("./interfaces/http/middleware");
+const {
+  rateLimitMiddleware,
+  authMiddleware,
+} = require("./interfaces/http/middleware");
 
 // ===============================
 // DÉMARRAGE SERVEUR
@@ -172,6 +178,7 @@ const startServer = async () => {
       })
     );
 
+    app.use(cookieParser());
     app.use(express.json({ limit: "10mb" }));
     app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
@@ -197,13 +204,19 @@ const startServer = async () => {
 
     if (redisClient) {
       try {
-        io.adapter(
-          createAdapter(
-            redisConfig.createPubClient(),
-            redisConfig.createSubClient()
-          )
-        );
-        console.log("✅ Redis adapter Socket.IO configuré");
+        // ✅ UTILISER RedisManager.getPubClient() ET RedisManager.getSubClient()
+        // POUR OBTENIR LES CLIENTS PUB/SUB CORRECTEMENT INITIALISÉS
+        const pubClient = RedisManager.getPubClient();
+        const subClient = RedisManager.getSubClient();
+
+        if (pubClient && subClient) {
+          io.adapter(createAdapter(pubClient, subClient));
+          console.log("✅ Redis adapter Socket.IO configuré");
+        } else {
+          console.warn(
+            "⚠️ Clients Pub/Sub Redis non disponibles, adapter Socket.IO ignoré"
+          );
+        }
       } catch (error) {
         console.warn("⚠️ Erreur config Redis adapter:", error.message);
       }
@@ -408,10 +421,12 @@ const startServer = async () => {
     );
 
     const createGroupUseCase = new CreateGroup(
-      conversationRepository // Cached
+      conversationRepository, // Cached
+      resilientMessageService // Pour publier les notifications système
     );
     const createBroadcastUseCase = new CreateBroadcast(
-      conversationRepository // Cached
+      conversationRepository, // Cached
+      resilientMessageService // Pour publier les notifications système
     );
 
     const markMessageDeliveredUseCase = new MarkMessageDelivered(

@@ -1,6 +1,7 @@
 const File = require("../../domain/entities/File");
 const musicMetadata = require("music-metadata");
 const path = require("path");
+const { v4: uuidv4 } = require("uuid");
 
 class UploadFile {
   constructor(fileRepository, kafkaProducer = null) {
@@ -17,10 +18,20 @@ class UploadFile {
         throw new Error("Données de fichier incomplètes");
       }
 
+      // ✅ GÉNÉRER UUID CUSTOM (32 caractères hex sans tirets)
+      const fileId = uuidv4().replace(/-/g, "");
+      console.log(`🆔 ID fichier généré (UUID): ${fileId}`);
+
+      // ✅ CONSTRUIRE LE NOM DU FICHIER BASÉ SUR L'UUID
+      const ext = path.extname(fileData.originalName) || ".bin";
+      const safeFileName = `${fileId}${ext.toLowerCase()}`;
+      console.log(`📝 Nom sécurisé généré: ${safeFileName}`);
+
       // ✅ CRÉER UNE INSTANCE DE L'ENTITÉ FILE AVEC LES MÉTADONNÉES
       const fileEntity = new File({
+        _id: fileId, // Assigner l'ID custom (string)
         originalName: fileData.originalName,
-        fileName: fileData.fileName,
+        fileName: safeFileName, // Utiliser le nom sécurisé généré
         mimeType: fileData.mimeType,
         size: fileData.size,
         path: fileData.path,
@@ -47,13 +58,15 @@ class UploadFile {
         throw new Error("Échec de la sauvegarde du fichier");
       }
 
+      console.log(`✅ Fichier sauvé avec ID custom: ${fileId}`);
+
       // ✅ TRAITEMENT DES MÉTADONNÉES AUDIO SI BESOIN
       // if (fileEntity.mimeType && fileEntity.mimeType.startsWith("audio/")) {
       //   await processAudioFile(savedFile);
       // }
 
       return {
-        id: savedFile._id,
+        id: savedFile._id, // Retourne l'ID custom
         originalName: savedFile.originalName,
         fileName: savedFile.fileName,
         size: savedFile.size,

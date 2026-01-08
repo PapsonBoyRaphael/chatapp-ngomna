@@ -110,6 +110,67 @@ class GetConversations {
         (a, b) => new Date(b.lastActivity) - new Date(a.lastActivity)
       );
 
+      // ✅ SÉPARER LES CONVERSATIONS PAR CATÉGORIE
+      // Récupérer le département et ministère de l'utilisateur courant depuis la première conversation
+      let userDepartement = null;
+      let userMinistere = null;
+
+      if (sortedConversations.length > 0) {
+        // userMetadata est un TABLEAU de participants
+        for (const conversation of sortedConversations) {
+          if (Array.isArray(conversation.userMetadata)) {
+            const currentUserMeta = conversation.userMetadata.find(
+              (meta) => meta.userId === userId
+            );
+            if (currentUserMeta?.departement) {
+              userDepartement = currentUserMeta.departement;
+              userMinistere = currentUserMeta.ministere;
+              break;
+            }
+          }
+        }
+      }
+
+      // Conversations non lues
+      const unreadConversations = sortedConversations.filter(
+        (c) => c.unreadCount > 0
+      );
+
+      // Conversations de groupe
+      const groupConversations = sortedConversations.filter(
+        (c) => c.type === "GROUP"
+      );
+
+      // Conversations de diffusion
+      const broadcastConversations = sortedConversations.filter(
+        (c) => c.type === "BROADCAST"
+      );
+
+      // Conversations du département (PRIVATE où tous les participants ont le même département)
+      const departementConversations = sortedConversations.filter((c) => {
+        if (c.type !== "PRIVATE") return false;
+        if (!userDepartement) return false;
+
+        // userMetadata est un TABLEAU de participants
+        if (!Array.isArray(c.userMetadata) || c.userMetadata.length === 0) {
+          return false;
+        }
+
+        // Vérifier que TOUS les participants ont un département ET que c'est le même que l'utilisateur
+        const allSameDepartement = c.userMetadata.every(
+          (meta) => meta.departement && meta.departement === userDepartement
+        );
+
+        return allSameDepartement;
+      });
+
+      // Conversations privées (autres)
+      const privateConversations = sortedConversations.filter(
+        (c) =>
+          c.type === "PRIVATE" &&
+          !departementConversations.some((dc) => dc._id === c._id)
+      );
+
       // ✅ CALCULS DE PAGINATION CORRECTS
       const totalPages = Math.ceil(totalCount / limit);
       const hasNext = page < totalPages;
@@ -117,6 +178,49 @@ class GetConversations {
 
       const finalResult = {
         conversations: sortedConversations,
+
+        // ✅ CONVERSATIONS PAR CATÉGORIE
+        categorized: {
+          unread: unreadConversations,
+          groups: groupConversations,
+          broadcasts: broadcastConversations,
+          departement: departementConversations,
+          private: privateConversations,
+        },
+
+        // ✅ STATISTIQUES PAR CATÉGORIE
+        stats: {
+          total: sortedConversations.length,
+          unread: unreadConversations.length,
+          groups: groupConversations.length,
+          broadcasts: broadcastConversations.length,
+          departement: departementConversations.length,
+          private: privateConversations.length,
+          unreadMessagesInGroups: groupConversations.reduce(
+            (sum, c) => sum + (c.unreadCount || 0),
+            0
+          ),
+          unreadMessagesInBroadcasts: broadcastConversations.reduce(
+            (sum, c) => sum + (c.unreadCount || 0),
+            0
+          ),
+          unreadMessagesInDepartement: departementConversations.reduce(
+            (sum, c) => sum + (c.unreadCount || 0),
+            0
+          ),
+          unreadMessagesInPrivate: privateConversations.reduce(
+            (sum, c) => sum + (c.unreadCount || 0),
+            0
+          ),
+        },
+
+        // ✅ CONTEXTE UTILISATEUR
+        userContext: {
+          userId,
+          departement: userDepartement,
+          ministere: userMinistere,
+        },
+
         pagination: {
           currentPage: parseInt(page),
           totalPages: totalPages,
@@ -129,13 +233,16 @@ class GetConversations {
           previousPage: hasPrevious ? parseInt(page) - 1 : null,
         },
         totalCount: totalCount,
-        unreadConversations: sortedConversations.filter(
-          (c) => c.unreadCount > 0
-        ).length,
-        totalUnreadMessages: sortedConversations.reduce(
-          (sum, c) => sum + (c.unreadCount || 0),
-          0
-        ),
+        unreadConversations: unreadConversations.length,
+        totalUnreadMessages: sortedConversations.reduce((sum, c) => {
+          if (Array.isArray(c.userMetadata)) {
+            const userMeta = c.userMetadata.find(
+              (meta) => meta.userId === userId
+            );
+            return sum + (userMeta?.unreadCount || 0);
+          }
+          return sum + (c.unreadCount || 0);
+        }, 0),
         fromCache: result.fromCache || false,
         nextCursor: result.nextCursor || null,
         hasMore: result.hasMore || false,
@@ -148,6 +255,9 @@ class GetConversations {
         } conversations récupérées (${finalResult.processingTime}ms) - ${
           result.fromCache ? "CACHE" : "DB"
         }`
+      );
+      console.log(
+        `📊 Catégories: ${finalResult.stats.unread} non-lues, ${finalResult.stats.groups} groupes, ${finalResult.stats.broadcasts} broadcasts, ${finalResult.stats.departement} département, ${finalResult.stats.private} privées`
       );
 
       return finalResult;

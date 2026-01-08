@@ -442,6 +442,179 @@ function setupSocketEvents() {
       requiresReceipt: data.requiresDeliveryReceipt,
     });
   });
+
+  // ✅ ÉVÉNEMENTS GROUPE
+  socket.on("group:created", (data) => {
+    log("✅ Groupe créé avec succès", "success", data);
+    addReceivedMessage("group", "👥 Groupe Créé", data, {
+      groupId: data.group?.id,
+      groupName: data.group?.name,
+      participants: data.group?.participantCount,
+    });
+    alert(`Groupe "${data.group?.name}" créé avec succès !`);
+  });
+
+  socket.on("group:error", (data) => {
+    log("❌ Erreur création groupe", "error", data);
+    addReceivedMessage("error", "❌ Erreur Groupe", data, {
+      error: data.error,
+      code: data.code,
+    });
+    alert(`Erreur: ${data.error}`);
+  });
+
+  socket.on("group:invitation", (data) => {
+    log("📨 Invitation au groupe", "info", data);
+    addReceivedMessage("group", "📨 Invitation Groupe", data, {
+      groupId: data.group?.id,
+      groupName: data.group?.name,
+      invitedBy: data.invitedBy?.matricule,
+    });
+  });
+
+  // ✅ ÉVÉNEMENTS DIFFUSION
+  socket.on("broadcast:created", (data) => {
+    log("✅ Liste de diffusion créée", "success", data);
+    addReceivedMessage("broadcast", "📢 Diffusion Créée", data, {
+      broadcastId: data.broadcast?.id,
+      broadcastName: data.broadcast?.name,
+      recipients: data.broadcast?.recipientCount,
+    });
+    alert(`Liste de diffusion "${data.broadcast?.name}" créée avec succès !`);
+  });
+
+  socket.on("broadcast:error", (data) => {
+    log("❌ Erreur création diffusion", "error", data);
+    addReceivedMessage("error", "❌ Erreur Diffusion", data, {
+      error: data.error,
+      code: data.code,
+    });
+    alert(`Erreur: ${data.error}`);
+  });
+
+  // ✅ ÉVÉNEMENTS CONVERSATIONS CHARGÉES
+  socket.on("conversationsLoaded", (data) => {
+    log("✅ Conversations chargées", "success", data);
+    displayConversations(data);
+    addReceivedMessage("message", "✅ Conversations Chargées", data, {
+      total: data.stats?.total || 0,
+      unread: data.stats?.unread || 0,
+      processingTime: data.processingTime || "N/A",
+    });
+  });
+
+  socket.on("conversations:quick", (data) => {
+    log("⚡ Quick load conversations reçues", "success", data);
+    displayConversations(data);
+    addReceivedMessage("message", "⚡ Quick Load Conversations", data, {
+      total: data.stats?.total || 0,
+      groups: data.stats?.groups || 0,
+      broadcasts: data.stats?.broadcasts || 0,
+    });
+  });
+
+  socket.on("conversations:full", (data) => {
+    log("📚 Full load conversations reçues", "success", data);
+    displayConversations(data);
+    addReceivedMessage("message", "📚 Full Load Conversations", data, {
+      total: data.stats?.total || 0,
+      page: data.pagination?.currentPage || 1,
+      totalPages: data.pagination?.totalPages || 1,
+    });
+  });
+
+  socket.on("conversations_error", (error) => {
+    log("❌ Erreur récupération conversations", "error", error);
+    addReceivedMessage("error", "❌ Erreur Conversations", error, {
+      message: error.message || error.error,
+      code: error.code,
+    });
+    alert(`Erreur: ${error.message || error.error}`);
+  });
+}
+
+// ========================================
+// FONCTIONS GROUPES ET DIFFUSION
+// ========================================
+
+function createGroup() {
+  console.log("🔵 createGroup() appelée");
+
+  const name = document.getElementById("groupName")?.value?.trim();
+  const receiverIds = document
+    .getElementById("groupReceiverIds")
+    ?.value?.trim();
+  const groupId =
+    document.getElementById("groupId")?.value?.trim() || undefined;
+
+  console.log("📝 Valeurs récupérées:", { name, receiverIds, groupId });
+
+  if (!name) {
+    alert("Veuillez saisir un nom de groupe");
+    return;
+  }
+
+  if (!receiverIds) {
+    alert("Veuillez saisir les IDs des membres (séparés par virgule)");
+    return;
+  }
+
+  const members = receiverIds
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id);
+
+  if (members.length === 0) {
+    alert("Aucun membre valide");
+    return;
+  }
+
+  const data = {
+    name,
+    members,
+    groupId,
+  };
+
+  log("📤 Émission createGroup", "info", data);
+  socket.emit("createGroup", data);
+}
+
+function createBroadcast() {
+  const name = document.getElementById("broadcastName")?.value?.trim();
+  const receiverIds = document
+    .getElementById("groupReceiverIds")
+    ?.value?.trim();
+  const broadcastId =
+    document.getElementById("broadcastId")?.value?.trim() || undefined;
+
+  if (!name) {
+    alert("Veuillez saisir un nom de diffusion");
+    return;
+  }
+
+  if (!receiverIds) {
+    alert("Veuillez saisir les IDs des destinataires (séparés par virgule)");
+    return;
+  }
+
+  const recipients = receiverIds
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id);
+
+  if (recipients.length === 0) {
+    alert("Aucun destinataire valide");
+    return;
+  }
+
+  const data = {
+    name,
+    recipients,
+    broadcastId,
+  };
+
+  log("📤 Émission createBroadcast", "info", data);
+  socket.emit("createBroadcast", data);
 }
 
 // ========================================
@@ -1407,20 +1580,27 @@ async function fetchMyFiles() {
     // ✅ RÉCUPÉRER LE TOKEN DEPUIS LES COOKIES
     const token = getCookie("token");
 
+    if (!token) {
+      statusDiv.innerHTML = `
+        <div class="error-state">
+          <i class="fas fa-lock"></i>
+          <p>❌ Authentification requise</p>
+          <small>Veuillez vous authentifier d'abord</small>
+        </div>
+      `;
+      return;
+    }
+
     // ✅ AFFICHER LE STATUT DE CHARGEMENT
     statusDiv.innerHTML =
       '<div class="loading">⏳ Chargement des fichiers...</div>';
 
     // ✅ AJOUTER LE TOKEN DANS LES HEADERS
     const headers = {
-      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
     };
 
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-
-    const res = await fetch("http://localhost:8003/files", {
+    const res = await fetch("/files", {
       method: "GET",
       headers: headers,
     });
@@ -1531,10 +1711,14 @@ async function downloadFile(fileId) {
   try {
     const token = getCookie("token");
 
-    const headers = {};
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
+    if (!token) {
+      log("❌ Token manquant. Authentifiez-vous d'abord", "error");
+      return;
     }
+
+    const headers = {
+      Authorization: `Bearer ${token}`,
+    };
 
     const res = await fetch(`/files/${fileId}`, {
       method: "GET",
@@ -1566,6 +1750,331 @@ async function downloadFile(fileId) {
     log(`❌ Erreur téléchargement fichier ${fileId}`, "error", err);
   }
 }
+
+// ========================================
+// ✅ FONCTIONS GESTION CONVERSATIONS
+// ========================================
+
+let currentConversationsData = null;
+let currentConversationTab = "all";
+
+function getConversations() {
+  const page = parseInt(
+    document.getElementById("conversationsPage")?.value || 1
+  );
+  const limit = parseInt(
+    document.getElementById("conversationsLimit")?.value || 20
+  );
+
+  log(`📥 Récupération conversations (page ${page}, limit ${limit})`, "info");
+
+  socket.emit("getConversations", { page, limit });
+}
+
+function getConversationsQuickload() {
+  const limit = parseInt(
+    document.getElementById("conversationsLimit")?.value || 10
+  );
+
+  log(`⚡ Quick Load conversations (limit ${limit})`, "info");
+
+  socket.emit("conversations:quickload", { limit });
+}
+
+function getConversationsFullload() {
+  const page = parseInt(
+    document.getElementById("conversationsPage")?.value || 1
+  );
+  const limit = parseInt(
+    document.getElementById("conversationsLimit")?.value || 50
+  );
+
+  log(`📚 Full Load conversations (page ${page}, limit ${limit})`, "info");
+
+  socket.emit("conversations:fullload", { page, limit });
+}
+
+function displayConversations(data) {
+  currentConversationsData = data;
+
+  const resultsDiv = document.getElementById("conversationsResults");
+  if (!resultsDiv) return;
+
+  resultsDiv.style.display = "block";
+
+  // ✅ AFFICHER LE CONTEXTE UTILISATEUR
+  displayUserContext(data.userContext);
+
+  // ✅ AFFICHER LES STATISTIQUES
+  displayConversationsStats(data.stats, data.pagination);
+
+  // ✅ METTRE À JOUR LES COMPTEURS DES ONGLETS
+  updateConversationTabCounts(data);
+
+  // ✅ AFFICHER LA LISTE SELON L'ONGLET ACTIF
+  displayConversationsList(currentConversationTab);
+
+  // ✅ AFFICHER LA PAGINATION
+  displayConversationsPagination(data.pagination);
+}
+
+function displayUserContext(userContext) {
+  const contextDiv = document.getElementById("userContext");
+  if (!contextDiv || !userContext) return;
+
+  contextDiv.innerHTML = `
+    <div class="context-card">
+      <h4>👤 Contexte Utilisateur</h4>
+      <div class="context-info">
+        <span><strong>ID:</strong> ${userContext.userId || "N/A"}</span>
+        <span><strong>🏢 Département:</strong> ${
+          userContext.departement || "N/A"
+        }</span>
+        <span><strong>🏛️ Ministère:</strong> ${
+          userContext.ministere || "N/A"
+        }</span>
+      </div>
+    </div>
+  `;
+}
+
+function displayConversationsStats(stats, pagination) {
+  const statsDiv = document.getElementById("conversationsStats");
+  if (!statsDiv || !stats) return;
+
+  statsDiv.innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-value">${stats.total || 0}</div>
+        <div class="stat-label">📋 Total</div>
+      </div>
+      <div class="stat-card highlight">
+        <div class="stat-value">${stats.unread || 0}</div>
+        <div class="stat-label">📬 Non lues</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${stats.groups || 0}</div>
+        <div class="stat-label">👥 Groupes</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${stats.broadcasts || 0}</div>
+        <div class="stat-label">📢 Diffusions</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${stats.departement || 0}</div>
+        <div class="stat-label">🏢 Département</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${stats.private || 0}</div>
+        <div class="stat-label">💬 Privées</div>
+      </div>
+      <div class="stat-card total">
+        <div class="stat-value">${
+          stats.unreadMessagesInGroups +
+            stats.unreadMessagesInBroadcasts +
+            stats.unreadMessagesInDepartement +
+            stats.unreadMessagesInPrivate || 0
+        }</div>
+        <div class="stat-label">📨 Messages non lus</div>
+      </div>
+      ${
+        pagination
+          ? `
+        <div class="stat-card">
+          <div class="stat-value">${pagination.currentPage || 1} / ${
+              pagination.totalPages || 1
+            }</div>
+          <div class="stat-label">📄 Page</div>
+        </div>
+      `
+          : ""
+      }
+    </div>
+  `;
+}
+
+function updateConversationTabCounts(data) {
+  if (!data.stats) return;
+
+  document.getElementById("convAllCount").textContent = data.stats.total || 0;
+  document.getElementById("convUnreadCount").textContent =
+    data.stats.unread || 0;
+  document.getElementById("convGroupsCount").textContent =
+    data.stats.groups || 0;
+  document.getElementById("convBroadcastsCount").textContent =
+    data.stats.broadcasts || 0;
+  document.getElementById("convDepartementCount").textContent =
+    data.stats.departement || 0;
+  document.getElementById("convPrivateCount").textContent =
+    data.stats.private || 0;
+}
+
+function switchConversationTab(tab) {
+  currentConversationTab = tab;
+
+  // Mettre à jour les boutons actifs
+  document.querySelectorAll(".conversation-tabs .tab-btn").forEach((btn) => {
+    btn.classList.remove("active");
+  });
+  document
+    .getElementById(`conv${tab.charAt(0).toUpperCase() + tab.slice(1)}Tab`)
+    ?.classList.add("active");
+
+  // Afficher la liste
+  displayConversationsList(tab);
+}
+
+function displayConversationsList(tab) {
+  const listDiv = document.getElementById("conversationsList");
+  if (!listDiv || !currentConversationsData) return;
+
+  let conversations = [];
+
+  if (tab === "all") {
+    conversations = currentConversationsData.conversations || [];
+  } else {
+    conversations = currentConversationsData.categorized?.[tab] || [];
+  }
+
+  if (conversations.length === 0) {
+    listDiv.innerHTML = `
+      <div class="empty-state">
+        <p>Aucune conversation dans cette catégorie</p>
+      </div>
+    `;
+    return;
+  }
+
+  listDiv.innerHTML = conversations
+    .map(
+      (conv) => `
+    <div class="conversation-item ${conv.unreadCount > 0 ? "unread" : ""}">
+      <div class="conv-header">
+        <span class="conv-type">${getConversationTypeIcon(conv.type)}</span>
+        <strong class="conv-name">${escapeHtml(
+          conv.name || "Sans nom"
+        )}</strong>
+        ${
+          conv.unreadCount > 0
+            ? `<span class="unread-badge">${conv.unreadCount}</span>`
+            : ""
+        }
+      </div>
+      <div class="conv-info">
+        <span class="conv-id">ID: ${conv._id}</span>
+        <span class="conv-participants">👥 ${
+          conv.participantCount || 0
+        } participants</span>
+      </div>
+      ${
+        conv.lastMessage
+          ? `
+        <div class="conv-last-message">
+          <span class="last-msg-sender">${escapeHtml(
+            getSenderName(conv.lastMessage, conv.userMetadata)
+          )}:</span>
+          <span class="last-msg-content">${escapeHtml(
+            (conv.lastMessage.content || "").substring(0, 50)
+          )}${conv.lastMessage.content?.length > 50 ? "..." : ""}</span>
+        </div>
+      `
+          : ""
+      }
+      <div class="conv-actions">
+        <button onclick="selectConversation('${
+          conv._id
+        }')" class="btn-mini btn-primary">📋 Sélectionner</button>
+        <button onclick="joinConversationById('${
+          conv._id
+        }')" class="btn-mini btn-success">➕ Rejoindre</button>
+      </div>
+    </div>
+  `
+    )
+    .join("");
+}
+
+function displayConversationsPagination(pagination) {
+  const paginationDiv = document.getElementById("conversationsPagination");
+  if (!paginationDiv || !pagination) return;
+
+  const { currentPage, totalPages, hasNext, hasPrevious } = pagination;
+
+  paginationDiv.innerHTML = `
+    <div class="pagination-controls">
+      <button 
+        onclick="goToConversationPage(${currentPage - 1})" 
+        class="btn-secondary" 
+        ${!hasPrevious ? "disabled" : ""}
+      >
+        ⬅️ Précédent
+      </button>
+      <span class="pagination-info">Page ${currentPage} / ${totalPages}</span>
+      <button 
+        onclick="goToConversationPage(${currentPage + 1})" 
+        class="btn-secondary" 
+        ${!hasNext ? "disabled" : ""}
+      >
+        Suivant ➡️
+      </button>
+    </div>
+  `;
+}
+
+function goToConversationPage(page) {
+  document.getElementById("conversationsPage").value = page;
+  getConversations();
+}
+
+function selectConversation(conversationId) {
+  document.getElementById("conversationId").value = conversationId;
+  document.getElementById("fileConversationId").value = conversationId;
+  document.getElementById("groupId").value = conversationId;
+
+  log(`✅ Conversation ${conversationId} sélectionnée`, "success");
+}
+
+function joinConversationById(conversationId) {
+  document.getElementById("conversationId").value = conversationId;
+  joinConversation();
+}
+
+function getConversationTypeIcon(type) {
+  const icons = {
+    PRIVATE: "💬",
+    GROUP: "👥",
+    BROADCAST: "📢",
+    CHANNEL: "📺",
+    SUPPORT: "🆘",
+  };
+  return icons[type] || "💬";
+}
+
+// ✅ FONCTION POUR RÉCUPÉRER LE NOM DE L'EXPÉDITEUR
+function getSenderName(lastMessage, userMetadata) {
+  // 1. Si senderName existe et n'est pas "Utilisateur inconnu"
+  if (
+    lastMessage.senderName &&
+    lastMessage.senderName !== "Utilisateur inconnu"
+  ) {
+    return lastMessage.senderName;
+  }
+
+  // 2. Chercher dans userMetadata par senderId
+  if (lastMessage.senderId && Array.isArray(userMetadata)) {
+    const sender = userMetadata.find(
+      (meta) => meta.userId === lastMessage.senderId
+    );
+    if (sender && sender.name && sender.name !== "Utilisateur inconnu") {
+      return sender.name;
+    }
+  }
+
+  // 3. Fallback: afficher le senderId ou "Inconnu"
+  return lastMessage.senderId || "Inconnu";
+}
+
+// ✅ ÉVÉNEMENTS CONVERSATIONS DÉJÀ DÉFINIS DANS setupSocketEvents()
 
 async function deleteFile(fileId) {
   if (!confirm("Êtes-vous sûr de vouloir supprimer ce fichier ?")) {
@@ -1608,7 +2117,7 @@ async function deleteFile(fileId) {
   }
 }
 
-// ✅ AMÉLIORER LA FONCTION handleFileUpload POUR RAFRAÎCHIR AUTOMATIQUEMENT
+// ✅ MODIFIER handleFileUpload POUR UTILISER LES HEADERS
 async function handleFileUpload(e) {
   e.preventDefault();
   const fileInput = document.getElementById("fileInput");
@@ -1621,9 +2130,15 @@ async function handleFileUpload(e) {
     return;
   }
 
+  const token = getCookie("token");
+  if (!token) {
+    statusDiv.textContent = "❌ Token manquant. Authentifiez-vous d'abord";
+    statusDiv.className = "status error";
+    return;
+  }
+
   const file = fileInput.files[0];
   const conversationId = conversationIdInput.value.trim();
-
   const formData = new FormData();
   formData.append("file", file);
   if (conversationId) formData.append("conversationId", conversationId);
@@ -1631,13 +2146,16 @@ async function handleFileUpload(e) {
   statusDiv.textContent = "⏳ Upload en cours...";
   statusDiv.className = "status info";
 
-  const token = getCookie("token");
-
   try {
+    // ✅ AJOUTER LE TOKEN DANS LES HEADERS
+    const headers = {
+      Authorization: `Bearer ${token}`,
+    };
+
     const res = await fetch("/files/upload", {
       method: "POST",
       body: formData,
-      headers: currentUser?.userId ? { "user-id": currentUser.userId } : {},
+      headers: headers,
     });
 
     const data = await res.json();
@@ -1647,12 +2165,10 @@ async function handleFileUpload(e) {
       statusDiv.className = "status success";
       log("✅ Fichier uploadé", "success", data.data);
 
-      // ✅ RAFRAÎCHIR AUTOMATIQUEMENT LA LISTE DES FICHIERS
       setTimeout(() => {
         fetchMyFiles();
       }, 1000);
 
-      // ✅ RÉINITIALISER LE FORMULAIRE
       fileInput.value = "";
       conversationIdInput.value = "";
     } else {
@@ -1661,8 +2177,8 @@ async function handleFileUpload(e) {
       log("❌ Erreur upload fichier", "error", data);
     }
   } catch (err) {
-    statusDiv.textContent = "❌ Erreur réseau";
+    statusDiv.textContent = "❌ Erreur: " + err.message;
     statusDiv.className = "status error";
-    log("❌ Erreur réseau upload fichier", "error", err);
+    log("❌ Erreur upload", "error", err);
   }
 }
