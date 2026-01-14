@@ -4,9 +4,14 @@ const path = require("path");
 const { v4: uuidv4 } = require("uuid");
 
 class UploadFile {
-  constructor(fileRepository, kafkaProducer = null) {
+  constructor(
+    fileRepository,
+    kafkaProducer = null,
+    resilientMessageService = null
+  ) {
     this.fileRepository = fileRepository;
     this.kafkaProducer = kafkaProducer;
+    this.resilientMessageService = resilientMessageService;
   }
 
   async execute(fileData) {
@@ -59,6 +64,29 @@ class UploadFile {
       }
 
       console.log(`✅ Fichier sauvé avec ID custom: ${fileId}`);
+
+      // ✅ PUBLIER DANS REDIS STREAMS events:files
+      if (this.resilientMessageService) {
+        try {
+          await this.resilientMessageService.addToStream("events:files", {
+            event: "file.uploaded",
+            fileId: savedFile._id,
+            conversationId: savedFile.conversationId?.toString() || "unknown",
+            uploaderId: savedFile.uploadedBy?.toString() || "unknown",
+            originalName: savedFile.originalName,
+            mimeType: savedFile.mimeType,
+            size: savedFile.size.toString(),
+            url: savedFile.url,
+            timestamp: Date.now().toString(),
+          });
+          console.log(`📤 [file.uploaded] publié dans events:files`);
+        } catch (streamErr) {
+          console.error(
+            "❌ Erreur publication stream file.uploaded:",
+            streamErr.message
+          );
+        }
+      }
 
       // ✅ TRAITEMENT DES MÉTADONNÉES AUDIO SI BESOIN
       // if (fileEntity.mimeType && fileEntity.mimeType.startsWith("audio/")) {

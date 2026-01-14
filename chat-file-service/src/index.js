@@ -33,6 +33,8 @@ const {
   StreamManager,
   WorkerManager,
   RedisManager,
+  UserCache,
+  UserStreamConsumer,
 } = require("@chatapp-ngomna/shared");
 
 // Services
@@ -41,6 +43,7 @@ const FileStorageService = require("./infrastructure/services/FileStorageService
 const MediaProcessingService = require("./infrastructure/services/MediaProcessingService");
 const ResilientMessageService = require("./infrastructure/services/ResilientMessageService");
 const UserCacheService = require("./infrastructure/services/UserCacheService");
+const SmartCachePrewarmer = require("./infrastructure/services/SmartCachePrewarmer");
 
 // Repositories - Cached
 const CachedMessageRepository = require("./infrastructure/repositories/CachedMessageRepository");
@@ -66,6 +69,11 @@ const CreateGroup = require("./application/use-cases/CreateGroup");
 const CreateBroadcast = require("./application/use-cases/CreateBroadcast");
 const MarkMessageDelivered = require("./application/use-cases/MarkMessageDelivered");
 const MarkMessageRead = require("./application/use-cases/MarkMessageRead");
+const AddParticipant = require("./application/use-cases/AddParticipant");
+const RemoveParticipant = require("./application/use-cases/RemoveParticipant");
+const LeaveConversation = require("./application/use-cases/LeaveConversation");
+const DeleteMessage = require("./application/use-cases/DeleteMessage");
+const DeleteFile = require("./application/use-cases/DeleteFile");
 
 // Controllers
 const FileController = require("./application/controllers/FileController");
@@ -241,6 +249,21 @@ const startServer = async () => {
       await roomManager.initializeWithClient(redisClient);
       app.locals.roomManager = roomManager;
       console.log("   ✅ RoomManager (shared)");
+
+      // ✅ INITIALISER UserCache depuis shared
+      await UserCache.initialize();
+      console.log("   ✅ UserCache (shared) - Cache utilisateur centralisé");
+
+      // ✅ INITIALISER ET DÉMARRER UserStreamConsumer
+      const userStreamConsumer = new UserStreamConsumer({
+        streamName: "events:users",
+        consumerGroup: "chat-file-service-group",
+        consumerName: `chat-consumer-${process.pid}`,
+      });
+      await userStreamConsumer.initialize();
+      await userStreamConsumer.start();
+      app.locals.userStreamConsumer = userStreamConsumer;
+      console.log("   ✅ UserStreamConsumer - Écoute événements utilisateurs");
     }
 
     // ✅ INITIALISER MessageDeliveryService MAINTENANT QUE IO EST CRÉÉ
@@ -393,12 +416,14 @@ const startServer = async () => {
 
     const updateMessageContentUseCase = new UpdateMessageContent(
       messageRepository, // Cached
-      cacheServiceInstance
+      null, // kafkaProducer
+      resilientMessageService // ✅ AJOUTÉ pour publication events:messages
     );
 
     const uploadFileUseCase = new UploadFile(
       fileRepository, // Cached
-      null
+      null, // kafkaProducer
+      resilientMessageService // ✅ AJOUTÉ pour publication events:files
     );
 
     const getFileUseCase = new GetFile(
@@ -438,13 +463,54 @@ const startServer = async () => {
     const markMessageReadUseCase = new MarkMessageRead(
       messageRepository, // Cached
       conversationRepository, // Cached
-      cacheServiceInstance
+      null, // kafkaProducer
+      resilientMessageService // ✅ AJOUTÉ pour publication events:messages
+    );
+
+    // ✅ NOUVEAUX USE CASES - Gestion participants
+    const userCacheService = new UserCacheService();
+
+    const addParticipantUseCase = new AddParticipant(
+      conversationRepository,
+      resilientMessageService,
+      userCacheService
+    );
+
+    const removeParticipantUseCase = new RemoveParticipant(
+      conversationRepository,
+      resilientMessageService,
+      userCacheService
+    );
+
+    const leaveConversationUseCase = new LeaveConversation(
+      conversationRepository,
+      resilientMessageService,
+      userCacheService
+    );
+
+    // ✅ NOUVEAUX USE CASES - Suppression
+    const deleteMessageUseCase = new DeleteMessage(
+      messageRepository,
+      conversationRepository,
+      null, // kafkaProducer
+      resilientMessageService
+    );
+
+    const deleteFileUseCase = new DeleteFile(
+      fileRepository,
+      null, // kafkaProducer
+      resilientMessageService
     );
 
     // Rendre disponibles globalement (injection simple pour controllers / handlers)
     app.locals.useCases = app.locals.useCases || {};
     app.locals.useCases.markMessageDelivered = markMessageDeliveredUseCase;
     app.locals.useCases.markMessageRead = markMessageReadUseCase;
+    app.locals.useCases.addParticipant = addParticipantUseCase;
+    app.locals.useCases.removeParticipant = removeParticipantUseCase;
+    app.locals.useCases.leaveConversation = leaveConversationUseCase;
+    app.locals.useCases.deleteMessage = deleteMessageUseCase;
+    app.locals.useCases.deleteFile = deleteFileUseCase;
     app.locals.repositories = {
       message: messageRepository,
       conversation: conversationRepository,
@@ -768,7 +834,7 @@ const startServer = async () => {
     // 14. DÉMARRAGE SERVEUR
     // ===============================
     const PORT = process.env.CHAT_FILE_SERVICE_PORT || 8003;
-    server.listen(PORT, () => {
+    server.listen(PORT, async () => {
       console.log(`🚀 Chat-File Service démarré sur le port ${PORT}`);
       console.log(`🌍 Serveur ID: ${process.env.SERVER_ID || "chat-file-1"}`);
 
@@ -780,6 +846,8 @@ const startServer = async () => {
       console.log("   👥 Gestion utilisateurs en ligne");
       console.log("   🏠 Gestion des salons");
       console.log("   📊 Monitoring Redis");
+      console.log("   🗄️ Cache utilisateur centralisé (UserCache)");
+      console.log("   🔄 Synchronisation profils utilisateurs");
 
       console.log("\n📊 Statut des services:");
       console.log(`   MongoDB: ✅ Connecté`);
@@ -790,6 +858,7 @@ const startServer = async () => {
         `   UserMgr: ${onlineUserManager ? "✅ Actif" : "⚠️ Désactivé"}`
       );
       console.log(`   RoomMgr: ${roomManager ? "✅ Actif" : "⚠️ Désactivé"}`);
+      console.log(`   UserCache: ${UserCache ? "✅ Actif" : "⚠️ Désactivé"}`);
 
       console.log("\n" + "=".repeat(70));
       console.log("🎯 LIENS RAPIDES - CHAT-FILE-SERVICE");
@@ -804,6 +873,30 @@ const startServer = async () => {
       console.log(`🔌 WebSocket        : ws://localhost:${PORT}`);
       console.log(`❤️ Health Check     : http://localhost:${PORT}/health`);
       console.log("=".repeat(70) + "\n");
+
+      // ✅ DÉMARRER LE PRÉ-CHAUFFAGE INTELLIGENT DU CACHE (en arrière-plan)
+      if (redisClient) {
+        console.log("🔥 Démarrage du pré-chauffage intelligent du cache...");
+
+        const smartPrewarmer = new SmartCachePrewarmer({
+          authServiceUrl:
+            process.env.AUTH_USER_SERVICE_URL || "http://localhost:8001",
+          batchSize: 500,
+          delayBetweenBatches: 1500,
+          maxUsers: 10000,
+        });
+
+        // Lancer en arrière-plan (non-bloquant)
+        smartPrewarmer
+          .start()
+          .then((stats) => {
+            console.log("✅ Pré-chauffage terminé avec succès");
+            console.log(`   📊 Statistiques:`, stats);
+          })
+          .catch((error) => {
+            console.error("❌ Erreur pré-chauffage:", error.message);
+          });
+      }
     });
   } catch (error) {
     console.error("❌ Erreur au démarrage:", error);

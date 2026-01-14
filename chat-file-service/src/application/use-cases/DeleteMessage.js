@@ -1,0 +1,168 @@
+/**
+ * DeleteMessage - Supprime un message (pour tous ou pour soi uniquement)
+ * Publie l'événement message.deleted dans Redis Streams
+ */
+class DeleteMessage {
+  constructor(
+    messageRepository,
+    conversationRepository = null,
+    kafkaProducer = null,
+    resilientMessageService = null
+  ) {
+    this.messageRepository = messageRepository;
+    this.conversationRepository = conversationRepository;
+    this.kafkaProducer = kafkaProducer;
+    this.resilientMessageService = resilientMessageService;
+  }
+
+  /**
+   * Supprime un message
+   * @param {Object} params
+   * @param {string} params.messageId - ID du message à supprimer
+   * @param {string} params.userId - ID de l'utilisateur demandant la suppression
+   * @param {string} params.deleteType - "FOR_ME" ou "FOR_EVERYONE" (défaut: "FOR_ME")
+   * @returns {Promise<Object>} Message mis à jour ou supprimé
+   */
+  async execute({ messageId, userId, deleteType = "FOR_ME" }) {
+    if (!messageId || !userId) {
+      throw new Error("messageId et userId sont requis");
+    }
+
+    // Récupérer le message
+    const message = await this.messageRepository.findById(messageId);
+    if (!message) {
+      throw new Error("Message introuvable");
+    }
+
+    const conversationId = message.conversationId?.toString();
+    const senderId = message.senderId?.toString();
+
+    // Vérifier les permissions
+    if (deleteType === "FOR_EVERYONE") {
+      // Seul l'expéditeur peut supprimer pour tout le monde
+      if (senderId !== userId) {
+        throw new Error("Seul l'expéditeur peut supprimer pour tout le monde");
+      }
+
+      // Vérifier le délai (optionnel, ex: 5 minutes)
+      const messageAge = Date.now() - new Date(message.createdAt).getTime();
+      const maxDeleteTime = 5 * 60 * 1000; // 5 minutes
+      if (messageAge > maxDeleteTime) {
+        throw new Error("Délai de suppression dépassé (max 5 minutes)");
+      }
+    }
+
+    let result;
+
+    if (deleteType === "FOR_EVERYONE") {
+      // Suppression pour tous : marquer comme supprimé
+      message.content = "Ce message a été supprimé";
+      message.isDeleted = true;
+      message.deletedAt = new Date();
+      message.deletedBy = userId;
+      message.deletedFor = "EVERYONE";
+      message.updatedAt = new Date();
+
+      result = await this.messageRepository.save(message);
+    } else {
+      // Suppression pour moi uniquement : ajouter dans deletedFor
+      if (!message.deletedForUsers) {
+        message.deletedForUsers = [];
+      }
+
+      if (!message.deletedForUsers.includes(userId)) {
+        message.deletedForUsers.push(userId);
+      }
+
+      message.updatedAt = new Date();
+      result = await this.messageRepository.save(message);
+    }
+
+    // ✅ PUBLIER DANS REDIS STREAMS events:messages
+    if (this.resilientMessageService) {
+      try {
+        await this.resilientMessageService.addToStream("events:messages", {
+          event: "message.deleted",
+          messageId: messageId,
+          conversationId: conversationId || "unknown",
+          deleterId: userId,
+          deleteType: deleteType,
+          deletedAt: new Date().toISOString(),
+          timestamp: Date.now().toString(),
+        });
+        console.log(`📤 [message.deleted] publié dans events:messages`);
+      } catch (streamErr) {
+        console.error(
+          "❌ Erreur publication stream message.deleted:",
+          streamErr.message
+        );
+      }
+    }
+
+    // Publier dans Kafka
+    if (
+      this.kafkaProducer &&
+      typeof this.kafkaProducer.publishMessage === "function"
+    ) {
+      try {
+        await this.kafkaProducer.publishMessage({
+          eventType: "MESSAGE_DELETED",
+          messageId,
+          conversationId,
+          deleterId: userId,
+          deleteType,
+          timestamp: new Date().toISOString(),
+          source: "DeleteMessage-UseCase",
+        });
+      } catch (kafkaErr) {
+        console.warn("⚠️ Erreur publication Kafka:", kafkaErr.message);
+      }
+    }
+
+    // Mettre à jour lastMessage de la conversation si c'était le dernier
+    if (
+      this.conversationRepository &&
+      conversationId &&
+      deleteType === "FOR_EVERYONE"
+    ) {
+      try {
+        const conversation = await this.conversationRepository.findById(
+          conversationId
+        );
+        if (conversation?.lastMessage?.messageId === messageId) {
+          // Récupérer le message précédent
+          const messages = await this.messageRepository.findByConversationId(
+            conversationId,
+            { limit: 1, sort: { createdAt: -1 } }
+          );
+
+          conversation.lastMessage = messages[0]
+            ? {
+                messageId: messages[0]._id,
+                content: messages[0].content,
+                senderId: messages[0].senderId,
+                timestamp: messages[0].createdAt,
+              }
+            : null;
+
+          await this.conversationRepository.save(conversation);
+        }
+      } catch (convErr) {
+        console.warn("⚠️ Erreur mise à jour conversation:", convErr.message);
+      }
+    }
+
+    return {
+      success: true,
+      messageId,
+      deleteType,
+      deletedAt: new Date(),
+      message:
+        deleteType === "FOR_EVERYONE"
+          ? "Message supprimé pour tout le monde"
+          : "Message supprimé pour vous",
+    };
+  }
+}
+
+module.exports = DeleteMessage;

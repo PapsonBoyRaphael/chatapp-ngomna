@@ -9,6 +9,9 @@ const redis = require("./redis");
 // Resilience
 const resilience = require("./resilience");
 
+// User
+const user = require("./user");
+
 module.exports = {
   // Redis exports
   RedisFactory: redis.RedisFactory,
@@ -36,7 +39,12 @@ module.exports = {
   MemoryMonitorWorker: redis.MemoryMonitorWorker,
   StreamMonitorWorker: redis.StreamMonitorWorker,
 
+  // ✅ USER CACHE & STREAMS
+  UserCache: user.UserCache,
+  UserStreamConsumer: user.UserStreamConsumer,
+
   // Namespaces
   redis,
   resilience,
+  user,
 };

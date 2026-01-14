@@ -1,25 +1,24 @@
 const axios = require("axios");
-const { RedisManager } = require("@chatapp-ngomna/shared");
+const { UserCache } = require("@chatapp-ngomna/shared");
 
 /**
  * UserCacheService - Service intelligent de cache utilisateur avec fallback
  *
  * Stratégie multi-niveaux :
- * 1. Cache Redis (rapide, TTL 24h)
+ * 1. Cache Redis partagé via @chatapp-ngomna/shared/UserCache (rapide, TTL 7j)
  * 2. Fallback auth-user-service (si cache miss)
  * 3. Cache warming automatique
  *
- * Gère élégamment les utilisateurs hors ligne
+ * ✅ NOUVELLE VERSION : Utilise le cache partagé centralisé
  */
 class UserCacheService {
   constructor(options = {}) {
-    this.cachePrefix = options.cachePrefix || "user:cache";
-    this.cacheTTL = options.cacheTTL || 24 * 3600; // 24 heures par défaut
     this.authServiceUrl =
       options.authServiceUrl ||
       process.env.AUTH_USER_SERVICE_URL ||
       "http://localhost:8001";
     this.timeout = options.timeout || 5000;
+    this.userCache = UserCache; // Cache partagé depuis shared module
   }
 
   /**
@@ -38,26 +37,42 @@ class UserCacheService {
     }
 
     try {
-      // Étape 1 : Tentative lecture Redis
-      const cached = await this._getFromCache(userId);
+      // Étape 1 : Tentative lecture depuis le cache partagé Redis
+      const cached = await this.userCache.get(userId);
       if (cached) {
-        console.log(`✅ [UserCache] Hit Redis: ${userId}`);
-        return cached;
+        console.log(`✅ [UserCacheService] Hit Redis: ${userId}`);
+        return {
+          userId: cached.userId,
+          name: cached.fullName,
+          avatar: cached.avatar,
+          matricule: cached.matricule,
+          ministere: cached.ministere,
+        };
       }
 
-      // Étape 2 : Cache miss → Fallback auth-user-service
-      console.log(`⚠️ [UserCache] Miss Redis → Fallback HTTP: ${userId}`);
+      // Étape 2 : Cache miss → Fallback HTTP auth-user-service
+      console.log(
+        `⚠️ [UserCacheService] Miss Redis → Fallback HTTP: ${userId}`
+      );
       const userInfo = await this._fetchFromAuthService(userId);
 
-      // Étape 3 : Cache warming (repopulation Redis)
+      // Étape 3 : Cache warming (repopulation Redis via cache partagé)
       if (userInfo && userInfo.name) {
-        await this._saveToCache(userId, userInfo);
+        await this.userCache.set({
+          id: userId,
+          nom: userInfo.name.split(" ").slice(1).join(" "),
+          prenom: userInfo.name.split(" ")[0],
+          fullName: userInfo.name,
+          avatar: userInfo.avatar,
+          matricule: userInfo.matricule,
+          ministere: userInfo.ministere,
+        });
       }
 
       return userInfo;
     } catch (error) {
       console.warn(
-        `⚠️ [UserCache] Erreur fetchUserInfo pour ${userId}:`,
+        `⚠️ [UserCacheService] Erreur fetchUserInfo pour ${userId}:`,
         error.message
       );
       return {
@@ -78,29 +93,37 @@ class UserCacheService {
     if (!userIds || userIds.length === 0) return [];
 
     try {
-      // Étape 1 : Lecture batch depuis Redis
+      // Étape 1 : Lecture batch depuis Redis (cache partagé)
+      const cachedResults = await this.userCache.batchGet(userIds);
+
       const results = [];
       const missingIds = [];
 
-      for (const userId of userIds) {
-        const cached = await this._getFromCache(userId);
-        if (cached) {
-          results.push(cached);
-        } else {
-          missingIds.push(userId);
+      cachedResults.forEach((cached, i) => {
+        if (cached.fullName !== "Utilisateur inconnu") {
           results.push({
-            userId,
-            name: null, // placeholder temporaire
+            userId: cached.userId,
+            name: cached.fullName,
+            avatar: cached.avatar,
+            matricule: cached.matricule,
+            ministere: cached.ministere,
+          });
+        } else {
+          missingIds.push(userIds[i]);
+          results.push({
+            userId: userIds[i],
+            name: null,
             avatar: null,
-            matricule: userId,
+            matricule: userIds[i],
+            ministere: "",
           });
         }
-      }
+      });
 
       console.log(
-        `📊 [UserCache] Batch: ${results.length - missingIds.length} hits, ${
-          missingIds.length
-        } miss`
+        `📊 [UserCacheService] Batch: ${
+          results.length - missingIds.length
+        } hits, ${missingIds.length} miss`
       );
 
       // Étape 2 : Fallback HTTP pour les utilisateurs manquants
@@ -116,83 +139,33 @@ class UserCacheService {
             results[index] = fetchedUser;
           }
 
-          // Repopulate le cache
+          // Repopulate le cache partagé
           if (fetchedUser.name) {
-            await this._saveToCache(fetchedUser.userId, fetchedUser);
+            await this.userCache.set({
+              id: fetchedUser.userId,
+              nom: fetchedUser.name.split(" ").slice(1).join(" "),
+              prenom: fetchedUser.name.split(" ")[0],
+              fullName: fetchedUser.name,
+              avatar: fetchedUser.avatar,
+              matricule: fetchedUser.matricule,
+              ministere: fetchedUser.ministere,
+            });
           }
         }
       }
 
       return results;
     } catch (error) {
-      console.error(`❌ [UserCache] Erreur fetchUsersInfo:`, error.message);
-      // Fallback gracieux
+      console.error(
+        `❌ [UserCacheService] Erreur fetchUsersInfo:`,
+        error.message
+      );
       return userIds.map((userId) => ({
         userId,
         name: "Utilisateur inconnu",
         avatar: null,
         matricule: userId,
       }));
-    }
-  }
-
-  /**
-   * Lit depuis le cache Redis
-   * @private
-   */
-  async _getFromCache(userId) {
-    try {
-      const redis = RedisManager?.clients?.main;
-      if (!redis) return null;
-
-      const key = `${this.cachePrefix}:${userId}`;
-      const data = await redis.hGetAll(key);
-
-      if (!data || Object.keys(data).length === 0) {
-        return null;
-      }
-
-      return {
-        userId,
-        name: data.fullName || data.name || "Utilisateur inconnu",
-        avatar: data.avatar || null,
-        matricule: data.matricule || userId,
-      };
-    } catch (error) {
-      console.warn(
-        `⚠️ [UserCache] Erreur lecture Redis ${userId}:`,
-        error.message
-      );
-      return null;
-    }
-  }
-
-  /**
-   * Sauvegarde dans le cache Redis avec TTL
-   * @private
-   */
-  async _saveToCache(userId, userInfo) {
-    try {
-      const redis = RedisManager?.clients?.main;
-      if (!redis) return;
-
-      const key = `${this.cachePrefix}:${userId}`;
-      const cacheData = {
-        fullName: userInfo.name || "Utilisateur inconnu",
-        avatar: userInfo.avatar || "",
-        matricule: userInfo.matricule || userId,
-        updatedAt: Date.now().toString(),
-      };
-
-      await redis.hSet(key, cacheData);
-      await redis.expire(key, this.cacheTTL);
-
-      console.log(`💾 [UserCache] Cached ${userId} (TTL: ${this.cacheTTL}s)`);
-    } catch (error) {
-      console.warn(
-        `⚠️ [UserCache] Erreur sauvegarde Redis ${userId}:`,
-        error.message
-      );
     }
   }
 
@@ -216,12 +189,16 @@ class UserCacheService {
         name: fullName,
         avatar: user.profile_pic || user.avatar || null,
         matricule: user.matricule || userId,
+        ministere: user.ministere || "",
       };
     } catch (error) {
       if (error.response?.status === 404) {
-        console.warn(`⚠️ [UserCache] Utilisateur ${userId} introuvable`);
+        console.warn(`⚠️ [UserCacheService] Utilisateur ${userId} introuvable`);
       } else {
-        console.warn(`⚠️ [UserCache] Erreur HTTP ${userId}:`, error.message);
+        console.warn(
+          `⚠️ [UserCacheService] Erreur HTTP ${userId}:`,
+          error.message
+        );
       }
 
       return {
@@ -240,15 +217,12 @@ class UserCacheService {
    */
   async _fetchBatchFromAuthService(userIds) {
     try {
-      // Tentative route batch (si disponible)
+      // Tentative route batch
       try {
-        const response = await axios.get(
-          `${this.authServiceUrl}/api/users/batch`,
-          {
-            params: { ids: userIds.join(",") },
-            timeout: this.timeout,
-          }
-        );
+        const response = await axios.get(`${this.authServiceUrl}/batch`, {
+          params: { ids: userIds.join(",") },
+          timeout: this.timeout,
+        });
 
         const users = response.data.users || [];
         return users.map((user) => ({
@@ -258,17 +232,18 @@ class UserCacheService {
             : user.name || "Utilisateur inconnu",
           avatar: user.profile_pic || user.avatar || null,
           matricule: user.matricule || user.id,
+          ministere: user.ministere || "",
         }));
       } catch (batchError) {
         // Fallback : requêtes parallèles individuelles
         console.log(
-          `⚠️ [UserCache] Route batch indisponible, fallback requêtes parallèles`
+          `⚠️ [UserCacheService] Route batch indisponible, fallback requêtes parallèles`
         );
         const requests = userIds.map((id) => this._fetchFromAuthService(id));
         return await Promise.all(requests);
       }
     } catch (error) {
-      console.error(`❌ [UserCache] Erreur batch fetch:`, error.message);
+      console.error(`❌ [UserCacheService] Erreur batch fetch:`, error.message);
       return userIds.map((userId) => ({
         userId,
         name: "Utilisateur inconnu",
@@ -279,22 +254,18 @@ class UserCacheService {
   }
 
   /**
+  /**
    * Invalide le cache d'un utilisateur (après update profil)
    */
   async invalidateUser(userId) {
-    try {
-      const redis = RedisManager?.clients?.main;
-      if (!redis) return;
+    await this.userCache.invalidate(userId);
+  }
 
-      const key = `${this.cachePrefix}:${userId}`;
-      await redis.del(key);
-      console.log(`🗑️ [UserCache] Invalidated ${userId}`);
-    } catch (error) {
-      console.warn(
-        `⚠️ [UserCache] Erreur invalidation ${userId}:`,
-        error.message
-      );
-    }
+  /**
+   * Récupère les statistiques du cache
+   */
+  async getStats() {
+    return await this.userCache.getStats();
   }
 
   /**
@@ -302,18 +273,19 @@ class UserCacheService {
    */
   async warmCache(userId, userData) {
     try {
-      const userInfo = {
-        userId,
-        name: userData.fullName || userData.name || "Utilisateur inconnu",
+      await this.userCache.set({
+        id: userId,
+        nom: userData.name?.split(" ").slice(1).join(" ") || "",
+        prenom: userData.name?.split(" ")[0] || "",
+        fullName: userData.fullName || userData.name || "Utilisateur inconnu",
         avatar: userData.avatar || null,
         matricule: userData.matricule || userId,
-      };
-
-      await this._saveToCache(userId, userInfo);
-      console.log(`🔥 [UserCache] Warmed ${userId}`);
+        ministere: userData.ministere || "",
+      });
+      console.log(`🔥 [UserCacheService] Warmed ${userId}`);
     } catch (error) {
       console.warn(
-        `⚠️ [UserCache] Erreur cache warming ${userId}:`,
+        `⚠️ [UserCacheService] Erreur cache warming ${userId}:`,
         error.message
       );
     }

@@ -1,7 +1,9 @@
 class LoginUser {
-  constructor(userRepository, jwtService) {
+  constructor(userRepository, jwtService, userCache, redisClient) {
     this.userRepository = userRepository;
     this.jwtService = jwtService;
+    this.userCache = userCache;
+    this.redisClient = redisClient;
   }
 
   async execute(matricule) {
@@ -12,8 +14,22 @@ class LoginUser {
       throw new Error("Utilisateur non trouvé");
     }
 
+    // ✅ Mise en cache du profil lors du login (cache warming)
+    if (this.userCache) {
+      await this.userCache.set({
+        id: user.id,
+        nom: user.nom,
+        prenom: user.prenom,
+        matricule: user.matricule,
+        ministere: user.ministere,
+        avatar: user.avatar || user.profile_pic,
+        sexe: user.sexe,
+      });
+      console.log(`🔥 [LoginUser] Profil mis en cache: ${user.id}`);
+    }
+
     // Seul le matricule est nécessaire pour générer les tokens
-    const payload = { matricule: user.matricule };
+    const payload = { matricule: user.matricule, id: user.id };
 
     const accessToken = this.jwtService.generateToken(payload, "15m");
     const refreshToken = this.jwtService.generateRefreshToken(payload, "7d");

@@ -133,6 +133,30 @@ class CreateGroup {
       conversationData
     );
 
+    // ✅ PUBLIER DANS REDIS STREAMS events:conversations
+    if (this.resilientMessageService) {
+      try {
+        await this.resilientMessageService.addToStream("events:conversations", {
+          event: "conversation.created",
+          conversationId: savedConversation._id.toString(),
+          type: "GROUP",
+          createdBy: adminId,
+          participants: JSON.stringify(participants),
+          name: name,
+          participantCount: participants.length.toString(),
+          timestamp: Date.now().toString(),
+        });
+        console.log(
+          `📤 [conversation.created] publié dans events:conversations`
+        );
+      } catch (streamErr) {
+        console.error(
+          "❌ Erreur publication stream conversation.created:",
+          streamErr.message
+        );
+      }
+    }
+
     // ✅ PUBLIER NOTIFICATION SYSTÈME VIA RESILIENT MESSAGE SERVICE
     if (this.resilientMessageService) {
       try {

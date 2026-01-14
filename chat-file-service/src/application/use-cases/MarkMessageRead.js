@@ -2,11 +2,13 @@ class MarkMessageRead {
   constructor(
     messageRepository,
     conversationRepository = null,
-    kafkaProducer = null
+    kafkaProducer = null,
+    resilientMessageService = null
   ) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
     this.kafkaProducer = kafkaProducer;
+    this.resilientMessageService = resilientMessageService;
   }
 
   /**
@@ -42,6 +44,29 @@ class MarkMessageRead {
           "READ",
           messageIds || []
         );
+      }
+
+      // ✅ PUBLIER DANS REDIS STREAMS events:messages
+      if (this.resilientMessageService && result && result.modifiedCount > 0) {
+        try {
+          await this.resilientMessageService.addToStream("events:messages", {
+            event: "message.read",
+            conversationId: conversationId || "unknown",
+            messageIds: JSON.stringify(
+              messageIds || (messageId ? [messageId] : "ALL")
+            ),
+            readerId: userId,
+            readAt: new Date().toISOString(),
+            modifiedCount: result.modifiedCount.toString(),
+            timestamp: Date.now().toString(),
+          });
+          console.log(`📤 [message.read] publié dans events:messages`);
+        } catch (streamErr) {
+          console.error(
+            "❌ Erreur publication stream message.read:",
+            streamErr.message
+          );
+        }
       }
 
       // publication Kafka
