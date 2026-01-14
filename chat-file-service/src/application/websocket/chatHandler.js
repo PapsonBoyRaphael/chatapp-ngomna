@@ -1369,82 +1369,116 @@ class ChatHandler {
 
       let conversationIds = [];
 
-      // ✅ RÉCUPÉRATION DES CONVERSATIONS EN ARRIÈRE-PLAN (non-bloquante)
-      setImmediate(async () => {
+      // ✅ ÉTAPE 1 : RÉCUPÉRER LES CONVERSATIONS COMPLÈTES ET LES LIVRER AU CLIENT
+      if (this.getConversationsUseCase) {
         const convStartTime = Date.now();
-        console.log(
-          `🔍 [${new Date().toISOString()}] Début récupération conversations (ARRIÈRE-PLAN)`
-        );
+        try {
+          const convResult = await this.getConversationsUseCase.execute(
+            userIdString,
+            {
+              page: 1,
+              limit: 200,
 
-        if (this.getConversationIdsUseCase) {
-          try {
-            const conversationIdsData =
-              await this.getConversationIdsUseCase.execute(userIdString);
-
-            if (!Array.isArray(conversationIdsData)) {
-              console.warn(`⚠️ conversationIds n'est pas un tableau`);
-              return;
+              useCache: true,
             }
+          );
 
-            const convDuration = Date.now() - convStartTime;
+          const convDuration = Date.now() - convStartTime;
+          console.log(
+            `✅ [${new Date().toISOString()}] ${
+              convResult.conversations?.length || 0
+            } conversation(s) récupérée(s) pour ${userIdString} (⏱️ ${convDuration}ms)`
+          );
+
+          // ✅ LIVRER LES CONVERSATIONS AU CLIENT IMMÉDIATEMENT
+          if (convResult && convResult.conversations) {
+            const convEmitStartTime = Date.now();
+            try {
+              socket.emit("conversationsLoaded", {
+                conversations: convResult.conversations || [],
+                pagination: convResult.pagination || {},
+                totalUnreadMessages: convResult.totalUnreadMessages || 0,
+                unreadConversations: convResult.unreadConversations || 0,
+                fromCache: convResult.fromCache || false,
+                timestamp: Date.now(),
+              });
+              const convEmitDuration = Date.now() - convEmitStartTime;
+              console.log(
+                `📤 [${new Date().toISOString()}] ${
+                  convResult.conversations.length
+                } conversation(s) envoyée(s) au client (⏱️ ${convEmitDuration}ms)`
+              );
+            } catch (convEmitError) {
+              console.error(
+                `❌ Erreur envoi conversations: ${convEmitError.message}`
+              );
+            }
+          }
+        } catch (convError) {
+          console.warn(
+            `⚠️ Erreur récupération conversations:`,
+            convError.message
+          );
+        }
+      }
+
+      // ✅ ÉTAPE 2 : RÉCUPÉRER LES IDs ET REJOINDRE LES ROOMS
+      if (this.getConversationIdsUseCase) {
+        const idsStartTime = Date.now();
+        try {
+          conversationIds = await this.getConversationIdsUseCase.execute(
+            userIdString
+          );
+
+          const idsDuration = Date.now() - idsStartTime;
+          console.log(
+            `✅ [${new Date().toISOString()}] ${
+              conversationIds.length
+            } ID(s) de conversation récupéré(s) (⏱️ ${idsDuration}ms)`
+          );
+
+          if (conversationIds.length > 0) {
+            const joinStartTime = Date.now();
+            for (const convId of conversationIds) {
+              socket.join(`conversation_${convId}`);
+            }
+            const joinDuration = Date.now() - joinStartTime;
             console.log(
-              `✅ [${new Date().toISOString()}] Récupération ${
-                conversationIdsData.length
-              } conversations pour ${userIdString} (⏱️ ${convDuration}ms)`
+              `👥 Rooms conversations rejointes (${conversationIds.length}) en ${joinDuration}ms`
             );
 
-            if (conversationIdsData.length > 0) {
-              // ✅ JOINTURE DES ROOMS EN ARRIÈRE-PLAN
-              const joinStartTime = Date.now();
-              console.log(
-                `👥 [${new Date().toISOString()}] Début jointure rooms (ARRIÈRE-PLAN)`
-              );
-              for (const convId of conversationIdsData) {
-                const roomName = `conversation_${convId}`;
-                socket.join(roomName);
-              }
-              const joinDuration = Date.now() - joinStartTime;
-              console.log(
-                `👥 [${new Date().toISOString()}] Jointure rooms terminée (⏱️ ${joinDuration}ms)`
-              );
-
-              // ✅ MISE À JOUR STATUT EN ARRIÈRE-PLAN
+            if (this.updateMessageStatusUseCase) {
               const updateStartTime = Date.now();
-              console.log(
-                `📝 [${new Date().toISOString()}] Mise à jour statut lancée`
-              );
               await Promise.all(
-                conversationIdsData.map(async (convId) => {
-                  if (this.updateMessageStatusUseCase) {
-                    try {
-                      await this.updateMessageStatusUseCase.execute({
-                        conversationId: convId,
-                        receiverId: userIdString,
-                        status: "DELIVERED",
-                        messageIds: null,
-                      });
-                    } catch (deliveredError) {
-                      console.warn(
-                        `⚠️ Erreur marquage delivered:`,
-                        deliveredError.message
-                      );
-                    }
+                conversationIds.map(async (convId) => {
+                  try {
+                    await this.updateMessageStatusUseCase.execute({
+                      conversationId: convId,
+                      receiverId: userIdString,
+                      status: "DELIVERED",
+                      messageIds: null,
+                    });
+                  } catch (deliveredError) {
+                    console.warn(
+                      `⚠️ Erreur marquage delivered:`,
+                      deliveredError.message
+                    );
                   }
                 })
               );
               const updateDuration = Date.now() - updateStartTime;
               console.log(
-                `📝 [${new Date().toISOString()}] Mise à jour statut terminée (⏱️ ${updateDuration}ms)`
+                `📝 Statuts mis à jour pour ${conversationIds.length} conversation(s) en ${updateDuration}ms`
               );
             }
-          } catch (convError) {
-            console.warn(
-              `⚠️ Erreur récupération conversations (ARRIÈRE-PLAN):`,
-              convError.message
-            );
           }
+        } catch (idsError) {
+          console.warn(
+            `⚠️ Erreur récupération IDs conversations:`,
+            idsError.message
+          );
         }
-      });
+      }
 
       if (
         socket.ministere &&
