@@ -11,6 +11,9 @@ const UserRepository = require("./infrastructure/repositories/UserRepository");
 // Services
 const JwtService = require("./application/services/JwtService");
 
+// ✅ SMART CACHE PREWARMER
+const SmartCachePrewarmer = require("./infrastructure/services/SmartCachePrewarmer");
+
 // Use Cases
 const GetAllUsers = require("./application/use-cases/GetAllUsers");
 const GetUserById = require("./application/use-cases/GetUserById");
@@ -121,6 +124,27 @@ const startServer = async () => {
       deleteUserUseCase
     );
     const authController = new AuthController(loginUserUseCase);
+
+    // ===============================
+    // 3. PRÉ-CHAUFFAGE CACHE UTILISATEUR
+    // ===============================
+    // ✅ Publier tous les utilisateurs dans Redis au démarrage
+    if (UserCache && userRepository) {
+      try {
+        const prewarmer = new SmartCachePrewarmer(userRepository, {
+          batchSize: 500,
+          delayBetweenBatches: 1500,
+        });
+        prewarmer.start().catch((error) => {
+          console.warn("⚠️ Erreur pré-chauffage cache:", error.message);
+        });
+      } catch (error) {
+        console.warn(
+          "⚠️ Impossible de démarrer SmartCachePrewarmer:",
+          error.message
+        );
+      }
+    }
 
     // Routes
     app.use("/", createUserRoutes(userController));

@@ -878,13 +878,13 @@ const startServer = async () => {
       if (redisClient) {
         console.log("🔥 Démarrage du pré-chauffage intelligent du cache...");
 
-        const smartPrewarmer = new SmartCachePrewarmer({
-          authServiceUrl:
-            process.env.AUTH_USER_SERVICE_URL || "http://localhost:8001",
-          batchSize: 500,
-          delayBetweenBatches: 1500,
-          maxUsers: 10000,
-        });
+        // const smartPrewarmer = new SmartCachePrewarmer({
+        //   authServiceUrl:
+        //     process.env.AUTH_USER_SERVICE_URL || "http://localhost:8001",
+        //   batchSize: 500,
+        //   delayBetweenBatches: 1500,
+        //   maxUsers: 10000,
+        // });
 
         // Lancer en arrière-plan (non-bloquant)
         smartPrewarmer

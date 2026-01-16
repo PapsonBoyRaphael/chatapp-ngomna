@@ -1,30 +1,30 @@
-const axios = require("axios");
 const { UserCache } = require("@chatapp-ngomna/shared");
 
 /**
  * SmartCachePrewarmer - Système de pré-chauffage intelligent du cache utilisateur
  *
+ * ✅ VERSION AUTH-USER-SERVICE :
+ * - Charge les utilisateurs directement depuis MongoDB (pas d'HTTP)
+ * - Publie dans Redis UserCache au démarrage
+ * - Découlé du chat-service → aucune dépendance
+ *
  * Stratégie:
- * - Charge TOUS les utilisateurs depuis auth-user-service/all
+ * - Récupère tous les utilisateurs depuis MongoDB User collection
  * - Traitement par batch pour éviter la surcharge
  * - Non-bloquant : s'exécute en arrière-plan
  *
  * Avantages:
- * - Pas de blocage au démarrage
- * - Cache hit rate élevé (80-95%)comment decompiler une apk sur linux
+ * - Source de vérité = auth-user-service
+ * - Cache hit rate élevé au démarrage (80-95%)
  * - Réduction des appels HTTP au runtime
- * - Couverture complète de tous les utilisateurs
+ * - Couverture complète de tous les utilisateurs sans appel externe
  */
 class SmartCachePrewarmer {
-  constructor(options = {}) {
-    this.authServiceUrl =
-      options.authServiceUrl ||
-      process.env.AUTH_USER_SERVICE_URL ||
-      "http://localhost:8001";
+  constructor(userRepository = null, options = {}) {
+    this.userRepository = userRepository;
     this.batchSize = options.batchSize || 500;
     this.delayBetweenBatches = options.delayBetweenBatches || 1500; // 1.5s
     this.maxUsers = options.maxUsers || 10000;
-    this.daysBack = options.daysBack || 7;
     this.isRunning = false;
     this.stats = {
       totalProcessed: 0,
@@ -44,16 +44,23 @@ class SmartCachePrewarmer {
       return this.stats;
     }
 
+    if (!this.userRepository) {
+      console.warn(
+        "⚠️ [SmartCachePrewarmer] userRepository non disponible, abandon"
+      );
+      return this.stats;
+    }
+
     this.isRunning = true;
     this.stats.startTime = Date.now();
 
     console.log(
-      "🔥 [SmartCachePrewarmer] Démarrage du pré-chauffage intelligent..."
+      "🔥 [SmartCachePrewarmer] Démarrage du pré-chauffage depuis MongoDB..."
     );
 
     try {
-      // Étape 1: Récupérer TOUS les utilisateurs depuis auth-user-service
-      const allUsers = await this._getAllUsersFromAuthService();
+      // Étape 1: Récupérer TOUS les utilisateurs depuis MongoDB
+      const allUsers = await this._getAllUsersFromMongoDB();
 
       if (allUsers.length === 0) {
         console.log("⚠️ [SmartCachePrewarmer] Aucun utilisateur trouvé");
@@ -61,7 +68,7 @@ class SmartCachePrewarmer {
       }
 
       console.log(
-        `📊 [SmartCachePrewarmer] ${allUsers.length} utilisateurs à mettre en cache`
+        `📊 [SmartCachePrewarmer] ${allUsers.length} utilisateurs à mettre en cache Redis`
       );
 
       // Étape 2: Traitement par batch
@@ -90,33 +97,33 @@ class SmartCachePrewarmer {
   }
 
   /**
-   * Récupère TOUS les utilisateurs depuis auth-user-service/all
+   * Récupère TOUS les utilisateurs depuis MongoDB
    * @private
    */
-  async _getAllUsersFromAuthService() {
+  async _getAllUsersFromMongoDB() {
     try {
       console.log(
-        `🔍 [SmartCachePrewarmer] Récupération de tous les utilisateurs depuis ${this.authServiceUrl}/all`
+        `🔍 [SmartCachePrewarmer] Récupération des utilisateurs depuis MongoDB`
       );
 
-      const response = await axios.get(`${this.authServiceUrl}/all`, {
-        timeout: 30000, // 30s pour une grosse requête
-      });
+      // Utiliser la méthode du repository pour récupérer tous les utilisateurs
+      const allUsers = await this.userRepository.findAll();
 
-      if (Array.isArray(response.data)) {
-        return response.data;
-      } else if (response.data && Array.isArray(response.data.users)) {
-        return response.data.users;
-      } else {
+      if (!Array.isArray(allUsers)) {
         console.warn(
-          "⚠️ [SmartCachePrewarmer] Format de réponse inattendu:",
-          typeof response.data
+          "⚠️ [SmartCachePrewarmer] Résultat non itérable:",
+          typeof allUsers
         );
         return [];
       }
+
+      console.log(
+        `✅ [SmartCachePrewarmer] ${allUsers.length} utilisateurs récupérés de MongoDB`
+      );
+      return allUsers;
     } catch (error) {
       console.error(
-        "❌ [SmartCachePrewarmer] Erreur récupération users:",
+        "❌ [SmartCachePrewarmer] Erreur récupération users MongoDB:",
         error.message
       );
       return [];
@@ -153,29 +160,33 @@ class SmartCachePrewarmer {
    */
   async _cacheBatch(users) {
     console.log(
-      `📊 [SmartCachePrewarmer] Mise en cache de ${users.length} utilisateurs`
+      `📊 [SmartCachePrewarmer] Mise en cache Redis de ${users.length} utilisateurs`
     );
 
     for (const user of users) {
       try {
-        if (!user.id) {
+        // ✅ Utiliser matricule comme clé primaire
+        const userId = user.matricule || user.id;
+
+        if (!userId) {
           console.warn(
-            `⚠️ [SmartCachePrewarmer] Utilisateur sans ID:`,
-            user.matricule
+            `⚠️ [SmartCachePrewarmer] Utilisateur sans matricule/id:`,
+            user
           );
           this.stats.errors++;
           continue;
         }
 
+        // ✅ Publier dans Redis UserCache
         await UserCache.set({
-          id: user.matricule || user.id, // ✅ Priorité au matricule (570479H)
-          nom: user.nom,
-          prenom: user.prenom,
+          id: userId,
+          nom: user.nom || null,
+          prenom: user.prenom || null,
           fullName: user.nom
             ? `${user.prenom || ""} ${user.nom}`.trim()
-            : user.name,
+            : user.name || "Utilisateur inconnu",
           avatar: user.avatar || user.profile_pic || null,
-          matricule: user.matricule,
+          matricule: user.matricule || userId,
           ministere: user.ministere || "",
           sexe: user.sexe || "",
         });
@@ -184,7 +195,9 @@ class SmartCachePrewarmer {
         this.stats.totalProcessed++;
       } catch (cacheError) {
         console.error(
-          `❌ [SmartCachePrewarmer] Erreur cache user ${user.id}:`,
+          `❌ [SmartCachePrewarmer] Erreur cache user ${
+            user.matricule || user.id
+          }:`,
           cacheError.message
         );
         this.stats.errors++;

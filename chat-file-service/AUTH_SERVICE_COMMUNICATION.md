@@ -176,12 +176,14 @@ Le **UserCacheService** implémente une stratégie de cache multi-niveaux pour r
 
 ```javascript
 // chat-file-service/src/infrastructure/services/UserCacheService.js
+const { UserCache } = require("@chatapp-ngomna/shared");
+
 class UserCacheService {
   constructor(options = {}) {
     this.authServiceUrl =
       process.env.AUTH_USER_SERVICE_URL || "http://localhost:8001";
-    this.cacheTTL = 24 * 3600; // 24 heures
     this.timeout = 5000; // 5 secondes
+    this.userCache = UserCache; // Cache partagé depuis shared module (TTL: 7 jours)
   }
 }
 ```
@@ -191,22 +193,20 @@ class UserCacheService {
 #### Niveau 1 : Cache Redis (rapide)
 
 ```javascript
-async _getFromCache(userId) {
-  const redis = RedisManager?.clients?.main;
-  const key = `user:cache:${userId}`;
+async fetchUserInfo(userId) {
+  try {
+    // Étape 1 : Tentative lecture depuis le cache partagé Redis
+    const cached = await this.userCache.get(userId);
+    if (cached) {
+      const responseUser = this._mapCacheToResponse(cached, userId);
+      if (responseUser) {
+        console.log(`✅ [UserCacheService] Hit Redis: ${userId}`);
+        return responseUser;
+      }
+    }
 
-  const data = await redis.hGetAll(key);
-
-  if (data && Object.keys(data).length > 0) {
-    return {
-      userId,
-      name: data.fullName || data.name,
-      avatar: data.avatar || null,
-      matricule: data.matricule || userId
-    };
+    // Étape 2 : Cache miss...
   }
-
-  return null; // Cache miss
 }
 ```
 
@@ -260,19 +260,30 @@ router.get("/:id", (req, res) => {
 #### Niveau 3 : Cache Warming (repopulation Redis)
 
 ```javascript
-async _saveToCache(userId, userInfo) {
-  const redis = RedisManager?.clients?.main;
-  const key = `user:cache:${userId}`;
+// Étape 3 : Cache warming (repopulation Redis via cache partagé)
+if (userInfo && userInfo.name) {
+  await this.userCache.set(this._buildCachePayload(userInfo));
+}
 
-  const cacheData = {
-    fullName: userInfo.name || "Utilisateur inconnu",
-    avatar: userInfo.avatar || "",
-    matricule: userInfo.matricule || userId,
-    updatedAt: Date.now().toString()
+// La méthode _buildCachePayload construit l'objet à mettre en cache
+_buildCachePayload(user) {
+  const userId = user.userId || user.id;
+  const nom = user.nom || null;
+  const prenom = user.prenom || null;
+  const fullName = nom
+    ? `${prenom || ""} ${nom}`.trim()
+    : user.fullName || user.name || "Utilisateur inconnu";
+
+  return {
+    id: userId,
+    nom,
+    prenom,
+    fullName,
+    avatar: user.avatar || user.profile_pic || null,
+    matricule: user.matricule || userId,
+    ministere: user.ministere || "",
+    sexe: user.sexe || ""
   };
-
-  await redis.hSet(key, cacheData);
-  await redis.expire(key, this.cacheTTL); // 24h
 }
 ```
 
@@ -412,31 +423,35 @@ async _fetchFromAuthService(userId) {
 ### Structure du cache Redis
 
 ```
-Key: user:cache:<userId>
+Key: user:profile:<userId>
 Type: Hash
-TTL: 86400 secondes (24 heures)
+TTL: 604800 secondes (7 jours)
 
 Champs:
+- id: "570479H"
+- nom: "Dupont"
+- prenom: "Jean"
 - fullName: "Jean Dupont"
 - avatar: "https://example.com/avatar.jpg"
 - matricule: "MAT12345"
-- updatedAt: "1736862000000"
+- ministere: "Ministère X"
+- sexe: "M"
+- updatedAt: "1737022800000"
 ```
 
 ### Métriques de performance
 
 | Opération                | Avec cache | Sans cache     |
 | ------------------------ | ---------- | -------------- |
-| Récupération utilisateur | ~5 ms      | ~50-200 ms     |
-| Batch 100 utilisateurs   | ~100 ms    | ~5-10 secondes |
+| Récupération utilisateur | < 1 ms     | ~50-200 ms     |
+| Batch 100 utilisateurs   | ~50 ms     | ~5-10 secondes |
 
 ### Invalidation du cache
 
 ```javascript
+// Invalidation via le cache partagé UserCache
 async invalidateUser(userId) {
-  const redis = RedisManager?.clients?.main;
-  const key = `user:cache:${userId}`;
-  await redis.del(key);
+  await this.userCache.delete(userId);
   console.log(`🗑️ [UserCache] Invalidated ${userId}`);
 }
 ```
@@ -451,34 +466,53 @@ async invalidateUser(userId) {
 
 ```javascript
 async fetchUsersInfo(userIds) {
-  const results = [];
-  const missingIds = [];
+  if (!userIds || userIds.length === 0) return [];
 
-  // Phase 1: Lecture batch Redis
-  for (const userId of userIds) {
-    const cached = await this._getFromCache(userId);
-    if (cached) {
-      results.push(cached);
-    } else {
-      missingIds.push(userId);
-    }
-  }
+  try {
+    // Phase 1 : Lecture batch depuis Redis (cache partagé)
+    const cachedResults = await this.userCache.batchGet(userIds);
 
-  // Phase 2: Fallback HTTP parallélisé
-  if (missingIds.length > 0) {
-    const requests = missingIds.map(id =>
-      this._fetchFromAuthService(id)
+    const results = [];
+    const missingIds = [];
+
+    cachedResults.forEach((cached, i) => {
+      const mapped = this._mapCacheToResponse(cached, userIds[i]);
+      if (mapped && mapped.name !== "Utilisateur inconnu") {
+        results.push(mapped);
+      } else {
+        missingIds.push(userIds[i]);
+      }
+    });
+
+    console.log(
+      `📊 [UserCacheService] Batch: ${
+        results.length - missingIds.length
+      } hits, ${missingIds.length} miss`
     );
-    const fetchedUsers = await Promise.all(requests);
 
-    // Phase 3: Cache warming + merge
-    for (const user of fetchedUsers) {
-      results.push(user);
-      await this._saveToCache(user.userId, user);
+    // Phase 2 : Fallback HTTP pour les utilisateurs manquants
+    if (missingIds.length > 0) {
+      const fetchedUsers = await this._fetchBatchFromAuthService(missingIds);
+
+      // Phase 3 : Mise à jour des résultats + cache warming
+      for (const fetchedUser of fetchedUsers) {
+        const index = results.findIndex((r) => r.userId === fetchedUser.userId);
+        if (index !== -1) {
+          results[index] = fetchedUser;
+        }
+
+        // Repopulate le cache partagé
+        if (fetchedUser.name) {
+          await this.userCache.set(this._buildCachePayload(fetchedUser));
+        }
+      }
     }
-  }
 
-  return results;
+    return results;
+  } catch (error) {
+    console.warn("⚠️ [UserCacheService] Erreur batch:", error.message);
+    return [];
+  }
 }
 ```
 
@@ -640,12 +674,12 @@ const userInfo = await userCacheService.fetchUserInfo(
 
 ## Résumé des interactions
 
-| Interaction                  | Fréquence           | Cache     | Méthode                   |
-| ---------------------------- | ------------------- | --------- | ------------------------- |
-| **Validation JWT**           | Chaque requête HTTP | Non       | Local (jwt.verify)        |
-| **Récupération utilisateur** | Selon cache         | Oui (24h) | HTTP GET /:id             |
-| **Batch utilisateurs**       | Conversations       | Oui (24h) | HTTP GET /:id (parallèle) |
-| **Invalidation cache**       | Rare                | N/A       | Redis DEL                 |
+| Interaction                  | Fréquence           | Cache    | Méthode              |
+| ---------------------------- | ------------------- | -------- | -------------------- |
+| **Validation JWT**           | Chaque requête HTTP | Non      | Local (jwt.verify)   |
+| **Récupération utilisateur** | Selon cache         | Oui (7j) | HTTP GET /:id        |
+| **Batch utilisateurs**       | Conversations       | Oui (7j) | userCache.batchGet() |
+| **Invalidation cache**       | Rare                | N/A      | userCache.delete()   |
 
 ---
 
@@ -660,9 +694,9 @@ const userInfo = await userCacheService.fetchUserInfo(
 
 ### Performance
 
-1. ✅ **Maximiser le cache hit rate** : TTL 24h adapté
-2. ✅ **Batch requests** : Regrouper les requêtes utilisateurs
-3. ✅ **Connexion keep-alive** : Réutiliser les connexions HTTP
+1. ✅ **Maximiser le cache hit rate** : TTL 7 jours (cache partagé centralisé)
+2. ✅ **Batch requests** : Utiliser userCache.batchGet() pour les récupérations groupées
+3. ✅ **Cache partagé** : Module @chatapp-ngomna/shared pour cohérence inter-services
 4. ✅ **Monitoring** : Tracer les métriques de cache (hit/miss)
 
 ### Résilience
@@ -709,8 +743,8 @@ node -e "console.log(require('jsonwebtoken').decode('eyJ...'))"
 # Tester la disponibilité auth-user-service
 curl http://localhost:8001/507f1f77bcf86cd799439011
 
-# Vérifier le cache Redis
-redis-cli HGETALL "user:cache:507f1f77bcf86cd799439011"
+# Vérifier le cache Redis (nouveau format)
+redis-cli HGETALL "user:profile:507f1f77bcf86cd799439011"
 
 # Vérifier les logs
 tail -f chat-file-service/logs/app.log | grep UserCache
@@ -734,8 +768,8 @@ redis-cli INFO stats
 grep "UserCache" chat-file-service/logs/app.log | grep -E "Hit|Miss"
 
 # Augmenter le TTL si besoin
-# Dans chat-file-service/src/infrastructure/services/UserCacheService.js
-this.cacheTTL = 48 * 3600; // 48 heures au lieu de 24
+# Dans shared/user/UserCache.js (cache centralisé)
+this.defaultTTL = 14 * 24 * 3600; // 14 jours au lieu de 7
 ```
 
 ---
@@ -749,6 +783,14 @@ this.cacheTTL = 48 * 3600; // 48 heures au lieu de 24
 
 ---
 
-**Dernière mise à jour :** 14 janvier 2026  
-**Version :** 1.0.0  
+**Dernière mise à jour :** 16 janvier 2026  
+**Version :** 1.1.0  
 **Auteur :** Documentation CENADI ChatApp
+
+**Changements v1.1.0 :**
+
+- Migration vers le cache partagé centralisé (@chatapp-ngomna/shared/UserCache)
+- TTL augmenté de 24h à 7 jours pour réduire la charge sur auth-user-service
+- Clé Redis changée de `user:cache:*` à `user:profile:*`
+- Support des champs étendus (nom, prenom, ministere, sexe)
+- Amélioration des performances avec batchGet() optimisé
