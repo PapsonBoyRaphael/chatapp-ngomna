@@ -21,6 +21,71 @@ class UserCacheService {
     this.userCache = UserCache; // Cache partagé depuis shared module
   }
 
+  _buildCachePayload(user) {
+    const userId = user.userId || user.id;
+    const nom = user.nom || null;
+    const prenom = user.prenom || null;
+    const fullName = nom
+      ? `${prenom || ""} ${nom}`.trim()
+      : user.fullName || user.name || "Utilisateur inconnu";
+
+    return {
+      id: userId,
+      nom,
+      prenom,
+      fullName,
+      avatar: user.avatar || user.profile_pic || null,
+      matricule: user.matricule || userId,
+      ministere: user.ministere || "",
+      sexe: user.sexe || "",
+    };
+  }
+
+  _mapCacheToResponse(cached, fallbackId) {
+    if (!cached) {
+      return null;
+    }
+
+    const userId = cached.id || cached.userId || fallbackId;
+    const fullName = cached.fullName
+      ? cached.fullName
+      : cached.nom
+      ? `${cached.prenom || ""} ${cached.nom}`.trim()
+      : "Utilisateur inconnu";
+
+    return {
+      userId,
+      name: fullName,
+      nom: cached.nom || null,
+      prenom: cached.prenom || null,
+      avatar: cached.avatar || null,
+      matricule: cached.matricule || userId,
+      ministere: cached.ministere || "",
+      sexe: cached.sexe || "",
+    };
+  }
+
+  _normalizeAuthUser(user, fallbackId) {
+    const userId = user.id || user._id?.toString() || fallbackId;
+    const nom = user.nom || null;
+    const prenom = user.prenom || null;
+    const fullName = nom
+      ? `${prenom || ""} ${nom}`.trim()
+      : user.fullName || user.name || user.username || "Utilisateur inconnu";
+
+    return {
+      userId,
+      nom,
+      prenom,
+      fullName,
+      name: fullName,
+      avatar: user.avatar || user.profile_pic || null,
+      matricule: user.matricule || userId,
+      ministere: user.ministere || "",
+      sexe: user.sexe || "",
+    };
+  }
+
   /**
    * Récupère les infos d'un utilisateur avec fallback intelligent
    * @param {string} userId - ID de l'utilisateur
@@ -40,14 +105,11 @@ class UserCacheService {
       // Étape 1 : Tentative lecture depuis le cache partagé Redis
       const cached = await this.userCache.get(userId);
       if (cached) {
-        console.log(`✅ [UserCacheService] Hit Redis: ${userId}`);
-        return {
-          userId: cached.userId,
-          name: cached.fullName,
-          avatar: cached.avatar,
-          matricule: cached.matricule,
-          ministere: cached.ministere,
-        };
+        const responseUser = this._mapCacheToResponse(cached, userId);
+        if (responseUser) {
+          console.log(`✅ [UserCacheService] Hit Redis: ${userId}`);
+          return responseUser;
+        }
       }
 
       // Étape 2 : Cache miss → Fallback HTTP auth-user-service
@@ -58,15 +120,7 @@ class UserCacheService {
 
       // Étape 3 : Cache warming (repopulation Redis via cache partagé)
       if (userInfo && userInfo.name) {
-        await this.userCache.set({
-          id: userId,
-          nom: userInfo.name.split(" ").slice(1).join(" "),
-          prenom: userInfo.name.split(" ")[0],
-          fullName: userInfo.name,
-          avatar: userInfo.avatar,
-          matricule: userInfo.matricule,
-          ministere: userInfo.ministere,
-        });
+        await this.userCache.set(this._buildCachePayload(userInfo));
       }
 
       return userInfo;
@@ -100,14 +154,9 @@ class UserCacheService {
       const missingIds = [];
 
       cachedResults.forEach((cached, i) => {
-        if (cached.fullName !== "Utilisateur inconnu") {
-          results.push({
-            userId: cached.userId,
-            name: cached.fullName,
-            avatar: cached.avatar,
-            matricule: cached.matricule,
-            ministere: cached.ministere,
-          });
+        const mapped = this._mapCacheToResponse(cached, userIds[i]);
+        if (mapped && mapped.name !== "Utilisateur inconnu") {
+          results.push(mapped);
         } else {
           missingIds.push(userIds[i]);
           results.push({
@@ -116,6 +165,9 @@ class UserCacheService {
             avatar: null,
             matricule: userIds[i],
             ministere: "",
+            sexe: "",
+            nom: null,
+            prenom: null,
           });
         }
       });
@@ -141,15 +193,7 @@ class UserCacheService {
 
           // Repopulate le cache partagé
           if (fetchedUser.name) {
-            await this.userCache.set({
-              id: fetchedUser.userId,
-              nom: fetchedUser.name.split(" ").slice(1).join(" "),
-              prenom: fetchedUser.name.split(" ")[0],
-              fullName: fetchedUser.name,
-              avatar: fetchedUser.avatar,
-              matricule: fetchedUser.matricule,
-              ministere: fetchedUser.ministere,
-            });
+            await this.userCache.set(this._buildCachePayload(fetchedUser));
           }
         }
       }
@@ -165,6 +209,8 @@ class UserCacheService {
         name: "Utilisateur inconnu",
         avatar: null,
         matricule: userId,
+        ministere: "",
+        sexe: "",
       }));
     }
   }
@@ -179,18 +225,7 @@ class UserCacheService {
         timeout: this.timeout,
       });
 
-      const user = response.data;
-      const fullName = user.nom
-        ? `${user.prenom || ""} ${user.nom}`.trim()
-        : user.name || user.username || "Utilisateur inconnu";
-
-      return {
-        userId,
-        name: fullName,
-        avatar: user.profile_pic || user.avatar || null,
-        matricule: user.matricule || userId,
-        ministere: user.ministere || "",
-      };
+      return this._normalizeAuthUser(response.data, userId);
     } catch (error) {
       if (error.response?.status === 404) {
         console.warn(`⚠️ [UserCacheService] Utilisateur ${userId} introuvable`);
@@ -206,6 +241,8 @@ class UserCacheService {
         name: "Utilisateur inconnu",
         avatar: null,
         matricule: userId,
+        ministere: "",
+        sexe: "",
       };
     }
   }
@@ -225,15 +262,9 @@ class UserCacheService {
         });
 
         const users = response.data.users || [];
-        return users.map((user) => ({
-          userId: user.id || user._id?.toString(),
-          name: user.nom
-            ? `${user.prenom || ""} ${user.nom}`.trim()
-            : user.name || "Utilisateur inconnu",
-          avatar: user.profile_pic || user.avatar || null,
-          matricule: user.matricule || user.id,
-          ministere: user.ministere || "",
-        }));
+        return users.map((user) =>
+          this._normalizeAuthUser(user, user.id || user._id?.toString())
+        );
       } catch (batchError) {
         // Fallback : requêtes parallèles individuelles
         console.log(
@@ -249,6 +280,8 @@ class UserCacheService {
         name: "Utilisateur inconnu",
         avatar: null,
         matricule: userId,
+        ministere: "",
+        sexe: "",
       }));
     }
   }
@@ -273,15 +306,9 @@ class UserCacheService {
    */
   async warmCache(userId, userData) {
     try {
-      await this.userCache.set({
-        id: userId,
-        nom: userData.name?.split(" ").slice(1).join(" ") || "",
-        prenom: userData.name?.split(" ")[0] || "",
-        fullName: userData.fullName || userData.name || "Utilisateur inconnu",
-        avatar: userData.avatar || null,
-        matricule: userData.matricule || userId,
-        ministere: userData.ministere || "",
-      });
+      await this.userCache.set(
+        this._buildCachePayload({ userId, ...userData })
+      );
       console.log(`🔥 [UserCacheService] Warmed ${userId}`);
     } catch (error) {
       console.warn(

@@ -59,15 +59,16 @@ const startServer = async () => {
       throw new Error("Échec de connexion à la base de données");
     }
 
-    // ✅ INITIALISER REDIS (optionnel)
+    // ===============================
+    // 2. CONNEXION REDIS + CACHE UTILISATEUR
+    // ===============================
     let redisClient = null;
     if (RedisManager) {
       try {
-        await RedisManager.initialize({
-          host: process.env.REDIS_HOST || "localhost",
-          port: process.env.REDIS_PORT || 6379,
-        });
-        redisClient = RedisManager.clients.main;
+        // ✅ CORRECTION : Utiliser connect() au lieu de initialize()
+        await RedisManager.connect(); // ✅ Sans paramètres
+
+        redisClient = RedisManager.getMainClient(); // ✅ Utiliser le getter
         console.log("✅ Redis connecté (cache utilisateur activé)");
 
         // Initialiser UserCache
@@ -76,6 +77,7 @@ const startServer = async () => {
         }
       } catch (error) {
         console.warn("⚠️ Redis non disponible:", error.message);
+        console.error("Stack:", error.stack); // ✅ Afficher l'erreur complète
       }
     }
 

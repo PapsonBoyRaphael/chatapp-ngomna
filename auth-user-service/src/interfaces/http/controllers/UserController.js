@@ -18,6 +18,7 @@ class UserController {
   async getAllUsers(req, res) {
     try {
       const users = await this.getAllUsersUseCase.execute();
+      console.log(`Récupéré ${users.length} utilisateurs`);
       res.json(users);
     } catch (error) {
       console.error("Erreur lors de la récupération des utilisateurs:", error);

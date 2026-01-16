@@ -29,12 +29,13 @@ class CreateUser {
       sexe: userData.sexe,
     };
 
-    // 2. Mise en cache immédiate Redis
+    // 2. Mise en cache immédiate Redis (avec matricule comme ID pour cohérence)
     if (this.userCache) {
       await this.userCache.set({
-        id: user.id,
+        id: user.matricule, // ✅ Utilise matricule comme clé primaire (570479H)
         nom: user.nom,
         prenom: user.prenom,
+        fullName: `${user.prenom || ""} ${user.nom || ""}`.trim(),
         matricule: user.matricule,
         ministere: user.ministere,
         avatar: user.avatar,

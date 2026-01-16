@@ -101,8 +101,17 @@ const userMetadataSchema = new Schema(
       vibration: { type: Boolean, default: true },
     },
     // ✅ AJOUT DES INFOS UTILISATEUR
-    name: {
+    nom: {
       type: String,
+      default: null,
+    },
+    prenom: {
+      type: String,
+      default: null,
+    },
+    sexe: {
+      type: String,
+      enum: ["M", "F", "O", null],
       default: null,
     },
     departement: {

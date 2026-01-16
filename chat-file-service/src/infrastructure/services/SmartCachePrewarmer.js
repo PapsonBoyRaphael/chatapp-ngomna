@@ -168,7 +168,7 @@ class SmartCachePrewarmer {
         }
 
         await UserCache.set({
-          id: user.id,
+          id: user.matricule || user.id, // ✅ Priorité au matricule (570479H)
           nom: user.nom,
           prenom: user.prenom,
           fullName: user.nom

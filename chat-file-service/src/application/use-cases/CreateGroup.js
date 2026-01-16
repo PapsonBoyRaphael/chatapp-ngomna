@@ -58,11 +58,14 @@ class CreateGroup {
     const userMetadata = participants.map((participantId) => {
       const userInfo = usersInfo.find((u) => u.userId === participantId) || {
         userId: participantId,
-        name: "Utilisateur inconnu",
+
+        nom: null,
+        prenom: null,
         avatar: null,
         matricule: participantId,
         departement: null,
         ministere: null,
+        sexe: null,
       };
 
       unreadCounts[participantId] = 0;
@@ -80,8 +83,10 @@ class CreateGroup {
           vibration: true,
         },
         // ✅ POPULATED À PARTIR DE UserCacheService
-        name: userInfo.name,
-        avatar: userInfo.avatar,
+        nom: userInfo.nom || null,
+        prenom: userInfo.prenom || null,
+        sexe: userInfo.sexe || null,
+        avatar: userInfo.avatar || null,
         departement: userInfo.departement || null,
         ministere: userInfo.ministere || null,
       };
@@ -128,6 +133,7 @@ class CreateGroup {
         autoDeleteAfter: 0,
       },
     };
+    console.log("userMetadata", userMetadata);
 
     const savedConversation = await this.conversationRepository.save(
       conversationData

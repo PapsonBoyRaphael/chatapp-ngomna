@@ -232,7 +232,19 @@ class UserStreamConsumer {
     };
 
     // Mettre à jour le cache
-    await UserCache.set(userProfile);
+    // ✅ Utilise matricule comme clé primaire pour cohérence avec fetchUsersInfo
+    await UserCache.set({
+      id: userProfile.matricule || userProfile.id,
+      nom: userProfile.nom,
+      prenom: userProfile.prenom,
+      fullName:
+        userProfile.fullName ||
+        `${userProfile.prenom || ""} ${userProfile.nom || ""}`.trim(),
+      avatar: userProfile.avatar,
+      matricule: userProfile.matricule,
+      ministere: userProfile.ministere,
+      sexe: userProfile.sexe,
+    });
 
     console.log(
       `✅ [UserStreamConsumer] Profil mis à jour en cache: ${event.userId}`

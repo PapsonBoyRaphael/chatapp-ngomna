@@ -17,15 +17,16 @@ class LoginUser {
     // ✅ Mise en cache du profil lors du login (cache warming)
     if (this.userCache) {
       await this.userCache.set({
-        id: user.id,
+        id: user.matricule, // ✅ Utilise matricule comme clé primaire (570479H)
         nom: user.nom,
         prenom: user.prenom,
+        fullName: `${user.prenom || ""} ${user.nom || ""}`.trim(),
         matricule: user.matricule,
         ministere: user.ministere,
         avatar: user.avatar || user.profile_pic,
         sexe: user.sexe,
       });
-      console.log(`🔥 [LoginUser] Profil mis en cache: ${user.id}`);
+      console.log(`🔥 [LoginUser] Profil mis en cache: ${user.matricule}`);
     }
 
     // Seul le matricule est nécessaire pour générer les tokens

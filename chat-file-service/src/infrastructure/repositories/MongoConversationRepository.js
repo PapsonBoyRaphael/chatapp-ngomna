@@ -687,9 +687,13 @@ class MongoConversationRepository {
           sound: Boolean(meta.notificationSettings?.sound ?? true),
           vibration: Boolean(meta.notificationSettings?.vibration ?? true),
         },
-        // ✅ AJOUTER ICI
-        name: meta.name || null,
-        avatar: meta.avatar || null,
+        // ✅ TOUS LES CHAMPS UTILISATEUR DU SCHÉMA
+        nom: meta.nom ? String(meta.nom) : null,
+        prenom: meta.prenom ? String(meta.prenom) : null,
+        sexe: meta.sexe ? String(meta.sexe) : null,
+        avatar: meta.avatar ? String(meta.avatar) : null,
+        departement: meta.departement ? String(meta.departement) : null,
+        ministere: meta.ministere ? String(meta.ministere) : null,
       }));
     } else {
       // ✅ CRÉER USER METADATA POUR TOUS LES PARTICIPANTS
@@ -704,6 +708,12 @@ class MongoConversationRepository {
           sound: true,
           vibration: true,
         },
+        nom: null,
+        prenom: null,
+        sexe: null,
+        avatar: null,
+        departement: null,
+        ministere: null,
       }));
     }
 

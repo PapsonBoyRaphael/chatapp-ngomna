@@ -5,14 +5,15 @@ const RedisManager = require("../redis/RedisManager");
  *
  * Stratégie :
  * - Stockage dans des Redis Hashes (HSET/HGETALL)
- * - Clé: user:profile:{userId}
+ * - Clé: user:profile:{userId} (ex: user:profile:570479H)
  * - TTL par défaut: 7 jours
- * - Champs: fullName, avatar, matricule, ministere, updatedAt
+ * - Champs: id, nom, prenom, fullName, avatar, matricule, ministere, sexe, updatedAt
  *
  * Avantages :
  * - Latence < 1ms pour les lectures
  * - Réduction des appels HTTP entre services
  * - Cache partagé entre tous les services
+ * - Stockage des nom/prenom séparés pour éviter les incohérences
  */
 class UserCache {
   constructor(options = {}) {
@@ -38,7 +39,7 @@ class UserCache {
 
   /**
    * Sauvegarde un profil utilisateur dans le cache
-   * @param {Object} user - Objet utilisateur
+   * @param {Object} user - Objet utilisateur avec id, nom, prenom, fullName, avatar, matricule, ministere, sexe
    * @returns {Promise<void>}
    */
   async set(user) {
@@ -46,34 +47,39 @@ class UserCache {
       console.warn("⚠️ [UserCache] Impossible de sauvegarder:", {
         hasRedis: !!this.redis,
         hasUser: !!user,
+        userId: user?.id,
       });
       return;
     }
 
     try {
-      const key = `${this.prefix}${user.id}`;
+      const userId = String(user.id); // ✅ Force string pour cohérence (570479H, pas 1)
+      const key = `${this.prefix}${userId}`;
+
+      // ✅ Construction du fullName si absent
+      const fullName = user.fullName
+        ? user.fullName
+        : user.nom
+        ? `${user.prenom || ""} ${user.nom}`.trim()
+        : user.name || "Utilisateur inconnu";
+
       const data = {
-        fullName:
-          `${user.prenom || ""} ${user.nom || ""}`.trim() ||
-          user.name ||
-          user.fullName ||
-          "Utilisateur inconnu",
+        id: userId,
+        nom: user.nom || "",
+        prenom: user.prenom || "",
+        fullName: fullName,
         avatar: user.avatar || user.profile_pic || "",
-        matricule: user.matricule || "",
+        matricule: user.matricule || userId,
         ministere: user.ministere || "",
         sexe: user.sexe || "",
         updatedAt: Date.now().toString(),
       };
 
-      // Sauvegarde dans Redis Hash
+      // ✅ Sauvegarde dans Redis Hash
       await this.redis.hSet(key, data);
 
-      // Définir le TTL
+      // ✅ Définir le TTL
       await this.redis.expire(key, this.defaultTTL);
-
-      // console.log(
-      //   `✅ [UserCache] Profil mis en cache: ${user.id} (${data.fullName})`
-      // );
     } catch (error) {
       console.error(
         `❌ [UserCache] Erreur sauvegarde ${user.id}:`,
@@ -84,7 +90,7 @@ class UserCache {
 
   /**
    * Récupère un profil utilisateur depuis le cache
-   * @param {string} userId - ID de l'utilisateur
+   * @param {string} userId - ID de l'utilisateur (ex: 570479H)
    * @returns {Promise<Object|null>} Profil ou null si absent
    */
   async get(userId) {
@@ -93,7 +99,8 @@ class UserCache {
     }
 
     try {
-      const key = `${this.prefix}${userId}`;
+      const userIdStr = String(userId); // ✅ Force string
+      const key = `${this.prefix}${userIdStr}`;
       const data = await this.redis.hGetAll(key);
 
       if (!data || Object.keys(data).length === 0) {
@@ -101,10 +108,12 @@ class UserCache {
       }
 
       return {
-        userId,
+        id: data.id || userIdStr,
+        nom: data.nom || null,
+        prenom: data.prenom || null,
         fullName: data.fullName || "Utilisateur inconnu",
         avatar: data.avatar || null,
-        matricule: data.matricule || userId,
+        matricule: data.matricule || userIdStr,
         ministere: data.ministere || "",
         sexe: data.sexe || "",
         updatedAt: data.updatedAt ? parseInt(data.updatedAt) : null,
@@ -117,7 +126,7 @@ class UserCache {
 
   /**
    * Récupère plusieurs profils utilisateurs en batch (optimisé avec pipeline)
-   * @param {Array<string>} userIds - Liste des IDs
+   * @param {Array<string>} userIds - Liste des IDs (ex: [570479H, 534589D, 792665T])
    * @returns {Promise<Array<Object>>} Liste des profils
    */
   async batchGet(userIds) {
@@ -127,7 +136,8 @@ class UserCache {
 
     try {
       const pipeline = this.redis.multi();
-      const keys = userIds.map((id) => `${this.prefix}${id}`);
+      const userIdStrs = userIds.map((id) => String(id)); // ✅ Force string
+      const keys = userIdStrs.map((id) => `${this.prefix}${id}`);
 
       keys.forEach((key) => {
         pipeline.hGetAll(key);
@@ -136,24 +146,39 @@ class UserCache {
       const results = await pipeline.exec();
 
       return results.map((result, i) => {
-        // result est un tableau [error, data]
-        const [err, data] = result || [null, null];
+        // ✅ redis v4: exec() retourne directement la réponse
+        // ✅ redis v3 / compat: exec() retourne [err, data]
+        let err = null;
+        let data = null;
+
+        if (Array.isArray(result)) {
+          [err, data] = result; // format legacy [err, data]
+        } else {
+          data = result; // format redis v4 direct
+        }
+
+        const userId = userIdStrs[i];
 
         if (err || !data || Object.keys(data).length === 0) {
           return {
-            userId: userIds[i],
+            id: userId,
+            nom: null,
+            prenom: null,
             fullName: "Utilisateur inconnu",
             avatar: null,
-            matricule: userIds[i],
+            matricule: userId,
             ministere: "",
+            sexe: "",
           };
         }
 
         return {
-          userId: userIds[i],
+          id: data.id || userId,
+          nom: data.nom || null,
+          prenom: data.prenom || null,
           fullName: data.fullName || "Utilisateur inconnu",
           avatar: data.avatar || null,
-          matricule: data.matricule || userIds[i],
+          matricule: data.matricule || userId,
           ministere: data.ministere || "",
           sexe: data.sexe || "",
           updatedAt: data.updatedAt ? parseInt(data.updatedAt) : null,
@@ -162,11 +187,14 @@ class UserCache {
     } catch (error) {
       console.error(`❌ [UserCache] Erreur batchGet:`, error.message);
       return userIds.map((userId) => ({
-        userId,
+        id: String(userId),
+        nom: null,
+        prenom: null,
         fullName: "Utilisateur inconnu",
         avatar: null,
-        matricule: userId,
+        matricule: String(userId),
         ministere: "",
+        sexe: "",
       }));
     }
   }
@@ -182,9 +210,10 @@ class UserCache {
     }
 
     try {
-      const key = `${this.prefix}${userId}`;
+      const userIdStr = String(userId); // ✅ Force string
+      const key = `${this.prefix}${userIdStr}`;
       await this.redis.del(key);
-      console.log(`🗑️ [UserCache] Cache invalidé: ${userId}`);
+      console.log(`🗑️ [UserCache] Cache invalidé: ${userIdStr}`);
     } catch (error) {
       console.error(
         `❌ [UserCache] Erreur invalidation ${userId}:`,
@@ -204,7 +233,8 @@ class UserCache {
     }
 
     try {
-      const keys = userIds.map((id) => `${this.prefix}${id}`);
+      const userIdStrs = userIds.map((id) => String(id)); // ✅ Force string
+      const keys = userIdStrs.map((id) => `${this.prefix}${id}`);
       await this.redis.del(keys);
       console.log(`🗑️ [UserCache] ${userIds.length} caches invalidés`);
     } catch (error) {
@@ -253,7 +283,8 @@ class UserCache {
     }
 
     try {
-      const key = `${this.prefix}${userId}`;
+      const userIdStr = String(userId); // ✅ Force string
+      const key = `${this.prefix}${userIdStr}`;
       const exists = await this.redis.exists(key);
       return exists === 1;
     } catch (error) {

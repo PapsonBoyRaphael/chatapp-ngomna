@@ -373,7 +373,9 @@ class SendMessage {
       const userMetadata = participants.map((participantId) => {
         const userInfo = usersInfo.find((u) => u.userId === participantId) || {
           userId: participantId,
-          name: "Utilisateur inconnu",
+          nom: null,
+          prenom: null,
+          sexe: null,
           avatar: null,
           matricule: participantId,
           departement: null,
@@ -393,8 +395,10 @@ class SendMessage {
             vibration: true,
           },
           // ✅ POPULATED À PARTIR DE UserCacheService
-          name: userInfo.name,
-          avatar: userInfo.avatar,
+          nom: userInfo.nom || null,
+          prenom: userInfo.prenom || null,
+          sexe: userInfo.sexe || null,
+          avatar: userInfo.avatar || null,
           departement: userInfo.departement || null,
           ministere: userInfo.ministere || null,
         };

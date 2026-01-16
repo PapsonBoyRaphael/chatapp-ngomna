@@ -81,7 +81,10 @@ class AddParticipant {
         sound: true,
         vibration: true,
       },
-      name: participantInfo?.name || "Utilisateur inconnu",
+      // ✅ Utiliser les champs corrects du schéma
+      nom: participantInfo?.nom || null,
+      prenom: participantInfo?.prenom || null,
+      sexe: participantInfo?.sexe || null,
       avatar: participantInfo?.avatar || null,
       departement: participantInfo?.departement || null,
       ministere: participantInfo?.ministere || null,
