@@ -875,28 +875,28 @@ const startServer = async () => {
       console.log("=".repeat(70) + "\n");
 
       // ✅ DÉMARRER LE PRÉ-CHAUFFAGE INTELLIGENT DU CACHE (en arrière-plan)
-      if (redisClient) {
-        console.log("🔥 Démarrage du pré-chauffage intelligent du cache...");
+      // if (redisClient) {
+      //   console.log("🔥 Démarrage du pré-chauffage intelligent du cache...");
 
-        // const smartPrewarmer = new SmartCachePrewarmer({
-        //   authServiceUrl:
-        //     process.env.AUTH_USER_SERVICE_URL || "http://localhost:8001",
-        //   batchSize: 500,
-        //   delayBetweenBatches: 1500,
-        //   maxUsers: 10000,
-        // });
+      //   const smartPrewarmer = new SmartCachePrewarmer({
+      //     authServiceUrl:
+      //       process.env.AUTH_USER_SERVICE_URL || "http://localhost:8001",
+      //     batchSize: 500,
+      //     delayBetweenBatches: 1500,
+      //     maxUsers: 10000,
+      //   });
 
-        // Lancer en arrière-plan (non-bloquant)
-        smartPrewarmer
-          .start()
-          .then((stats) => {
-            console.log("✅ Pré-chauffage terminé avec succès");
-            console.log(`   📊 Statistiques:`, stats);
-          })
-          .catch((error) => {
-            console.error("❌ Erreur pré-chauffage:", error.message);
-          });
-      }
+      //   // Lancer en arrière-plan (non-bloquant)
+      //   smartPrewarmer
+      //     .start()
+      //     .then((stats) => {
+      //       console.log("✅ Pré-chauffage terminé avec succès");
+      //       console.log(`   📊 Statistiques:`, stats);
+      //     })
+      //     .catch((error) => {
+      //       console.error("❌ Erreur pré-chauffage:", error.message);
+      //     });
+      // }
     });
   } catch (error) {
     console.error("❌ Erreur au démarrage:", error);

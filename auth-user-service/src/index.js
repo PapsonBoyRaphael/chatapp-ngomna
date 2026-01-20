@@ -4,6 +4,7 @@ const cors = require("cors");
 const path = require("path");
 const cookieParser = require("cookie-parser");
 const { testConnection } = require("./infrastructure/config/database");
+const redisConfig = require("./infrastructure/redis/redisConfig");
 
 // Repositories
 const UserRepository = require("./infrastructure/repositories/UserRepository");
@@ -30,11 +31,11 @@ const AuthController = require("./interfaces/http/controllers/AuthController");
 // Routes
 const createUserRoutes = require("./interfaces/http/routes/userRoutes");
 const createAuthRoutes = require("./interfaces/http/routes/authRoutes");
+const shared = require("@chatapp-ngomna/shared");
 
 // ✅ SHARED MODULE - Cache utilisateur partagé
 let UserCache, UserStreamConsumer, RedisManager;
 try {
-  const shared = require("@chatapp-ngomna/shared");
   UserCache = shared.UserCache;
   UserStreamConsumer = shared.UserStreamConsumer;
   RedisManager = shared.RedisManager;
@@ -68,19 +69,46 @@ const startServer = async () => {
     let redisClient = null;
     if (RedisManager) {
       try {
-        // ✅ CORRECTION : Utiliser connect() au lieu de initialize()
-        await RedisManager.connect(); // ✅ Sans paramètres
+        await RedisManager.connect();
 
-        redisClient = RedisManager.getMainClient(); // ✅ Utiliser le getter
-        console.log("✅ Redis connecté (cache utilisateur activé)");
+        if (!RedisManager.isConnected) {
+          throw new Error("RedisManager non connecté");
+        }
 
-        // Initialiser UserCache
+        redisClient = RedisManager.getMainClient();
+        console.log(
+          "✅ Redis connecté via RedisManager (cache utilisateur activé)"
+        );
+
         if (UserCache) {
           await UserCache.initialize();
         }
       } catch (error) {
-        console.warn("⚠️ Redis non disponible:", error.message);
-        console.error("Stack:", error.stack); // ✅ Afficher l'erreur complète
+        console.warn("⚠️ Redis (shared) indisponible:", error.message);
+        console.error("Stack:", error.stack);
+
+        try {
+          const fallbackClient = await redisConfig.connect();
+          if (fallbackClient) {
+            redisClient = fallbackClient;
+            console.log("✅ Redis connecté via redisConfig (fallback local)");
+          }
+        } catch (fallbackError) {
+          console.error("❌ Fallback Redis échoué:", fallbackError.message);
+        }
+      }
+    } else {
+      try {
+        const fallbackClient = await redisConfig.connect();
+        if (fallbackClient) {
+          redisClient = fallbackClient;
+          console.log("✅ Redis connecté via redisConfig (sans module shared)");
+        }
+      } catch (fallbackError) {
+        console.error(
+          "❌ Redis indisponible (fallback):",
+          fallbackError.message
+        );
       }
     }
 
