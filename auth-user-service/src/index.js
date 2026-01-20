@@ -69,7 +69,12 @@ const startServer = async () => {
     let redisClient = null;
     if (RedisManager) {
       try {
-        await RedisManager.connect();
+        await RedisManager.connect({
+          host: process.env.REDIS_HOST,
+          port: process.env.REDIS_PORT,
+          password: process.env.REDIS_PASSWORD,
+          db: process.env.REDIS_DB || 0,
+        });
 
         if (!RedisManager.isConnected) {
           throw new Error("RedisManager non connecté");
@@ -77,7 +82,7 @@ const startServer = async () => {
 
         redisClient = RedisManager.getMainClient();
         console.log(
-          "✅ Redis connecté via RedisManager (cache utilisateur activé)"
+          "✅ Redis connecté via RedisManager (cache utilisateur activé)",
         );
 
         if (UserCache) {
@@ -107,7 +112,7 @@ const startServer = async () => {
       } catch (fallbackError) {
         console.error(
           "❌ Redis indisponible (fallback):",
-          fallbackError.message
+          fallbackError.message,
         );
       }
     }
@@ -123,23 +128,23 @@ const startServer = async () => {
       userRepository,
       jwtService,
       UserCache,
-      redisClient
+      redisClient,
     );
     const batchGetUsersUseCase = new BatchGetUsers(userRepository);
     const updateUserProfileUseCase = new UpdateUserProfile(
       userRepository,
       UserCache,
-      redisClient
+      redisClient,
     );
     const createUserUseCase = new CreateUser(
       userRepository,
       UserCache,
-      redisClient
+      redisClient,
     );
     const deleteUserUseCase = new DeleteUser(
       userRepository,
       UserCache,
-      redisClient
+      redisClient,
     );
 
     // Controllers
@@ -149,7 +154,7 @@ const startServer = async () => {
       batchGetUsersUseCase,
       updateUserProfileUseCase,
       createUserUseCase,
-      deleteUserUseCase
+      deleteUserUseCase,
     );
     const authController = new AuthController(loginUserUseCase);
 
@@ -169,7 +174,7 @@ const startServer = async () => {
       } catch (error) {
         console.warn(
           "⚠️ Impossible de démarrer SmartCachePrewarmer:",
-          error.message
+          error.message,
         );
       }
     }
@@ -181,8 +186,8 @@ const startServer = async () => {
     app.listen(PORT, () => {
       console.log(
         `🚀 Auth-User Service démarré sur le port ${PORT} : ${chalk.blue(
-          `http://localhost:${PORT}`
-        )}`
+          `http://localhost:${PORT}`,
+        )}`,
       );
       if (redisClient) {
         console.log("   ✅ Cache utilisateur Redis actif");
