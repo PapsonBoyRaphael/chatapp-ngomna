@@ -75,14 +75,14 @@ class RedisManager {
 
           if (retries > this.config.maxRetries) {
             console.warn(
-              `⚠️ Redis: abandon après ${this.config.maxRetries} tentatives`
+              `⚠️ Redis: abandon après ${this.config.maxRetries} tentatives`,
             );
             return false;
           }
 
           const delay = Math.min(retries * 500, 3000);
           console.log(
-            `🔄 Redis: reconnexion dans ${delay}ms (tentative ${retries})`
+            `🔄 Redis: reconnexion dans ${delay}ms (tentative ${retries})`,
           );
           return delay;
         },
@@ -136,11 +136,20 @@ class RedisManager {
   /**
    * Connecter tous les clients Redis
    */
-  async connect() {
+  async connect(options = {}) {
     if (this.isConnected) {
       console.log("ℹ️ RedisManager déjà connecté");
       return true;
     }
+
+    const config = {
+      host: options.host || process.env.REDIS_HOST || "localhost",
+      port: options.port || parseInt(process.env.REDIS_PORT) || 6379,
+      password: options.password || process.env.REDIS_PASSWORD,
+      db: options.db || parseInt(process.env.REDIS_DB) || 0,
+      connectTimeout: parseInt(process.env.REDIS_CONNECTION_TIMEOUT) || 5000,
+      maxRetries: parseInt(process.env.REDIS_MAX_RETRY_ATTEMPTS) || 5,
+    };
 
     try {
       console.log("🔌 Connexion Redis...");
@@ -154,11 +163,11 @@ class RedisManager {
 
       // Connecter tous les clients en parallèle
       await Promise.all([
-        this.clients.main.connect(),
-        this.clients.pub.connect(),
-        this.clients.sub.connect(),
-        this.clients.stream.connect(),
-        this.clients.cache.connect(),
+        this.clients.main.connect(config),
+        this.clients.pub.connect(config),
+        this.clients.sub.connect(config),
+        this.clients.stream.connect(config),
+        this.clients.cache.connect(config),
       ]);
 
       // Initialiser les composants de résilience
@@ -276,7 +285,7 @@ class RedisManager {
   getStreamManager() {
     if (!this.streamManager) {
       throw new Error(
-        "StreamManager non initialisé. Appelez connect() d'abord."
+        "StreamManager non initialisé. Appelez connect() d'abord.",
       );
     }
     return this.streamManager;
@@ -288,7 +297,7 @@ class RedisManager {
   getCircuitBreaker() {
     if (!this.circuitBreaker) {
       throw new Error(
-        "CircuitBreaker non initialisé. Appelez connect() d'abord."
+        "CircuitBreaker non initialisé. Appelez connect() d'abord.",
       );
     }
     return this.circuitBreaker;
@@ -487,7 +496,7 @@ class RedisManager {
         dbSize,
         usedMemoryMB: usedMemoryMB.toFixed(2),
         connectedClients: Object.keys(this.clients).filter(
-          (k) => this.clients[k]
+          (k) => this.clients[k],
         ).length,
         streamStats: await this.getStreamStats(),
       };

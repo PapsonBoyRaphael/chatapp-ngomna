@@ -131,47 +131,32 @@ const startServer = async () => {
     let cacheServiceInstance = null;
 
     try {
-      // ✅ UTILISER RedisManager DU SHARED (singleton) COMME CLIENT PRINCIPAL
-      // Cela assure que StreamManager, WorkerManager, etc. utilisent le même client
-      await RedisManager.connect();
-      if (RedisManager.isConnected) {
-        redisClient = RedisManager.getMainClient();
-        console.log("✅ RedisManager (shared) connecté et prêt");
+      // Passe les vrais params de ton redisConfig
+      await RedisManager.connect({
+        host: process.env.REDIS_HOST, // ou redisConfig.host
+        port: process.env.REDIS_PORT,
+        password: process.env.REDIS_PASSWORD,
+        db: process.env.REDIS_DB || 0,
+      });
 
-        // ✅ INITIALISER CacheService depuis shared avec le client partagé
-        cacheServiceInstance = new CacheService({
-          defaultTTL: 3600,
-          keyPrefix: "chat",
-          maxScanCount: 1000,
-        });
-        await cacheServiceInstance.initializeWithClient(redisClient);
+      redisClient = RedisManager.getMainClient();
 
-        console.log("✅ Services Redis initialisés:");
-        console.log("   ✅ CacheService (shared)");
-      } else {
-        throw new Error("RedisManager non connecté");
-      }
-    } catch (error) {
-      console.warn("⚠️ Redis non disponible:", error.message);
-      console.warn("⚠️ Tentative avec redisConfig local en fallback...");
+      // Puis initialise tes services partagés avec ce client
+      cacheServiceInstance = new CacheService({
+        defaultTTL: 3600,
+        keyPrefix: "chat",
+        maxScanCount: 1000,
+      });
+      await cacheServiceInstance.initializeWithClient(redisClient);
 
-      try {
-        const redisConnected = await redisConfig.connect();
-        if (redisConnected) {
-          redisClient = redisConfig.getClient();
-          console.log("✅ Redis connecté via redisConfig (fallback local)");
+      console.log("✅ Services Redis initialisés:");
+      console.log("   ✅ CacheService (shared)");
+    } catch (err) {
+      console.error(
+        "❌ Redis distant non disponible, fallback ou mode dégradé",
+      );
 
-          cacheServiceInstance = new CacheService({
-            defaultTTL: 3600,
-            keyPrefix: "chat",
-            maxScanCount: 1000,
-          });
-          await cacheServiceInstance.initializeWithClient(redisClient);
-        }
-      } catch (fallbackError) {
-        console.error("❌ Fallback Redis échoué:", fallbackError.message);
-        console.error("⚠️ Service démarrera en mode dégradé (sans Redis)");
-      }
+      // Fallback ou mode dégradé ici si nécessaire
     }
 
     // ===============================
@@ -183,7 +168,7 @@ const startServer = async () => {
         credentials: true,
         methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allowedHeaders: ["Content-Type", "Authorization", "Accept", "user-id"],
-      })
+      }),
     );
 
     app.use(cookieParser());
@@ -222,7 +207,7 @@ const startServer = async () => {
           console.log("✅ Redis adapter Socket.IO configuré");
         } else {
           console.warn(
-            "⚠️ Clients Pub/Sub Redis non disponibles, adapter Socket.IO ignoré"
+            "⚠️ Clients Pub/Sub Redis non disponibles, adapter Socket.IO ignoré",
           );
         }
       } catch (error) {
@@ -279,7 +264,7 @@ const startServer = async () => {
       } catch (error) {
         console.error(
           "❌ Erreur initialisation MessageDeliveryService:",
-          error.message
+          error.message,
         );
       }
     } else {
@@ -324,7 +309,7 @@ const startServer = async () => {
       redisClient,
       null,
       thumbnailService,
-      cacheServiceInstance
+      cacheServiceInstance,
     );
 
     // ✅ SUPPRIMER UnreadManager séparé si present
@@ -333,18 +318,18 @@ const startServer = async () => {
     // ✅ CRÉER CachedMessageRepository SANS UnreadManager
     const messageRepository = new CachedMessageRepository(
       mongoMessageRepository,
-      cacheServiceInstance
+      cacheServiceInstance,
       // ← unreadManager SUPPRIMÉ - intégré dans CachedMessageRepository
     );
 
     const conversationRepository = new CachedConversationRepository(
       mongoConversationRepository,
-      cacheServiceInstance
+      cacheServiceInstance,
     );
 
     const fileRepository = new CachedFileRepository(
       mongoFileRepository,
-      cacheServiceInstance
+      cacheServiceInstance,
     );
 
     // ===============================
@@ -357,7 +342,7 @@ const startServer = async () => {
         messageRepository,
         mongoMessageRepository,
         mongoConversationRepository,
-        io // ✅ PASSER Socket.io DIRECTEMENT
+        io, // ✅ PASSER Socket.io DIRECTEMENT
       );
 
       // ✅ DÉMARRER LES WORKERS INTERNES (PAS BESOIN D'UN WORKER SÉPARÉ)
@@ -376,7 +361,7 @@ const startServer = async () => {
 
       app.locals.resilientMessageService = resilientMessageService;
       console.log(
-        "✅ ResilientMessageService avec workers et synchronisation démarré"
+        "✅ ResilientMessageService avec workers et synchronisation démarré",
       );
     }
 
@@ -389,82 +374,82 @@ const startServer = async () => {
       messageRepository, // Cached
       conversationRepository, // Cached
       cacheServiceInstance,
-      resilientMessageService // ← NOUVEAU
+      resilientMessageService, // ← NOUVEAU
     );
 
     const getMessagesUseCase = new GetMessages(
-      messageRepository // Cached
+      messageRepository, // Cached
     );
 
     const getConversationUseCase = new GetConversation(
       conversationRepository, // Cached
       messageRepository, // Cached
-      cacheServiceInstance
+      cacheServiceInstance,
     );
 
     const getConversationsUseCase = new GetConversations(
       conversationRepository, // Cached
       messageRepository, // Cached
-      cacheServiceInstance
+      cacheServiceInstance,
     );
 
     const updateMessageStatusUseCase = new UpdateMessageStatus(
       messageRepository, // Cached
       conversationRepository, // Cached
-      cacheServiceInstance
+      cacheServiceInstance,
     );
 
     const updateMessageContentUseCase = new UpdateMessageContent(
       messageRepository, // Cached
       null, // kafkaProducer
-      resilientMessageService // ✅ AJOUTÉ pour publication events:messages
+      resilientMessageService, // ✅ AJOUTÉ pour publication events:messages
     );
 
     const uploadFileUseCase = new UploadFile(
       fileRepository, // Cached
       null, // kafkaProducer
-      resilientMessageService // ✅ AJOUTÉ pour publication events:files
+      resilientMessageService, // ✅ AJOUTÉ pour publication events:files
     );
 
     const getFileUseCase = new GetFile(
       fileRepository, // Cached
-      cacheServiceInstance
+      cacheServiceInstance,
     );
 
     const getConversationIdsUseCase = new GetConversationIds(
-      conversationRepository // Cached
+      conversationRepository, // Cached
     );
 
     const getMessageByIdUseCase = new GetMessageById(
-      messageRepository // Cached
+      messageRepository, // Cached
     );
 
     const downloadFileUseCase = new DownloadFile(
       fileRepository, // Cached
       fileStorageService,
-      cacheServiceInstance
+      cacheServiceInstance,
     );
 
     const createGroupUseCase = new CreateGroup(
       conversationRepository, // Cached
-      resilientMessageService // Pour publier les notifications système
+      resilientMessageService, // Pour publier les notifications système
     );
     const createBroadcastUseCase = new CreateBroadcast(
       conversationRepository, // Cached
-      resilientMessageService // Pour publier les notifications système
+      resilientMessageService, // Pour publier les notifications système
     );
 
     const markMessageDeliveredUseCase = new MarkMessageDelivered(
       messageRepository, // Cached
       conversationRepository, // Cached
-      cacheServiceInstance
+      cacheServiceInstance,
     );
 
     const markMessageReadUseCase = new MarkMessageRead(
       messageRepository, // Cached
       conversationRepository, // Cached
       null, // kafkaProducer
-      resilientMessageService // ✅ AJOUTÉ pour publication events:messages
+      resilientMessageService, // ✅ AJOUTÉ pour publication events:messages
     );
 
     // ✅ NOUVEAUX USE CASES - Gestion participants
@@ -473,19 +458,19 @@ const startServer = async () => {
     const addParticipantUseCase = new AddParticipant(
       conversationRepository,
       resilientMessageService,
-      userCacheService
+      userCacheService,
     );
 
     const removeParticipantUseCase = new RemoveParticipant(
       conversationRepository,
       resilientMessageService,
-      userCacheService
+      userCacheService,
     );
 
     const leaveConversationUseCase = new LeaveConversation(
       conversationRepository,
       resilientMessageService,
-      userCacheService
+      userCacheService,
     );
 
     // ✅ NOUVEAUX USE CASES - Suppression
@@ -493,13 +478,13 @@ const startServer = async () => {
       messageRepository,
       conversationRepository,
       null, // kafkaProducer
-      resilientMessageService
+      resilientMessageService,
     );
 
     const deleteFileUseCase = new DeleteFile(
       fileRepository,
       null, // kafkaProducer
-      resilientMessageService
+      resilientMessageService,
     );
 
     // Rendre disponibles globalement (injection simple pour controllers / handlers)
@@ -526,20 +511,20 @@ const startServer = async () => {
       redisClient,
       fileStorageService,
       downloadFileUseCase,
-      mediaProcessingService
+      mediaProcessingService,
     );
 
     const messageController = new MessageController(
       sendMessageUseCase,
       getMessagesUseCase,
       updateMessageStatusUseCase,
-      redisClient
+      redisClient,
     );
 
     const conversationController = new ConversationController(
       getConversationsUseCase,
       getConversationUseCase,
-      redisClient
+      redisClient,
     );
 
     const healthController = new HealthController(redisClient);
@@ -582,7 +567,7 @@ const startServer = async () => {
       markMessageDeliveredUseCase,
       markMessageReadUseCase,
       resilientMessageService,
-      messageDeliveryService
+      messageDeliveryService,
     );
 
     // ✅ CONFIGURER LES GESTIONNAIRES D'ÉVÉNEMENTS SOCKET.IO
@@ -813,21 +798,24 @@ const startServer = async () => {
 
     // Maintenance Redis
     if (onlineUserManager && roomManager) {
-      setInterval(async () => {
-        try {
-          console.log("🧹 Nettoyage périodique Redis...");
-          const cleanedUsers = await onlineUserManager.cleanupInactiveUsers();
-          const cleanedRooms = await roomManager.cleanupInactiveRooms();
+      setInterval(
+        async () => {
+          try {
+            console.log("🧹 Nettoyage périodique Redis...");
+            const cleanedUsers = await onlineUserManager.cleanupInactiveUsers();
+            const cleanedRooms = await roomManager.cleanupInactiveRooms();
 
-          if (cleanedUsers > 0 || cleanedRooms > 0) {
-            console.log(
-              `🧹 Nettoyage terminé: ${cleanedUsers} utilisateurs, ${cleanedRooms} salons`
-            );
+            if (cleanedUsers > 0 || cleanedRooms > 0) {
+              console.log(
+                `🧹 Nettoyage terminé: ${cleanedUsers} utilisateurs, ${cleanedRooms} salons`,
+              );
+            }
+          } catch (error) {
+            console.error("❌ Erreur nettoyage Redis:", error);
           }
-        } catch (error) {
-          console.error("❌ Erreur nettoyage Redis:", error);
-        }
-      }, 30 * 60 * 1000); // 30 minutes
+        },
+        30 * 60 * 1000,
+      ); // 30 minutes
     }
 
     // ===============================
@@ -852,10 +840,10 @@ const startServer = async () => {
       console.log("\n📊 Statut des services:");
       console.log(`   MongoDB: ✅ Connecté`);
       console.log(
-        `   Redis:   ${redisClient ? "✅ Connecté" : "⚠️ Mode mémoire locale"}`
+        `   Redis:   ${redisClient ? "✅ Connecté" : "⚠️ Mode mémoire locale"}`,
       );
       console.log(
-        `   UserMgr: ${onlineUserManager ? "✅ Actif" : "⚠️ Désactivé"}`
+        `   UserMgr: ${onlineUserManager ? "✅ Actif" : "⚠️ Désactivé"}`,
       );
       console.log(`   RoomMgr: ${roomManager ? "✅ Actif" : "⚠️ Désactivé"}`);
       console.log(`   UserCache: ${UserCache ? "✅ Actif" : "⚠️ Désactivé"}`);
@@ -867,7 +855,7 @@ const startServer = async () => {
       console.log(`📁 API Fichiers     : http://localhost:${PORT}/files`);
       console.log(`💬 API Messages     : http://localhost:${PORT}/messages`);
       console.log(
-        `🗣️ API Conversations: http://localhost:${PORT}/conversations`
+        `🗣️ API Conversations: http://localhost:${PORT}/conversations`,
       );
       console.log(`📊 Statistiques     : http://localhost:${PORT}/stats`);
       console.log(`🔌 WebSocket        : ws://localhost:${PORT}`);
