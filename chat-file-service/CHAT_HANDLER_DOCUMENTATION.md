@@ -70,7 +70,7 @@ constructor(
   markMessageReadUseCase, // Marquage lu
   resilientMessageService, // Circuit Breaker
   messageDeliveryService, // Service de livraison messages
-  userCacheService // Cache utilisateurs
+  userCacheService, // Cache utilisateurs
 );
 ```
 
@@ -230,7 +230,7 @@ if (this.messageDeliveryService) {
   const deliveredCount =
     await this.messageDeliveryService.deliverPendingMessagesOnConnect(
       userIdString,
-      socket
+      socket,
     );
 }
 ```

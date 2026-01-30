@@ -12,12 +12,30 @@ const path = require("path");
 const app = express();
 const proxy = httpProxy.createProxyServer();
 
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (
+        process.env.FRONTEND_URL ||
+        /^http:\/\/localhost(:\d+)?$/.test(origin)
+      ) {
+        callback(null, true);
+      } else {
+        callback(new Error("Non autorisé par CORS"));
+      }
+    },
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Custom-Header"],
+    credentials: true,
+  }),
+);
+
 // 🛡️ Sécurité avec helmet
 app.use(
   helmet({
     contentSecurityPolicy: false, // Désactivé pour le développement
     crossOriginEmbedderPolicy: false,
-  })
+  }),
 );
 
 // ⚡ Compression des réponses
@@ -35,7 +53,7 @@ app.use(
       }
       return compression.filter(req, res);
     },
-  })
+  }),
 );
 
 // 🚫 Rate limiting global
@@ -66,12 +84,7 @@ app.use("/api/", globalLimiter);
 app.use("/api/auth/login", authLimiter);
 
 // Middleware de base
-app.use(
-  cors({
-    // origin: process.env.FRONTEND_URL,
-    // credentials: true,
-  })
-);
+
 app.use(express.json({ limit: "50mb" }));
 
 // Servir les fichiers statiques avec cache
@@ -79,7 +92,7 @@ app.use(
   express.static(path.join(__dirname, "public"), {
     maxAge: "1d", // Cache 1 jour
     etag: true,
-  })
+  }),
 );
 
 // Routes proxy vers les services
@@ -125,7 +138,7 @@ proxy.on("proxyReq", (proxyReq, req, res) => {
 proxy.on("proxyRes", (proxyRes, req, res) => {
   const statusColor = proxyRes.statusCode >= 400 ? chalk.red : chalk.green;
   console.log(
-    statusColor(`📥 ${proxyRes.statusCode} ${req.method} ${req.url}`)
+    statusColor(`📥 ${proxyRes.statusCode} ${req.method} ${req.url}`),
   );
 });
 
@@ -182,7 +195,7 @@ proxy.on("error", (err, req, res) => {
 // Route 404 améliorée
 app.use((req, res) => {
   console.log(
-    chalk.yellow(`⚠️ Route non trouvée: ${req.method} ${req.originalUrl}`)
+    chalk.yellow(`⚠️ Route non trouvée: ${req.method} ${req.originalUrl}`),
   );
   res.status(404).json({
     success: false,
@@ -196,17 +209,17 @@ const PORT = process.env.GATEWAY_PORT || 8000;
 
 app.listen(PORT, () => {
   console.log(
-    chalk.yellow(`🚀 Gateway CENADI sécurisée démarrée sur le port ${PORT}`)
+    chalk.yellow(`🚀 Gateway CENADI sécurisée démarrée sur le port ${PORT}`),
   );
   console.log(chalk.blue(`🌍 URL: http://localhost:${PORT}`));
   console.log(
-    chalk.green("🛡️ Sécurité activée: Rate Limiting + Helmet + Compression")
+    chalk.green("🛡️ Sécurité activée: Rate Limiting + Helmet + Compression"),
   );
 
   routes.forEach((route) => {
     const status = route.target ? chalk.green("✅") : chalk.red("❌");
     console.log(
-      `   ${status} ${route.path} → ${route.target || "NON CONFIGURÉ"}`
+      `   ${status} ${route.path} → ${route.target || "NON CONFIGURÉ"}`,
     );
   });
 });

@@ -25,7 +25,7 @@ class ChatHandler {
     markMessageReadUseCase,
     resilientMessageService = null,
     messageDeliveryService = null,
-    userCacheService = null
+    userCacheService = null,
   ) {
     this.io = io;
     this.sendMessageUseCase = sendMessageUseCase;
@@ -49,7 +49,7 @@ class ChatHandler {
     // ✅ LOG DE DEBUG
     console.log(
       "🔍 ChatHandler reçu messageDeliveryService:",
-      this.messageDeliveryService ? "✅ OUI" : "❌ NON"
+      this.messageDeliveryService ? "✅ OUI" : "❌ NON",
     );
   }
 
@@ -180,7 +180,7 @@ class ChatHandler {
                 limit,
                 userId,
                 useCache: true, // Le repository décide du cache
-              }
+              },
             );
 
             const quickData = {
@@ -220,7 +220,7 @@ class ChatHandler {
                 limit,
                 userId,
                 useCache: !cursor, // Cache seulement première page
-              }
+              },
             );
 
             socket.emit("messages:full", {
@@ -337,7 +337,7 @@ class ChatHandler {
             }
 
             console.log(
-              `🔍 Chargement conversation ${conversationId} pour ${userId}`
+              `🔍 Chargement conversation ${conversationId} pour ${userId}`,
             );
 
             // ✅ APPEL DIRECT AU USE CASE (cache géré par le repository)
@@ -346,7 +346,7 @@ class ChatHandler {
               {
                 userId,
                 useCache: true, // Le repository décide du cache
-              }
+              },
             );
 
             socket.emit("conversation:loaded", {
@@ -424,7 +424,7 @@ class ChatHandler {
               {
                 userId,
                 useCache: true, // Le repository décide du cache
-              }
+              },
             );
 
             socket.emit("conversationLoaded", {
@@ -488,7 +488,7 @@ class ChatHandler {
             }
 
             console.log(
-              `👥 Création groupe "${name}" par ${userId} avec ${members.length} membre(s)`
+              `👥 Création groupe "${name}" par ${userId} avec ${members.length} membre(s)`,
             );
 
             // ✅ GÉNÉRER ID SI NON FOURNI
@@ -598,7 +598,7 @@ class ChatHandler {
             }
 
             console.log(
-              `📢 Création diffusion "${name}" par ${userId} avec ${recipients.length} destinataire(s)`
+              `📢 Création diffusion "${name}" par ${userId} avec ${recipients.length} destinataire(s)`,
             );
 
             // ✅ GÉNÉRER ID SI NON FOURNI
@@ -621,7 +621,7 @@ class ChatHandler {
               name: name.trim(),
               adminIds: finalAdmins,
               recipientIds: recipients.filter(
-                (id) => !finalAdmins.includes(id)
+                (id) => !finalAdmins.includes(id),
               ),
             });
 
@@ -688,7 +688,7 @@ class ChatHandler {
             socket.join(broadcastRoom);
 
             console.log(
-              `✅ Diffusion "${name}" créée avec succès: ${broadcast._id}`
+              `✅ Diffusion "${name}" créée avec succès: ${broadcast._id}`,
             );
           } catch (error) {
             console.error("❌ Erreur createBroadcast:", error);
@@ -738,7 +738,7 @@ class ChatHandler {
               });
 
               console.log(
-                `✅ ${socket.matricule} a rejoint le groupe/diffusion: ${conversationId}`
+                `✅ ${socket.matricule} a rejoint le groupe/diffusion: ${conversationId}`,
               );
             } else {
               // ✅ REFUSER L'INVITATION
@@ -748,7 +748,7 @@ class ChatHandler {
               });
 
               console.log(
-                `❌ ${socket.matricule} a refusé l'invitation: ${conversationId}`
+                `❌ ${socket.matricule} a refusé l'invitation: ${conversationId}`,
               );
             }
           } catch (error) {
@@ -794,7 +794,7 @@ class ChatHandler {
             });
 
             console.log(
-              `👋 ${socket.matricule} a quitté le groupe/diffusion: ${conversationId}`
+              `👋 ${socket.matricule} a quitté le groupe/diffusion: ${conversationId}`,
             );
 
             // ✅ TODO: Implémenter la suppression du participant de la conversation en DB
@@ -829,7 +829,7 @@ class ChatHandler {
               {
                 userId,
                 useCache: true,
-              }
+              },
             );
 
             if (!result.conversation) {
@@ -913,24 +913,23 @@ class ChatHandler {
             }
 
             // Récupérer les statistiques de présence
-            const presenceStats = await this.roomManager.getRoomPresenceStats(
-              roomName
-            );
+            const presenceStats =
+              await this.roomManager.getRoomPresenceStats(roomName);
 
             socket.emit("conversation_online_users", {
               conversationId,
               ...presenceStats,
               userRole: await this.roomManager.getUserRoleInRoom(
                 roomName,
-                userId
+                userId,
               ),
               currentUserStatus: presenceStats.users.find(
-                (u) => u.userId === userId
+                (u) => u.userId === userId,
               ),
             });
 
             console.log(
-              `👥 Statistiques envoyées pour ${conversationId}: ${presenceStats.onlineUsers}/${presenceStats.totalUsers}`
+              `👥 Statistiques envoyées pour ${conversationId}: ${presenceStats.onlineUsers}/${presenceStats.totalUsers}`,
             );
           } catch (error) {
             console.error("❌ Erreur getConversationOnlineUsers:", error);
@@ -977,7 +976,7 @@ class ChatHandler {
                   .length,
                 totalOnlineUsers: conversations.reduce(
                   (sum, c) => sum + c.onlineUsers,
-                  0
+                  0,
                 ),
                 averageHealth:
                   conversations.length > 0
@@ -986,10 +985,10 @@ class ChatHandler {
                           c.roomHealth === "healthy"
                             ? 3
                             : c.roomHealth === "moderate"
-                            ? 2
-                            : c.roomHealth === "low"
-                            ? 1
-                            : 0;
+                              ? 2
+                              : c.roomHealth === "low"
+                                ? 1
+                                : 0;
                         return sum + healthScore;
                       }, 0) / conversations.length
                     : 0,
@@ -998,7 +997,7 @@ class ChatHandler {
             });
 
             console.log(
-              `📋 Conversations avec présence envoyées à ${socket.matricule}: ${conversations.length}`
+              `📋 Conversations avec présence envoyées à ${socket.matricule}: ${conversations.length}`,
             );
           } catch (error) {
             console.error("❌ Erreur getConversationsWithPresence:", error);
@@ -1039,9 +1038,8 @@ class ChatHandler {
             socket.join(`presence_${roomName}`);
 
             // Envoyer les données initiales
-            const presenceStats = await this.roomManager.getRoomPresenceStats(
-              roomName
-            );
+            const presenceStats =
+              await this.roomManager.getRoomPresenceStats(roomName);
 
             socket.emit("presence:initial", {
               conversationId,
@@ -1054,7 +1052,7 @@ class ChatHandler {
             await this.roomManager.broadcastPresenceUpdate(roomName);
 
             console.log(
-              `👁️ ${socket.matricule} surveille la présence de ${conversationId}`
+              `👁️ ${socket.matricule} surveille la présence de ${conversationId}`,
             );
           } catch (error) {
             console.error("❌ Erreur subscribeToPresence:", error);
@@ -1084,7 +1082,7 @@ class ChatHandler {
               });
 
               console.log(
-                `🚫 ${socket.matricule} ne surveille plus ${conversationId}`
+                `🚫 ${socket.matricule} ne surveille plus ${conversationId}`,
               );
             }
           } catch (error) {
@@ -1117,7 +1115,7 @@ class ChatHandler {
             socket.emit("presence_dashboard", dashboard);
 
             console.log(
-              `📊 Dashboard de présence envoyé à ${socket.matricule}`
+              `📊 Dashboard de présence envoyé à ${socket.matricule}`,
             );
           } catch (error) {
             console.error("❌ Erreur getPresenceDashboard:", error);
@@ -1153,7 +1151,7 @@ class ChatHandler {
             // Vérifier que l'admin a les droits
             const adminRole = await this.roomManager.getUserRoleInRoom(
               roomName,
-              adminUserId
+              adminUserId,
             );
             if (adminRole !== "admin" && adminRole !== "moderator") {
               return socket.emit("role:error", {
@@ -1175,7 +1173,7 @@ class ChatHandler {
             const success = await this.roomManager.setUserRoleInRoom(
               roomName,
               targetUserId,
-              role
+              role,
             );
 
             if (success) {
@@ -1258,17 +1256,17 @@ class ChatHandler {
     try {
       console.log(
         `🔐 [${new Date().toISOString()}] Authentification demande:`,
-        data
+        data,
       );
 
       let userPayload = null;
-      if (socket.handshake.auth.token) {
-        const token = socket.handshake.auth.token;
+      if (data.token || true) {
+        const token = data.token;
         try {
           const fakeReq = {
             headers: { authorization: `Bearer ${token}` },
           };
-          const fakeRes = {};
+          const fakeRes = {}; //
           await new Promise((resolve, reject) => {
             AuthMiddleware.authenticate(fakeReq, fakeRes, (err) => {
               if (err) reject(err);
@@ -1282,13 +1280,12 @@ class ChatHandler {
             let cachedUserInfo = null;
             if (this.userCacheService && cacheUserId) {
               try {
-                cachedUserInfo = await this.userCacheService.fetchUserInfo(
-                  cacheUserId
-                );
+                cachedUserInfo =
+                  await this.userCacheService.fetchUserInfo(cacheUserId);
               } catch (cacheError) {
                 console.warn(
                   `⚠️ [Auth] Erreur UserCacheService pour ${cacheUserId}:`,
-                  cacheError.message
+                  cacheError.message,
                 );
               }
             }
@@ -1380,14 +1377,14 @@ class ChatHandler {
               limit: 200,
 
               useCache: true,
-            }
+            },
           );
 
           const convDuration = Date.now() - convStartTime;
           console.log(
             `✅ [${new Date().toISOString()}] ${
               convResult.conversations?.length || 0
-            } conversation(s) récupérée(s) pour ${userIdString} (⏱️ ${convDuration}ms)`
+            } conversation(s) récupérée(s) pour ${userIdString} (⏱️ ${convDuration}ms)`,
           );
 
           // ✅ LIVRER LES CONVERSATIONS AU CLIENT IMMÉDIATEMENT
@@ -1406,18 +1403,18 @@ class ChatHandler {
               console.log(
                 `📤 [${new Date().toISOString()}] ${
                   convResult.conversations.length
-                } conversation(s) envoyée(s) au client (⏱️ ${convEmitDuration}ms)`
+                } conversation(s) envoyée(s) au client (⏱️ ${convEmitDuration}ms)`,
               );
             } catch (convEmitError) {
               console.error(
-                `❌ Erreur envoi conversations: ${convEmitError.message}`
+                `❌ Erreur envoi conversations: ${convEmitError.message}`,
               );
             }
           }
         } catch (convError) {
           console.warn(
             `⚠️ Erreur récupération conversations:`,
-            convError.message
+            convError.message,
           );
         }
       }
@@ -1426,15 +1423,14 @@ class ChatHandler {
       if (this.getConversationIdsUseCase) {
         const idsStartTime = Date.now();
         try {
-          conversationIds = await this.getConversationIdsUseCase.execute(
-            userIdString
-          );
+          conversationIds =
+            await this.getConversationIdsUseCase.execute(userIdString);
 
           const idsDuration = Date.now() - idsStartTime;
           console.log(
             `✅ [${new Date().toISOString()}] ${
               conversationIds.length
-            } ID(s) de conversation récupéré(s) (⏱️ ${idsDuration}ms)`
+            } ID(s) de conversation récupéré(s) (⏱️ ${idsDuration}ms)`,
           );
 
           if (conversationIds.length > 0) {
@@ -1444,7 +1440,7 @@ class ChatHandler {
             }
             const joinDuration = Date.now() - joinStartTime;
             console.log(
-              `👥 Rooms conversations rejointes (${conversationIds.length}) en ${joinDuration}ms`
+              `👥 Rooms conversations rejointes (${conversationIds.length}) en ${joinDuration}ms`,
             );
 
             if (this.updateMessageStatusUseCase) {
@@ -1461,21 +1457,21 @@ class ChatHandler {
                   } catch (deliveredError) {
                     console.warn(
                       `⚠️ Erreur marquage delivered:`,
-                      deliveredError.message
+                      deliveredError.message,
                     );
                   }
-                })
+                }),
               );
               const updateDuration = Date.now() - updateStartTime;
               console.log(
-                `📝 Statuts mis à jour pour ${conversationIds.length} conversation(s) en ${updateDuration}ms`
+                `📝 Statuts mis à jour pour ${conversationIds.length} conversation(s) en ${updateDuration}ms`,
               );
             }
           }
         } catch (idsError) {
           console.warn(
             `⚠️ Erreur récupération IDs conversations:`,
-            idsError.message
+            idsError.message,
           );
         }
       }
@@ -1491,26 +1487,26 @@ class ChatHandler {
             .toLowerCase()}`;
           socket.join(ministereRoom);
           console.log(
-            `🏛️ Utilisateur ${userIdString} rejoint room ministère: ${ministereRoom}`
+            `🏛️ Utilisateur ${userIdString} rejoint room ministère: ${ministereRoom}`,
           );
         } catch (ministereError) {
           console.error(
-            `❌ Erreur jointure room ministère: ${ministereError.message}`
+            `❌ Erreur jointure room ministère: ${ministereError.message}`,
           );
         }
       } else {
         if (socket.ministere) {
           console.warn(
             `⚠️ socket.ministere n'est pas une chaîne valide: ${typeof socket.ministere} = ${JSON.stringify(
-              socket.ministere
-            )}`
+              socket.ministere,
+            )}`,
           );
         }
       }
 
       const emitStartTime = Date.now();
       console.log(
-        `📤 [${new Date().toISOString()}] Avant socket.emit('authenticated')...`
+        `📤 [${new Date().toISOString()}] Avant socket.emit('authenticated')...`,
       );
       try {
         socket.emit("authenticated", {
@@ -1525,7 +1521,7 @@ class ChatHandler {
         });
         const emitDuration = Date.now() - emitStartTime;
         console.log(
-          `✅ [${new Date().toISOString()}] socket.emit('authenticated') succès (⏱️ ${emitDuration}ms)`
+          `✅ [${new Date().toISOString()}] socket.emit('authenticated') succès (⏱️ ${emitDuration}ms)`,
         );
       } catch (emitErr) {
         console.error(`❌ Erreur lors du socket.emit: ${emitErr.message}`);
@@ -1533,48 +1529,48 @@ class ChatHandler {
       }
 
       console.log(
-        `✅ [${new Date().toISOString()}] Utilisateur authentifié: ${matriculeString} (${userIdString})`
+        `✅ [${new Date().toISOString()}] Utilisateur authentifié: ${matriculeString} (${userIdString})`,
       );
 
       // ✅ ENREGISTRER LE SOCKET DANS MessageDeliveryService
       console.log(
         `🔍 [${new Date().toISOString()}] messageDeliveryService disponible? ${
           this.messageDeliveryService ? "✅ OUI" : "❌ NON"
-        }`
+        }`,
       );
 
       if (this.messageDeliveryService) {
         const mdsStartTime = Date.now();
         try {
           console.log(
-            `📤 [${new Date().toISOString()}] Enregistrement socket pour ${userIdString}...`
+            `📤 [${new Date().toISOString()}] Enregistrement socket pour ${userIdString}...`,
           );
           this.messageDeliveryService.registerUserSocket(userIdString, socket);
           console.log(
-            `✅ [${new Date().toISOString()}] Socket enregistré pour ${userIdString}`
+            `✅ [${new Date().toISOString()}] Socket enregistré pour ${userIdString}`,
           );
 
           // ✅ LIVRER LES MESSAGES EN ATTENTE
           console.log(
-            `📥 [${new Date().toISOString()}] Livraison messages en attente pour ${userIdString}...`
+            `📥 [${new Date().toISOString()}] Livraison messages en attente pour ${userIdString}...`,
           );
           const deliveredCount =
             await this.messageDeliveryService.deliverPendingMessagesOnConnect(
               userIdString,
-              socket
+              socket,
             );
           const mdsDuration = Date.now() - mdsStartTime;
           console.log(
-            `✅ [${new Date().toISOString()}] ${deliveredCount} message(s) en attente livré(s) pour ${userIdString} (⏱️ ${mdsDuration}ms)`
+            `✅ [${new Date().toISOString()}] ${deliveredCount} message(s) en attente livré(s) pour ${userIdString} (⏱️ ${mdsDuration}ms)`,
           );
         } catch (mdsError) {
           console.error(
-            `❌ Erreur MessageDeliveryService: ${mdsError.message}`
+            `❌ Erreur MessageDeliveryService: ${mdsError.message}`,
           );
         }
       } else {
         console.warn(
-          `⚠️ [${new Date().toISOString()}] messageDeliveryService est NULL/UNDEFINED!`
+          `⚠️ [${new Date().toISOString()}] messageDeliveryService est NULL/UNDEFINED!`,
         );
       }
 
@@ -1589,7 +1585,7 @@ class ChatHandler {
 
       const totalDuration = Date.now() - authStartTime;
       console.log(
-        `\n✅ [${new Date().toISOString()}] ⏱️ AUTHENTIFICATION COMPLÈTE (⏱️ TOTAL: ${totalDuration}ms)\n`
+        `\n✅ [${new Date().toISOString()}] ⏱️ AUTHENTIFICATION COMPLÈTE (⏱️ TOTAL: ${totalDuration}ms)\n`,
       );
     } catch (error) {
       console.error("❌ Erreur authentification WebSocket:", error);
@@ -1642,7 +1638,7 @@ class ChatHandler {
   async syncUserWithRedis(userId, userData) {
     const syncStartTime = Date.now();
     console.log(
-      `🔴 [${new Date().toISOString()}] Sync Redis lancé en arrière-plan pour ${userId}`
+      `🔴 [${new Date().toISOString()}] Sync Redis lancé en arrière-plan pour ${userId}`,
     );
     if (this.onlineUserManager) {
       try {
@@ -1663,11 +1659,11 @@ class ChatHandler {
 
         await this.onlineUserManager.setUserOnline(
           String(userId),
-          sanitizedData
+          sanitizedData,
         );
         const syncDuration = Date.now() - syncStartTime;
         console.log(
-          `✅ [${new Date().toISOString()}] Utilisateur ${userId} synchronisé avec Redis (⏱️ ${syncDuration}ms)`
+          `✅ [${new Date().toISOString()}] Utilisateur ${userId} synchronisé avec Redis (⏱️ ${syncDuration}ms)`,
         );
       } catch (error) {
         console.warn("⚠️ Erreur sync utilisateur Redis:", error.message);
@@ -1793,7 +1789,7 @@ class ChatHandler {
               mimeType,
               conversationName,
               broadcast,
-            })
+            }),
           );
         } else {
           result = await this.sendMessageUseCase.execute({
@@ -1840,7 +1836,7 @@ class ChatHandler {
       });
 
       console.log(
-        `✅ Message envoyé (Use Case gère Kafka + ResilientService): ${messageId}`
+        `✅ Message envoyé (Use Case gère Kafka + ResilientService): ${messageId}`,
       );
       // ✅ FIN
       // Tout le reste (Kafka, livraison, retry) est géré en interne par le Use Case
@@ -1922,7 +1918,7 @@ class ChatHandler {
       });
 
       console.log(
-        `✅ ${socket.matricule} a rejoint conversation ${conversationId}`
+        `✅ ${socket.matricule} a rejoint conversation ${conversationId}`,
       );
     } catch (error) {
       console.error("❌ Erreur handleJoinConversation:", error);
@@ -1952,7 +1948,7 @@ class ChatHandler {
         });
 
       console.log(
-        `👋 ${socket.matricule} a quitté conversation ${conversationId}`
+        `👋 ${socket.matricule} a quitté conversation ${conversationId}`,
       );
     } catch (error) {
       console.error("❌ Erreur handleLeaveConversation:", error);
@@ -2181,7 +2177,7 @@ class ChatHandler {
 
       const result = await this.getConversationUseCase.execute(
         conversationId,
-        userId
+        userId,
       );
 
       socket.emit("conversationLoaded", {
@@ -2226,7 +2222,7 @@ class ChatHandler {
         });
 
         console.log(
-          `👋 Utilisateur ${socket.matricule} (${userId}) déconnecté`
+          `👋 Utilisateur ${socket.matricule} (${userId}) déconnecté`,
         );
       }
     } catch (error) {
