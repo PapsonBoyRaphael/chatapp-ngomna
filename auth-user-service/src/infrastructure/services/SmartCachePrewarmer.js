@@ -46,7 +46,7 @@ class SmartCachePrewarmer {
 
     if (!this.userRepository) {
       console.warn(
-        "⚠️ [SmartCachePrewarmer] userRepository non disponible, abandon"
+        "⚠️ [SmartCachePrewarmer] userRepository non disponible, abandon",
       );
       return this.stats;
     }
@@ -55,7 +55,7 @@ class SmartCachePrewarmer {
     this.stats.startTime = Date.now();
 
     console.log(
-      "🔥 [SmartCachePrewarmer] Démarrage du pré-chauffage depuis MongoDB..."
+      "🔥 [SmartCachePrewarmer] Démarrage du pré-chauffage depuis MongoDB...",
     );
 
     try {
@@ -68,7 +68,7 @@ class SmartCachePrewarmer {
       }
 
       console.log(
-        `📊 [SmartCachePrewarmer] ${allUsers.length} utilisateurs à mettre en cache Redis`
+        `📊 [SmartCachePrewarmer] ${allUsers.length} utilisateurs à mettre en cache Redis`,
       );
 
       // Étape 2: Traitement par batch
@@ -103,7 +103,7 @@ class SmartCachePrewarmer {
   async _getAllUsersFromMongoDB() {
     try {
       console.log(
-        `🔍 [SmartCachePrewarmer] Récupération des utilisateurs depuis MongoDB`
+        `🔍 [SmartCachePrewarmer] Récupération des utilisateurs depuis MongoDB`,
       );
 
       // Utiliser la méthode du repository pour récupérer tous les utilisateurs
@@ -112,19 +112,19 @@ class SmartCachePrewarmer {
       if (!Array.isArray(allUsers)) {
         console.warn(
           "⚠️ [SmartCachePrewarmer] Résultat non itérable:",
-          typeof allUsers
+          typeof allUsers,
         );
         return [];
       }
 
       console.log(
-        `✅ [SmartCachePrewarmer] ${allUsers.length} utilisateurs récupérés de MongoDB`
+        `✅ [SmartCachePrewarmer] ${allUsers.length} utilisateurs récupérés de MongoDB`,
       );
       return allUsers;
     } catch (error) {
       console.error(
         "❌ [SmartCachePrewarmer] Erreur récupération users MongoDB:",
-        error.message
+        error.message,
       );
       return [];
     }
@@ -142,7 +142,7 @@ class SmartCachePrewarmer {
       const batchNumber = Math.floor(i / this.batchSize) + 1;
 
       console.log(
-        `📦 [SmartCachePrewarmer] Batch ${batchNumber}/${totalBatches} (${batch.length} users)`
+        `📦 [SmartCachePrewarmer] Batch ${batchNumber}/${totalBatches} (${batch.length} users)`,
       );
 
       await this._cacheBatch(batch);
@@ -160,7 +160,7 @@ class SmartCachePrewarmer {
    */
   async _cacheBatch(users) {
     console.log(
-      `📊 [SmartCachePrewarmer] Mise en cache Redis de ${users.length} utilisateurs`
+      `📊 [SmartCachePrewarmer] Mise en cache Redis de ${users.length} utilisateurs`,
     );
 
     for (const user of users) {
@@ -171,7 +171,7 @@ class SmartCachePrewarmer {
         if (!userId) {
           console.warn(
             `⚠️ [SmartCachePrewarmer] Utilisateur sans matricule/id:`,
-            user
+            user,
           );
           this.stats.errors++;
           continue;
@@ -198,7 +198,7 @@ class SmartCachePrewarmer {
           `❌ [SmartCachePrewarmer] Erreur cache user ${
             user.matricule || user.id
           }:`,
-          cacheError.message
+          cacheError.message,
         );
         this.stats.errors++;
       }

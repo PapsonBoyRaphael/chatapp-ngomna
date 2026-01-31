@@ -816,7 +816,10 @@ class ChatHandler {
             const userId = socket.userId;
             const { conversationId } = data;
 
-            if (!userId || !conversationId) {
+            const normalizedConversationId =
+              this.normalizeMongoId(conversationId);
+
+            if (!userId || !normalizedConversationId) {
               return socket.emit("group:error", {
                 error: "Paramètres manquants",
                 code: "MISSING_PARAMS",
@@ -825,7 +828,7 @@ class ChatHandler {
 
             // ✅ APPEL USE CASE POUR RÉCUPÉRER INFO
             const result = await this.getConversationUseCase.execute(
-              conversationId,
+              normalizedConversationId,
               {
                 userId,
                 useCache: true,
@@ -1260,7 +1263,7 @@ class ChatHandler {
       );
 
       let userPayload = null;
-      if (data.token || true) {
+      if (data.token) {
         const token = data.token;
         try {
           const fakeReq = {
@@ -1334,9 +1337,8 @@ class ChatHandler {
       }
 
       const resolvedMatricule =
-        userPayload.matricule || userPayload.userId || userPayload.id || "";
-      const resolvedUserId =
-        userPayload.id || userPayload.userId || resolvedMatricule;
+        userPayload.matricule || userPayload.userId || "";
+      const resolvedUserId = userPayload.matricule || resolvedMatricule;
       const resolvedFullName =
         userPayload.fullName ||
         userPayload.name ||
@@ -1390,6 +1392,7 @@ class ChatHandler {
           // ✅ LIVRER LES CONVERSATIONS AU CLIENT IMMÉDIATEMENT
           if (convResult && convResult.conversations) {
             const convEmitStartTime = Date.now();
+
             try {
               socket.emit("conversationsLoaded", {
                 conversations: convResult.conversations || [],
@@ -1698,9 +1701,11 @@ class ChatHandler {
       const userId = socket.userId;
       const matricule = socket.matricule;
 
+      const normalizedConversationId = this.normalizeMongoId(conversationId);
+
       console.log("💬 Traitement envoi message:", {
         userId,
-        conversationId,
+        conversationId: normalizedConversationId,
         contentLength: content ? content.length : 0,
         type,
       });
@@ -1734,7 +1739,7 @@ class ChatHandler {
         return;
       }
 
-      if (!conversationId && !receiverId) {
+      if (!normalizedConversationId && !receiverId) {
         socket.emit("message_error", {
           message: "ID de conversation requis",
           code: "MISSING_CONVERSATION_ID",
@@ -1742,7 +1747,14 @@ class ChatHandler {
         return;
       }
 
-      if (conversationId && !this.isValidObjectId(conversationId)) {
+      if (
+        normalizedConversationId &&
+        !this.isValidObjectId(normalizedConversationId)
+      ) {
+        console.log(
+          "❌ ID de conversation invalide:",
+          normalizedConversationId,
+        );
         socket.emit("message_error", {
           message: "ID de conversation invalide",
           code: "INVALID_CONVERSATION_ID",
@@ -1778,7 +1790,7 @@ class ChatHandler {
             this.sendMessageUseCase.execute({
               content: content.trim(),
               senderId: userId,
-              conversationId,
+              conversationId: normalizedConversationId,
               type,
               receiverId,
               duration,
@@ -1795,7 +1807,7 @@ class ChatHandler {
           result = await this.sendMessageUseCase.execute({
             content: content.trim(),
             senderId: userId,
-            conversationId,
+            conversationId: normalizedConversationId,
             type,
             receiverId,
             duration,
@@ -1830,6 +1842,7 @@ class ChatHandler {
       // ✅ ÉTAPE 2 : RÉPONDRE À L'EXPÉDITEUR (ACK IMMÉDIAT)
       socket.emit("message_sent", {
         messageId,
+        result: result,
         temporaryId: data.temporaryId,
         status: "sent",
         timestamp: new Date().toISOString(),
@@ -1859,6 +1872,18 @@ class ChatHandler {
   isValidObjectId(id) {
     if (!id || typeof id !== "string") return false;
     return /^[0-9a-fA-F]{24}$/.test(id);
+  }
+
+  // ✅ NORMALISER LES IDs MONGODB (gère { $oid: "..." })
+  normalizeMongoId(id) {
+    if (!id) return id;
+
+    // Cas { $oid: "..." }
+    if (typeof id === "object" && id.$oid) {
+      return id.$oid;
+    }
+
+    return id;
   }
 
   generateObjectId() {
@@ -2084,10 +2109,31 @@ class ChatHandler {
       const { conversationId, page = 1, limit = 50 } = data;
       const userId = socket.userId;
 
-      if (!conversationId || !userId) {
+      const normalizedConversationId = this.normalizeMongoId(conversationId);
+
+      console.log("📨 Récupération messages:", {
+        conversationId: normalizedConversationId,
+        page,
+        limit,
+        userId,
+      });
+
+      if (!normalizedConversationId || !userId) {
         socket.emit("messages_error", {
           message: "ID conversation ou utilisateur manquant",
           code: "MISSING_DATA",
+        });
+        return;
+      }
+
+      if (!this.isValidObjectId(normalizedConversationId)) {
+        console.log(
+          "❌ ID de conversation invalide:",
+          normalizedConversationId,
+        );
+        socket.emit("messages_error", {
+          message: "ID de conversation invalide",
+          code: "INVALID_CONVERSATION_ID",
         });
         return;
       }
@@ -2100,11 +2146,14 @@ class ChatHandler {
         return;
       }
 
-      const result = await this.getMessagesUseCase.execute(conversationId, {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        userId,
-      });
+      const result = await this.getMessagesUseCase.execute(
+        normalizedConversationId,
+        {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          userId,
+        },
+      );
 
       socket.emit("messagesLoaded", result);
     } catch (error) {
@@ -2159,10 +2208,24 @@ class ChatHandler {
       const userId = socket.userId;
       const { conversationId } = data || {};
 
-      if (!conversationId || !userId) {
+      const normalizedConversationId = this.normalizeMongoId(conversationId);
+
+      if (!normalizedConversationId || !userId) {
         socket.emit("conversation_error", {
           message: "ID conversation ou utilisateur manquant",
           code: "MISSING_DATA",
+        });
+        return;
+      }
+
+      if (!this.isValidObjectId(normalizedConversationId)) {
+        console.log(
+          "❌ ID de conversation invalide:",
+          normalizedConversationId,
+        );
+        socket.emit("conversation_error", {
+          message: "ID de conversation invalide",
+          code: "INVALID_CONVERSATION_ID",
         });
         return;
       }
@@ -2176,7 +2239,7 @@ class ChatHandler {
       }
 
       const result = await this.getConversationUseCase.execute(
-        conversationId,
+        normalizedConversationId,
         userId,
       );
 

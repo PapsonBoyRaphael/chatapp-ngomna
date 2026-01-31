@@ -459,19 +459,25 @@ class FileController {
         throw new Error("Service de téléchargement non disponible");
       }
 
-      const { file, fileStream } = await this.downloadFileUseCase.executeSingle(
+      const result = await this.downloadFileUseCase.executeSingle(
         fileId,
         String(userId)
       );
 
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${file.originalName || file.fileName}"`
-      );
-      res.setHeader("Content-Type", file.mimeType);
-      res.setHeader("Content-Length", file.size);
+      if (result.downloadUrl) {
+        // Mode DEV simple : rediriger vers l'URL signée
+        return res.redirect(result.downloadUrl);
+      } else {
+        // Mode actuel : streamer le fichier
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${result.file.originalName || result.file.fileName}"`
+        );
+        res.setHeader("Content-Type", result.file.mimeType);
+        res.setHeader("Content-Length", result.file.size);
 
-      fileStream.pipe(res);
+        result.fileStream.pipe(res);
+      }
     } catch (error) {
       const processingTime = Date.now() - startTime;
       console.error("❌ Erreur téléchargement fichier:", error);

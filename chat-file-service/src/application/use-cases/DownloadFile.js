@@ -4,14 +4,15 @@ const stream = require("stream");
 class DownloadFile {
   constructor(fileRepository, fileStorageService) {
     this.fileRepository = fileRepository;
-    this.downloadQueueKey = "download:queue";
+    this.fileStorageService = fileStorageService;
+    this.devConfigMode = process.env.DEV_CONFIG_MODE || "simple"; // 'simple' ou 'advanced'
   }
 
   /**
    * Téléchargement d'un fichier unique
    * @param {string} fileId
    * @param {string} userId
-   * @returns {Promise<{file, fileStream}>}
+   * @returns {Promise<{file, fileStream?, downloadUrl?}>}
    */
   async executeSingle(fileId, userId) {
     // Optionnel : lecture du cache si pertinent (ex: file metadata)
@@ -26,16 +27,27 @@ class DownloadFile {
       throw new Error("Accès refusé à ce fichier");
     }
 
-    // Récupérer le stream du fichier distant
-    const fileStream = await this.fileStorageService.download(
-      file.fileName,
-      file.fileName
-    );
-
     // Incrémenter le compteur de téléchargements
     await this.fileRepository.incrementDownloadCount(fileId, userId);
 
-    return { file, fileStream };
+    // Basculer selon le mode DEV
+    if (
+      process.env.NODE_ENV === "development" &&
+      this.devConfigMode === "advanced"
+    ) {
+      // Mode DEV simple : retourner l'URL signée pour téléchargement direct
+      const downloadUrl = await this.fileStorageService.getDownloadUrl(
+        file.fileName,
+      );
+      return { file, downloadUrl };
+    } else {
+      // Mode actuel : retourner le stream
+      const fileStream = await this.fileStorageService.download(
+        file.fileName,
+        file.fileName,
+      );
+      return { file, fileStream };
+    }
   }
 
   /**
@@ -66,7 +78,7 @@ class DownloadFile {
     for (const file of files) {
       const fileStream = await this.fileStorageService.download(
         file.fileName,
-        file.fileName
+        file.fileName,
       );
       zipStream.append(fileStream, {
         name: file.originalName || file.fileName,

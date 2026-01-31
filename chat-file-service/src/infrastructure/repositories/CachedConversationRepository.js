@@ -12,10 +12,10 @@ class CachedConversationRepository {
     // ✅ VÉRIFICATION DU CACHE
     if (!this.cache) {
       console.warn(
-        "⚠️ CachedConversationRepository: cacheService est null - CACHE DÉSACTIVÉ"
+        "⚠️ CachedConversationRepository: cacheService est null - CACHE DÉSACTIVÉ",
       );
       console.warn(
-        "   Cela signifie que chaque conversation sera récupérée depuis MongoDB"
+        "   Cela signifie que chaque conversation sera récupérée depuis MongoDB",
       );
     } else {
       console.log("✅ CachedConversationRepository: Cache activé");
@@ -64,6 +64,7 @@ class CachedConversationRepository {
         const cached = await this.cache.get(cacheKey);
         if (cached) {
           console.log(`📦 Conversations depuis cache: ${userId} (${cacheKey})`);
+          console.log(`📦 ✅ HIT CACHE: ${cached}`);
 
           // ✅ RENOUVELER TTL SUR HIT
           await this.cache.renewTTL(cacheKey, ttl);
@@ -79,7 +80,7 @@ class CachedConversationRepository {
       console.log(
         `🔍 Conversations depuis MongoDB: ${userId} ${
           cursor ? `(cursor: ${cursor})` : `(page: ${page})`
-        }`
+        }`,
       );
 
       const result = await this.primaryStore.findByParticipant(userId, {
@@ -99,7 +100,7 @@ class CachedConversationRepository {
       ) {
         await this.cache.set(cacheKey, result, ttl);
         console.log(
-          `💾 Conversations mises en cache: ${result.conversations.length} (TTL: ${ttl}s)`
+          `💾 Conversations mises en cache: ${result.conversations.length} (TTL: ${ttl}s)`,
         );
       }
 
@@ -161,7 +162,7 @@ class CachedConversationRepository {
       if (this.cache && quickData.conversations.length > 0) {
         await this.cache.set(quickCacheKey, quickData, this.quickTTL);
         console.log(
-          `⚡ Quick conversations mises en cache: ${quickData.conversations.length} (${this.quickTTL}s)`
+          `⚡ Quick conversations mises en cache: ${quickData.conversations.length} (${this.quickTTL}s)`,
         );
       }
 
@@ -235,7 +236,7 @@ class CachedConversationRepository {
         try {
           await this.cache.set(cacheKey, conversation, this.defaultTTL);
           console.log(
-            `💾 ✅ Conversation mise en cache (TTL: ${this.defaultTTL}s)`
+            `💾 ✅ Conversation mise en cache (TTL: ${this.defaultTTL}s)`,
           );
         } catch (cacheError) {
           console.warn(`⚠️ Erreur mise en cache:`, cacheError.message);
@@ -265,7 +266,7 @@ class CachedConversationRepository {
           _id: savedConversation?._id,
           name: savedConversation?.name,
           participantsCount: savedConversation?.participants?.length,
-        }
+        },
       );
 
       if (!savedConversation) {
@@ -280,12 +281,12 @@ class CachedConversationRepository {
         invalidateConversation: true, // Invalider car c'est une nouvelle conversation
       });
       console.log(
-        `✅ Invalidation cache terminée pour: ${savedConversation._id}`
+        `✅ Invalidation cache terminée pour: ${savedConversation._id}`,
       );
 
       const processingTime = Date.now() - startTime;
       console.log(
-        `✅ Conversation sauvegardée avec cache: ${savedConversation._id} (${processingTime}ms)`
+        `✅ Conversation sauvegardée avec cache: ${savedConversation._id} (${processingTime}ms)`,
       );
 
       return savedConversation;
@@ -298,7 +299,7 @@ class CachedConversationRepository {
   // ===== INVALIDATION CACHE INTELLIGENTE =====
   async invalidateConversationCaches(conversationId, options = {}) {
     console.log(
-      `🔍 invalidateConversationCaches début pour: ${conversationId}`
+      `🔍 invalidateConversationCaches début pour: ${conversationId}`,
     );
     if (!this.cache) {
       console.log(`⚠️ Cache non disponible, skip invalidation`);
@@ -319,7 +320,7 @@ class CachedConversationRepository {
       if (invalidateConversation) {
         patterns.push(
           // Conversation spécifique
-          `${this.cacheKeyPrefix}:id:${conversationId}`
+          `${this.cacheKeyPrefix}:id:${conversationId}`,
         );
       }
 
@@ -329,7 +330,7 @@ class CachedConversationRepository {
           // Listes utilisateur
           `${this.cacheKeyPrefix}:user:${participantId}:*`,
           // Quick loads
-          `${this.cacheKeyPrefix}:quick:${participantId}:*`
+          `${this.cacheKeyPrefix}:quick:${participantId}:*`,
         );
       }
 
@@ -340,12 +341,12 @@ class CachedConversationRepository {
         try {
           const deleted = await this.cache.delete(pattern);
           console.log(
-            `✅ Suppression terminée pour ${pattern}: ${deleted} clés`
+            `✅ Suppression terminée pour ${pattern}: ${deleted} clés`,
           );
           if (deleted > 0) {
             invalidated += deleted;
             console.log(
-              `🗑️ Cache conversation invalidé: ${pattern} (${deleted} clés)`
+              `🗑️ Cache conversation invalidé: ${pattern} (${deleted} clés)`,
             );
           }
         } catch (error) {
@@ -355,12 +356,12 @@ class CachedConversationRepository {
 
       if (invalidated > 0) {
         console.log(
-          `🗑️ Total cache conversation invalidé: ${invalidated} clé(s) pour ${conversationId}`
+          `🗑️ Total cache conversation invalidé: ${invalidated} clé(s) pour ${conversationId}`,
         );
       }
 
       console.log(
-        `✅ Boucle d'invalidation terminée. Total: ${invalidated} clés`
+        `✅ Boucle d'invalidation terminée. Total: ${invalidated} clés`,
       );
       // ✅ INVALIDATION PROACTIVE (pré-charger)
       if (isNewConversation && this.cache) {
@@ -369,8 +370,8 @@ class CachedConversationRepository {
           try {
             console.log(
               `🔄 Pré-chargement cache conversations pour participants: ${participants.join(
-                ", "
-              )}`
+                ", ",
+              )}`,
             );
 
             // Pré-charger pour chaque participant
@@ -380,14 +381,14 @@ class CachedConversationRepository {
               } catch (preloadError) {
                 console.warn(
                   `⚠️ Erreur pré-chargement ${participantId}:`,
-                  preloadError.message
+                  preloadError.message,
                 );
               }
             }
           } catch (preloadError) {
             console.warn(
               "⚠️ Erreur pré-chargement conversations:",
-              preloadError.message
+              preloadError.message,
             );
           }
         });
@@ -395,7 +396,7 @@ class CachedConversationRepository {
     } catch (error) {
       console.error(
         "❌ Erreur invalidation cache conversations:",
-        error.message
+        error.message,
       );
     }
   }
@@ -406,7 +407,7 @@ class CachedConversationRepository {
     try {
       const result = await this.primaryStore.updateLastMessage(
         conversationId,
-        messageData
+        messageData,
       );
 
       if (result) {
@@ -428,7 +429,7 @@ class CachedConversationRepository {
       const result = await this.primaryStore.incrementUnreadCountInUserMetadata(
         conversationId,
         userId,
-        amount
+        amount,
       );
 
       // Invalider le cache pour cet utilisateur
@@ -440,7 +441,7 @@ class CachedConversationRepository {
     } catch (error) {
       console.error(
         "❌ Erreur incrementUnreadCountInUserMetadata:",
-        error.message
+        error.message,
       );
       throw error;
     }
@@ -450,7 +451,7 @@ class CachedConversationRepository {
     try {
       const result = await this.primaryStore.resetUnreadCountInUserMetadata(
         conversationId,
-        userId
+        userId,
       );
 
       // Invalider le cache pour cet utilisateur

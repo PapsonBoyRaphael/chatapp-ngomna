@@ -9,14 +9,14 @@ const ffmpeg = require("fluent-ffmpeg");
 class FileStorageService {
   constructor(config) {
     this.env = config.env || "development";
-    this.encrypt = config.encrypt || false; // Active chiffrement (assume client-side primary)
+    this.encrypt = false; // Active chiffrement (assume client-side primary)
     this.encryptionKey = config.encryptionKey || crypto.randomBytes(32); // Clé si server-side fallback
-    this.compression = config.compression || true; // Active compression
+    this.compression = false; // Active compression
     this.maxFileSize = config.maxFileSize || 100 * 1024 * 1024; // 100MB limit
     this.allowedMimes = config.allowedMimes || []; // ✅ ACCEPTE TOUS LES FICHIERS
     this.maxRetries = 3;
 
-    if (this.env === "development") {
+    if (this.env === "development" || this.env === "production") {
       this.minioClient = new Minio.Client({
         endPoint: config.s3Endpoint.replace(/^https?:\/\//, "").split(":")[0],
         port: parseInt(config.s3Endpoint.split(":").pop(), 10) || 9000,
@@ -25,9 +25,11 @@ class FileStorageService {
         secretKey: config.s3SecretAccessKey,
       });
       this.bucket = config.s3Bucket;
-    } else if (this.env === "production") {
-      this.sftpConfig = config.sftpConfig; // Gardé comme demandé
+      this.s3Endpoint = config.s3Endpoint;
     }
+    // else if (this.env === "production") {
+    //   this.sftpConfig = config.sftpConfig; // Gardé comme demandé
+    // }
 
     this.metrics = { uploads: 0, downloads: 0, deletes: 0, errors: 0 };
   }
@@ -55,7 +57,7 @@ class FileStorageService {
     const decipher = crypto.createDecipheriv(
       "aes-256-gcm",
       this.encryptionKey,
-      iv
+      iv,
     ); // iv from metadata or prefix
     return stream.pipe(decipher);
   }
@@ -98,14 +100,14 @@ class FileStorageService {
         await this.minioClient.fPutObject(
           this.bucket,
           remoteFileName,
-          localFilePath
+          localFilePath,
         );
       } else if (this.env === "production") {
         const sftp = new Client();
         await sftp.connect(this.sftpConfig);
         await sftp.put(
           localFilePath,
-          path.posix.join(this.sftpConfig.remotePath, remoteFileName)
+          path.posix.join(this.sftpConfig.remotePath, remoteFileName),
         );
         await sftp.end();
       }
@@ -123,7 +125,7 @@ class FileStorageService {
 
   // Upload from buffer avec validation/chiffrement/compression
   async uploadFromBuffer(buffer, remoteFileName, mimeType) {
-    await this.validateFile(buffer, mimeType);
+    // await this.validateFile(buffer, mimeType);
     buffer = await this.compressBuffer(buffer, mimeType);
     if (this.encrypt) buffer = this.encryptBuffer(buffer);
 
@@ -136,7 +138,7 @@ class FileStorageService {
           remoteFileName,
           buffer,
           buffer.length,
-          { "Content-Type": mimeType }
+          { "Content-Type": mimeType },
         );
         return `${this.bucket}/${remoteFileName}`;
       } else if (this.env === "production") {
@@ -144,7 +146,7 @@ class FileStorageService {
         await sftp.connect(this.sftpConfig);
         await sftp.put(
           buffer,
-          path.posix.join(this.sftpConfig.remotePath, remoteFileName)
+          path.posix.join(this.sftpConfig.remotePath, remoteFileName),
         ); // Buffer direct !
         await sftp.end();
         return `${this.sftpConfig.remotePath}/${remoteFileName}`;
@@ -170,7 +172,7 @@ class FileStorageService {
         const sftp = new Client();
         await sftp.connect(this.sftpConfig);
         stream = await sftp.createReadStream(
-          path.posix.join(this.sftpConfig.remotePath, remoteFileName)
+          path.posix.join(this.sftpConfig.remotePath, remoteFileName),
         );
         await sftp.end();
       }
@@ -192,7 +194,7 @@ class FileStorageService {
         const sftp = new Client();
         await sftp.connect(this.sftpConfig);
         await sftp.delete(
-          path.posix.join(this.sftpConfig.remotePath, remoteFileName)
+          path.posix.join(this.sftpConfig.remotePath, remoteFileName),
         );
         await sftp.end();
       }
@@ -202,6 +204,25 @@ class FileStorageService {
       if (retry < this.maxRetries)
         return this.delete(remoteFileName, retry + 1);
       throw err;
+    }
+  }
+
+  // Nouvelle méthode pour URL signée (mode DEV advanced)
+  async getDownloadUrl(remoteFileName, expirySeconds = 300) {
+    if (this.env === "development") {
+      try {
+        const url = await this.minioClient.presignedGetObject(
+          this.bucket,
+          remoteFileName,
+          expirySeconds,
+        );
+        return url;
+      } catch (error) {
+        throw new Error(`Erreur génération URL signée: ${error.message}`);
+      }
+    } else {
+      // Mode production : URL directe ou proxy
+      return `${this.s3Endpoint}/${this.bucket}/${remoteFileName}`;
     }
   }
 

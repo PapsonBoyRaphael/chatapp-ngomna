@@ -4,6 +4,18 @@ class GetConversations {
     this.messageRepository = messageRepository;
   }
 
+  // ✅ HELPER: Extract unread count from userMetadata (authoritative source)
+  _getUnreadCountFromUserMetadata(conversation, userId) {
+    if (Array.isArray(conversation.userMetadata)) {
+      const userMeta = conversation.userMetadata.find(
+        (meta) => meta.userId === userId,
+      );
+      return userMeta?.unreadCount || 0;
+    }
+    // Fallback to legacy unreadCounts if userMetadata unavailable
+    return conversation.unreadCounts?.[userId] || 0;
+  }
+
   async execute(userId, options = {}) {
     const startTime = Date.now();
 
@@ -14,11 +26,13 @@ class GetConversations {
       direction = "newer",
       includeArchived = false,
       useCache = true,
+      userDepartement = null,
+      userMinistere = null,
     } = options;
 
     try {
       console.log(
-        `🔍 GetConversations: userId=${userId}, page=${page}, limit=${limit}, cursor=${cursor}, useCache=${useCache}`
+        `🔍 GetConversations: userId=${userId}, page=${page}, limit=${limit}, cursor=${cursor}, useCache=${useCache}`,
       );
 
       // ✅ APPEL REPOSITORY avec cursor ET cache
@@ -31,7 +45,7 @@ class GetConversations {
           direction,
           includeArchived,
           useCache,
-        }
+        },
       );
 
       if (!result || !Array.isArray(result.conversations)) {
@@ -47,103 +61,30 @@ class GetConversations {
           conversations.length
         } conversations trouvées sur ${totalCount} total pour la page ${page} (${
           result.fromCache ? "cache" : "MongoDB"
-        })`
-      );
-
-      // Traitement des métadonnées (inchangé)
-      const conversationsWithMetadata = await Promise.all(
-        conversations.map(async (conversation) => {
-          try {
-            const userMetadata = conversation.userMetadata?.find(
-              (meta) => meta.userId === userId
-            );
-
-            const unreadCount =
-              userMetadata && typeof userMetadata.unreadCount === "number"
-                ? userMetadata.unreadCount
-                : conversation.unreadCounts?.[userId] || 0;
-
-            let lastMessage = conversation.lastMessage;
-            if (!lastMessage && this.messageRepository.getLastMessage) {
-              try {
-                lastMessage = await this.messageRepository.getLastMessage(
-                  conversation._id
-                );
-              } catch (error) {
-                console.warn(
-                  `⚠️ Erreur dernier message ${conversation._id}:`,
-                  error.message
-                );
-              }
-            }
-
-            return {
-              ...conversation,
-              unreadCount,
-              lastMessage,
-              userMetadata,
-              isActive: true,
-              lastActivity:
-                conversation.lastMessageAt || conversation.updatedAt,
-              participantCount: conversation.participants?.length || 0,
-            };
-          } catch (error) {
-            console.warn(
-              `⚠️ Erreur métadonnées conversation ${conversation._id}:`,
-              error.message
-            );
-            return {
-              ...conversation,
-              unreadCount: 0,
-              lastMessage: null,
-              userMetadata: { userId, unreadCount: 0 },
-              isActive: false,
-              lastActivity: conversation.updatedAt,
-              participantCount: conversation.participants?.length || 0,
-            };
-          }
-        })
+        })`,
       );
 
       // Trier par dernière activité
-      const sortedConversations = conversationsWithMetadata.sort(
-        (a, b) => new Date(b.lastActivity) - new Date(a.lastActivity)
+      const sortedConversations = conversations.sort(
+        (a, b) =>
+          new Date(b.lastMessageAt || b.updatedAt) -
+          new Date(a.lastMessageAt || a.updatedAt),
       );
 
       // ✅ SÉPARER LES CONVERSATIONS PAR CATÉGORIE
-      // Récupérer le département et ministère de l'utilisateur courant depuis la première conversation
-      let userDepartement = null;
-      let userMinistere = null;
-
-      if (sortedConversations.length > 0) {
-        // userMetadata est un TABLEAU de participants
-        for (const conversation of sortedConversations) {
-          if (Array.isArray(conversation.userMetadata)) {
-            const currentUserMeta = conversation.userMetadata.find(
-              (meta) => meta.userId === userId
-            );
-            if (currentUserMeta?.departement) {
-              userDepartement = currentUserMeta.departement;
-              userMinistere = currentUserMeta.ministere;
-              break;
-            }
-          }
-        }
-      }
-
       // Conversations non lues
       const unreadConversations = sortedConversations.filter(
-        (c) => c.unreadCount > 0
+        (c) => this._getUnreadCountFromUserMetadata(c, userId) > 0,
       );
 
       // Conversations de groupe
       const groupConversations = sortedConversations.filter(
-        (c) => c.type === "GROUP"
+        (c) => c.type === "GROUP",
       );
 
       // Conversations de diffusion
       const broadcastConversations = sortedConversations.filter(
-        (c) => c.type === "BROADCAST"
+        (c) => c.type === "BROADCAST",
       );
 
       // Conversations du département (PRIVATE où tous les participants ont le même département)
@@ -158,7 +99,7 @@ class GetConversations {
 
         // Vérifier que TOUS les participants ont un département ET que c'est le même que l'utilisateur
         const allSameDepartement = c.userMetadata.every(
-          (meta) => meta.departement && meta.departement === userDepartement
+          (meta) => meta.departement && meta.departement === userDepartement,
         );
 
         return allSameDepartement;
@@ -168,7 +109,7 @@ class GetConversations {
       const privateConversations = sortedConversations.filter(
         (c) =>
           c.type === "PRIVATE" &&
-          !departementConversations.some((dc) => dc._id === c._id)
+          !departementConversations.some((dc) => dc._id === c._id),
       );
 
       // ✅ CALCULS DE PAGINATION CORRECTS
@@ -197,20 +138,20 @@ class GetConversations {
           departement: departementConversations.length,
           private: privateConversations.length,
           unreadMessagesInGroups: groupConversations.reduce(
-            (sum, c) => sum + (c.unreadCount || 0),
-            0
+            (sum, c) => sum + this._getUnreadCountFromUserMetadata(c, userId),
+            0,
           ),
           unreadMessagesInBroadcasts: broadcastConversations.reduce(
-            (sum, c) => sum + (c.unreadCount || 0),
-            0
+            (sum, c) => sum + this._getUnreadCountFromUserMetadata(c, userId),
+            0,
           ),
           unreadMessagesInDepartement: departementConversations.reduce(
-            (sum, c) => sum + (c.unreadCount || 0),
-            0
+            (sum, c) => sum + this._getUnreadCountFromUserMetadata(c, userId),
+            0,
           ),
           unreadMessagesInPrivate: privateConversations.reduce(
-            (sum, c) => sum + (c.unreadCount || 0),
-            0
+            (sum, c) => sum + this._getUnreadCountFromUserMetadata(c, userId),
+            0,
           ),
         },
 
@@ -234,15 +175,10 @@ class GetConversations {
         },
         totalCount: totalCount,
         unreadConversations: unreadConversations.length,
-        totalUnreadMessages: sortedConversations.reduce((sum, c) => {
-          if (Array.isArray(c.userMetadata)) {
-            const userMeta = c.userMetadata.find(
-              (meta) => meta.userId === userId
-            );
-            return sum + (userMeta?.unreadCount || 0);
-          }
-          return sum + (c.unreadCount || 0);
-        }, 0),
+        totalUnreadMessages: sortedConversations.reduce(
+          (sum, c) => sum + this._getUnreadCountFromUserMetadata(c, userId),
+          0,
+        ),
         fromCache: result.fromCache || false,
         nextCursor: result.nextCursor || null,
         hasMore: result.hasMore || false,
@@ -254,17 +190,17 @@ class GetConversations {
           finalResult.conversations.length
         } conversations récupérées (${finalResult.processingTime}ms) - ${
           result.fromCache ? "CACHE" : "DB"
-        }`
+        }`,
       );
       console.log(
-        `📊 Catégories: ${finalResult.stats.unread} non-lues, ${finalResult.stats.groups} groupes, ${finalResult.stats.broadcasts} broadcasts, ${finalResult.stats.departement} département, ${finalResult.stats.private} privées`
+        `📊 Catégories: ${finalResult.stats.unread} non-lues, ${finalResult.stats.groups} groupes, ${finalResult.stats.broadcasts} broadcasts, ${finalResult.stats.private} privées`,
       );
 
       return finalResult;
     } catch (error) {
       const processingTime = Date.now() - startTime;
       console.error(
-        `❌ Erreur GetConversations: ${error.message} (${processingTime}ms)`
+        `❌ Erreur GetConversations: ${error.message} (${processingTime}ms)`,
       );
       throw error;
     }
