@@ -1368,60 +1368,6 @@ class ChatHandler {
 
       let conversationIds = [];
 
-      // ✅ ÉTAPE 1 : RÉCUPÉRER LES CONVERSATIONS COMPLÈTES ET LES LIVRER AU CLIENT
-      if (this.getConversationsUseCase) {
-        const convStartTime = Date.now();
-        try {
-          const convResult = await this.getConversationsUseCase.execute(
-            userIdString,
-            {
-              page: 1,
-              limit: 200,
-
-              useCache: true,
-            },
-          );
-
-          const convDuration = Date.now() - convStartTime;
-          console.log(
-            `✅ [${new Date().toISOString()}] ${
-              convResult.conversations?.length || 0
-            } conversation(s) récupérée(s) pour ${userIdString} (⏱️ ${convDuration}ms)`,
-          );
-
-          // ✅ LIVRER LES CONVERSATIONS AU CLIENT IMMÉDIATEMENT
-          if (convResult && convResult.conversations) {
-            const convEmitStartTime = Date.now();
-
-            try {
-              socket.emit("conversationsLoaded", {
-                conversations: convResult.conversations || [],
-                pagination: convResult.pagination || {},
-                totalUnreadMessages: convResult.totalUnreadMessages || 0,
-                unreadConversations: convResult.unreadConversations || 0,
-                fromCache: convResult.fromCache || false,
-                timestamp: Date.now(),
-              });
-              const convEmitDuration = Date.now() - convEmitStartTime;
-              console.log(
-                `📤 [${new Date().toISOString()}] ${
-                  convResult.conversations.length
-                } conversation(s) envoyée(s) au client (⏱️ ${convEmitDuration}ms)`,
-              );
-            } catch (convEmitError) {
-              console.error(
-                `❌ Erreur envoi conversations: ${convEmitError.message}`,
-              );
-            }
-          }
-        } catch (convError) {
-          console.warn(
-            `⚠️ Erreur récupération conversations:`,
-            convError.message,
-          );
-        }
-      }
-
       // ✅ ÉTAPE 2 : RÉCUPÉRER LES IDs ET REJOINDRE LES ROOMS
       if (this.getConversationIdsUseCase) {
         const idsStartTime = Date.now();
@@ -1475,6 +1421,60 @@ class ChatHandler {
           console.warn(
             `⚠️ Erreur récupération IDs conversations:`,
             idsError.message,
+          );
+        }
+      }
+
+      // ✅ ÉTAPE 1 : RÉCUPÉRER LES CONVERSATIONS COMPLÈTES ET LES LIVRER AU CLIENT
+      if (this.getConversationsUseCase) {
+        const convStartTime = Date.now();
+        try {
+          const convResult = await this.getConversationsUseCase.execute(
+            userIdString,
+            {
+              page: 1,
+              limit: 200,
+
+              useCache: true,
+            },
+          );
+
+          const convDuration = Date.now() - convStartTime;
+          console.log(
+            `✅ [${new Date().toISOString()}] ${
+              convResult.conversations?.length || 0
+            } conversation(s) récupérée(s) pour ${userIdString} (⏱️ ${convDuration}ms)`,
+          );
+
+          // ✅ LIVRER LES CONVERSATIONS AU CLIENT IMMÉDIATEMENT
+          if (convResult && convResult.conversations) {
+            const convEmitStartTime = Date.now();
+
+            try {
+              socket.emit("conversationsLoaded", {
+                conversations: convResult.conversations || [],
+                pagination: convResult.pagination || {},
+                totalUnreadMessages: convResult.totalUnreadMessages || 0,
+                unreadConversations: convResult.unreadConversations || 0,
+                fromCache: convResult.fromCache || false,
+                timestamp: Date.now(),
+              });
+              const convEmitDuration = Date.now() - convEmitStartTime;
+              console.log(
+                `📤 [${new Date().toISOString()}] ${
+                  convResult.conversations.length
+                } conversation(s) envoyée(s) au client (⏱️ ${convEmitDuration}ms)`,
+              );
+            } catch (convEmitError) {
+              console.error(
+                `❌ Erreur envoi conversations: ${convEmitError.message}`,
+              );
+            }
+          }
+        } catch (convError) {
+          console.warn(
+            `⚠️ Erreur récupération conversations:`,
+            convError.message,
           );
         }
       }
