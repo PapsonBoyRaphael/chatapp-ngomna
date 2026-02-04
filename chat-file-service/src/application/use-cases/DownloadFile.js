@@ -2,9 +2,14 @@ const archiver = require("archiver");
 const stream = require("stream");
 
 class DownloadFile {
-  constructor(fileRepository, fileStorageService) {
+  constructor(
+    fileRepository,
+    fileStorageService,
+    resilientMessageService = null,
+  ) {
     this.fileRepository = fileRepository;
     this.fileStorageService = fileStorageService;
+    this.resilientMessageService = resilientMessageService;
     this.devConfigMode = process.env.DEV_CONFIG_MODE || "simple"; // 'simple' ou 'advanced'
   }
 
@@ -29,6 +34,25 @@ class DownloadFile {
 
     // Incrémenter le compteur de téléchargements
     await this.fileRepository.incrementDownloadCount(fileId, userId);
+
+    // ✅ PUBLIER ÉVÉNEMENT DE TÉLÉCHARGEMENT DANS REDIS STREAMS events:files
+    if (this.resilientMessageService) {
+      try {
+        await this.resilientMessageService.addToStream("events:files", {
+          event: "file.downloaded",
+          fileId: fileId,
+          fileName: file.fileName,
+          fileSize: file.fileSize,
+          userId: userId,
+          timestamp: Date.now(),
+        });
+        console.log(
+          `📥 [file.downloaded] publié dans events:files pour ${fileId}`,
+        );
+      } catch (error) {
+        console.warn("⚠️ Échec publication événement download:", error.message);
+      }
+    }
 
     // Basculer selon le mode DEV
     if (
@@ -84,6 +108,28 @@ class DownloadFile {
         name: file.originalName || file.fileName,
       });
       await this.fileRepository.incrementDownloadCount(file._id, userId);
+
+      // ✅ PUBLIER ÉVÉNEMENT DE TÉLÉCHARGEMENT DANS REDIS STREAMS events:files
+      if (this.resilientMessageService) {
+        try {
+          await this.resilientMessageService.addToStream("events:files", {
+            event: "file.downloaded",
+            fileId: file._id,
+            fileName: file.fileName,
+            fileSize: file.fileSize,
+            userId: userId,
+            timestamp: Date.now(),
+          });
+          console.log(
+            `📥 [file.downloaded] publié dans events:files pour ${file._id}`,
+          );
+        } catch (error) {
+          console.warn(
+            "⚠️ Échec publication événement download:",
+            error.message,
+          );
+        }
+      }
     }
     zipStream.finalize();
 

@@ -1,8 +1,9 @@
 const Conversation = require("../mongodb/models/ConversationModel");
 
 class MongoConversationRepository {
-  constructor(kafkaProducer = null) {
+  constructor(kafkaProducer = null, resilientMessageService = null) {
     this.kafkaProducer = kafkaProducer;
+    this.resilientMessageService = resilientMessageService;
     this.metrics = {
       cacheHits: 0,
       cacheMisses: 0,
@@ -43,7 +44,7 @@ class MongoConversationRepository {
         }
       } catch (findError) {
         console.log(
-          `🔍 Conversation ${cleanedData._id} non trouvée, création nécessaire`
+          `🔍 Conversation ${cleanedData._id} non trouvée, création nécessaire`,
         );
       }
 
@@ -51,7 +52,7 @@ class MongoConversationRepository {
       let conversationModel;
       try {
         console.log(
-          `🏗️ Création du modèle conversation avec données nettoyées`
+          `🏗️ Création du modèle conversation avec données nettoyées`,
         );
         conversationModel = new Conversation(cleanedData);
 
@@ -67,7 +68,7 @@ class MongoConversationRepository {
           // ✅ GESTION SPÉCIFIQUE DES ERREURS D'ENUM
           if (validationError.message.includes("is not a valid enum value")) {
             console.error(
-              `🔧 Erreur enum détectée - tentative de correction...`
+              `🔧 Erreur enum détectée - tentative de correction...`,
             );
 
             // ✅ CORRIGER LES VALEURS D'ENUM INVALIDES
@@ -77,14 +78,14 @@ class MongoConversationRepository {
             const retryValidation = conversationModel.validateSync();
             if (retryValidation) {
               throw new Error(
-                `Données encore invalides après correction: ${retryValidation.message}`
+                `Données encore invalides après correction: ${retryValidation.message}`,
               );
             }
 
             console.log(`✅ Données d'enum corrigées avec succès`);
           } else {
             throw new Error(
-              `Données de conversation invalides: ${validationError.message}`
+              `Données de conversation invalides: ${validationError.message}`,
             );
           }
         }
@@ -113,7 +114,7 @@ class MongoConversationRepository {
             conversationModel.initializeUnreadCounts();
           } else {
             console.warn(
-              `⚠️ Méthode initializeUnreadCounts non disponible, initialisation manuelle`
+              `⚠️ Méthode initializeUnreadCounts non disponible, initialisation manuelle`,
             );
             if (!conversationModel.unreadCounts) {
               conversationModel.unreadCounts = {};
@@ -140,7 +141,7 @@ class MongoConversationRepository {
         } catch (initError) {
           console.warn(
             `⚠️ Erreur initialisation compteurs:`,
-            initError.message
+            initError.message,
           );
         }
 
@@ -149,7 +150,7 @@ class MongoConversationRepository {
 
         if (!savedConversation || !savedConversation._id) {
           throw new Error(
-            "Sauvegarde a échoué - conversation invalide retournée"
+            "Sauvegarde a échoué - conversation invalide retournée",
           );
         }
 
@@ -176,10 +177,10 @@ class MongoConversationRepository {
         ) {
           console.error(
             `❌ Erreur de référence dans les hooks détectée:`,
-            saveError.message
+            saveError.message,
           );
           throw new Error(
-            `Erreur hook MongoDB: ${saveError.message} - Vérifiez les hooks pre/post du modèle`
+            `Erreur hook MongoDB: ${saveError.message} - Vérifiez les hooks pre/post du modèle`,
           );
         }
 
@@ -190,14 +191,14 @@ class MongoConversationRepository {
             const existing = await Conversation.findById(cleanedData._id);
             if (existing) {
               console.log(
-                `✅ Conversation récupérée après doublon: ${existing._id}`
+                `✅ Conversation récupérée après doublon: ${existing._id}`,
               );
               return existing;
             }
           } catch (recoveryError) {
             console.error(
               `❌ Erreur récupération après doublon:`,
-              recoveryError.message
+              recoveryError.message,
             );
           }
         }
@@ -206,10 +207,10 @@ class MongoConversationRepository {
         if (saveError.message.includes("is not a function")) {
           console.error(
             `❌ Erreur de méthode manquante détectée:`,
-            saveError.message
+            saveError.message,
           );
           throw new Error(
-            `Erreur méthode: ${saveError.message} - Vérifiez que toutes les méthodes du modèle sont définies`
+            `Erreur méthode: ${saveError.message} - Vérifiez que toutes les méthodes du modèle sont définies`,
           );
         }
 
@@ -224,20 +225,20 @@ class MongoConversationRepository {
           await this._publishConversationEvent(
             "CONVERSATION_CREATED",
             savedConversation,
-            { processingTime }
+            { processingTime },
           );
           console.log(`📤 Événement Kafka publié: CONVERSATION_CREATED`);
         } catch (kafkaError) {
           console.warn(
             "⚠️ Erreur publication conversation:",
-            kafkaError.message
+            kafkaError.message,
           );
           // ✅ NE PAS FAIRE ÉCHOUER LA SAUVEGARDE SI KAFKA ÉCHOUE
         }
       }
 
       console.log(
-        `✅ Conversation complètement sauvegardée: ${savedConversation._id} (${processingTime}ms)`
+        `✅ Conversation complètement sauvegardée: ${savedConversation._id} (${processingTime}ms)`,
       );
       return savedConversation;
     } catch (error) {
@@ -265,7 +266,7 @@ class MongoConversationRepository {
         } catch (kafkaError) {
           console.warn(
             "⚠️ Erreur publication échec Kafka:",
-            kafkaError.message
+            kafkaError.message,
           );
         }
       }
@@ -294,20 +295,20 @@ class MongoConversationRepository {
         } catch (cacheError) {
           console.warn(
             "⚠️ Erreur mise en cache conversation:",
-            cacheError.message
+            cacheError.message,
           );
         }
       }
 
       console.log(
-        `🔍 Conversation trouvée: ${conversationId} (${processingTime}ms)`
+        `🔍 Conversation trouvée: ${conversationId} (${processingTime}ms)`,
       );
       return conversation;
     } catch (error) {
       this.metrics.errors++;
       console.error(
         `❌ Erreur recherche conversation ${conversationId}:`,
-        error
+        error,
       );
       throw error;
     }
@@ -345,7 +346,7 @@ class MongoConversationRepository {
 
       const result = {
         conversations: conversations.map((conv) =>
-          this._sanitizeConversationData(conv)
+          this._sanitizeConversationData(conv),
         ),
         pagination: {
           currentPage: page,
@@ -365,13 +366,13 @@ class MongoConversationRepository {
         } catch (cacheError) {
           console.warn(
             "⚠️ Erreur mise en cache conversations:",
-            cacheError.message
+            cacheError.message,
           );
         }
       }
 
       console.log(
-        `🔍 Conversations participant: ${userId} (${conversations.length} conversations, ${processingTime}ms)`
+        `🔍 Conversations participant: ${userId} (${conversations.length} conversations, ${processingTime}ms)`,
       );
       return result;
     } catch (error) {
@@ -401,7 +402,7 @@ class MongoConversationRepository {
       const conversation = await Conversation.findByIdAndUpdate(
         conversationId,
         { $set: updateData },
-        { new: true }
+        { new: true },
       );
 
       if (!conversation) {
@@ -419,7 +420,7 @@ class MongoConversationRepository {
             {
               lastMessage: messageData,
               processingTime,
-            }
+            },
           );
         } catch (kafkaError) {
           console.warn("⚠️ Erreur publication update:", kafkaError.message);
@@ -427,7 +428,7 @@ class MongoConversationRepository {
       }
 
       console.log(
-        `🔄 Last message mis à jour: ${conversationId} (${processingTime}ms)`
+        `🔄 Last message mis à jour: ${conversationId} (${processingTime}ms)`,
       );
       return conversation;
     } catch (error) {
@@ -440,9 +441,53 @@ class MongoConversationRepository {
   async _publishConversationEvent(
     eventType,
     conversation,
-    additionalData = {}
+    additionalData = {},
   ) {
     try {
+      // ✅ PUBLIER DANS LES STREAMS REDIS
+      if (this.resilientMessageService) {
+        try {
+          let conversationData = {
+            conversationId:
+              conversation?._id?.toString() || conversation?.id?.toString(),
+          };
+
+          // Ajouter les données spécifiques selon le type d'événement
+          if (eventType === "CONVERSATION_CREATED") {
+            conversationData = {
+              ...conversationData,
+              name: conversation.name,
+              type: conversation.type,
+              createdBy: conversation.createdBy,
+              participants: conversation.participants,
+            };
+          } else if (eventType === "CONVERSATION_UPDATED") {
+            conversationData = {
+              ...conversationData,
+              name: conversation.name,
+              updatedBy: additionalData.updatedBy,
+              changes: additionalData.changes,
+            };
+          } else if (eventType === "CONVERSATION_DELETED") {
+            conversationData = {
+              ...conversationData,
+              deletedBy: additionalData.deletedBy,
+            };
+          }
+
+          await this.resilientMessageService.publishConversationEvent(
+            eventType,
+            conversationData,
+          );
+          console.log(`📤 Événement Redis stream publié: ${eventType}`);
+        } catch (streamError) {
+          console.warn(
+            "⚠️ Erreur publication stream conversation:",
+            streamError.message,
+          );
+        }
+      }
+
       if (!this.kafkaProducer) {
         console.warn("⚠️ Pas de producer Kafka disponible");
         return false;
@@ -507,13 +552,13 @@ class MongoConversationRepository {
             typeof this.kafkaProducer.publishMessage === "function",
           hasSend: typeof this.kafkaProducer.send === "function",
           availableMethods: Object.getOwnPropertyNames(
-            this.kafkaProducer
+            this.kafkaProducer,
           ).filter((prop) => typeof this.kafkaProducer[prop] === "function"),
           producerType: this.kafkaProducer.constructor?.name || "unknown",
         });
 
         throw new Error(
-          "Producer Kafka incompatible - aucune méthode de publication trouvée"
+          "Producer Kafka incompatible - aucune méthode de publication trouvée",
         );
       }
     } catch (error) {
@@ -575,7 +620,7 @@ class MongoConversationRepository {
       const updated = await Conversation.findByIdAndUpdate(
         id,
         { ...updateData, updatedAt: new Date() },
-        { new: true, runValidators: true }
+        { new: true, runValidators: true },
       ).lean();
 
       return updated;
@@ -645,7 +690,7 @@ class MongoConversationRepository {
                 : new Date(entry.timestamp || Date.now()),
             details: entry.details || {},
             metadata: entry.metadata || {},
-          })
+          }),
         );
       }
 
@@ -736,7 +781,7 @@ class MongoConversationRepository {
           if (key && key !== "undefined" && key !== "null") {
             cleanedUnreadCounts[String(key)] = Math.max(
               0,
-              parseInt(value) || 0
+              parseInt(value) || 0,
             );
           }
         }
@@ -837,7 +882,7 @@ class MongoConversationRepository {
     // Appliquer les mappings
     if (actionMappings[upperAction]) {
       console.log(
-        `🔧 Action mappée: ${upperAction} → ${actionMappings[upperAction]}`
+        `🔧 Action mappée: ${upperAction} → ${actionMappings[upperAction]}`,
       );
       return actionMappings[upperAction];
     }
@@ -952,7 +997,7 @@ class MongoConversationRepository {
           {
             new: true,
             runValidators: true,
-          }
+          },
         );
 
         console.log(`✅ Compteur incrémenté pour utilisateur existant:`, {
@@ -987,7 +1032,7 @@ class MongoConversationRepository {
           {
             new: true,
             runValidators: true,
-          }
+          },
         );
 
         console.log(`✅ Nouvelle entrée userMetadata créée:`, {
@@ -1030,7 +1075,7 @@ class MongoConversationRepository {
         {
           new: true,
           runValidators: true,
-        }
+        },
       );
 
       if (updateResult) {

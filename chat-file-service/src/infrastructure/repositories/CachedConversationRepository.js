@@ -92,16 +92,23 @@ class CachedConversationRepository {
       });
 
       // ✅ METTRE EN CACHE SELON LA STRATÉGIE
+      console.log(
+        `🔍 DEBUG CACHE: useCache=${useCache}, cache=${!!this.cache}, cacheKey=${cacheKey}, conversations=${result.conversations?.length || 0}`,
+      );
       if (
         useCache &&
         this.cache &&
         cacheKey &&
         result.conversations?.length > 0
       ) {
-        await this.cache.set(cacheKey, result, ttl);
-        console.log(
-          `💾 Conversations mises en cache: ${result.conversations.length} (TTL: ${ttl}s)`,
-        );
+        try {
+          await this.cache.set(cacheKey, result, ttl);
+          console.log(
+            `💾 Conversations mises en cache: ${result.conversations.length} (TTL: ${ttl}s)`,
+          );
+        } catch (error) {
+          console.error(`❌ Erreur mise en cache: ${error.message}`);
+        }
       }
 
       return {
@@ -411,10 +418,18 @@ class CachedConversationRepository {
       );
 
       if (result) {
-        // ✅ NE PAS invalider le cache de conversation (chat:convs:id:${conversationId})
-        // Raison: La conversation reste valide, seul le lastMessage change
-        // CachedMessageRepository gère l'invalidation des caches de messages
-        console.log(`🔄 Derniers messages mis à jour: ${conversationId}`);
+        // ✅ RÉCUPÉRER LES PARTICIPANTS POUR INVALIDER LE CACHE
+        const participants = result.participants || [];
+
+        // ✅ INVALIDER LE CACHE DES CONVERSATIONS POUR TOUS LES PARTICIPANTS
+        await this.invalidateConversationCaches(conversationId, {
+          participants,
+          invalidateConversation: true, // ✅ INVALIDER AUSSI LA CONVERSATION SPÉCIFIQUE
+        });
+
+        console.log(
+          `🔄 Derniers messages mis à jour et cache invalidé: ${conversationId}`,
+        );
       }
 
       return result;

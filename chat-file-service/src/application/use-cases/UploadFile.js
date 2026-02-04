@@ -7,7 +7,7 @@ class UploadFile {
   constructor(
     fileRepository,
     kafkaProducer = null,
-    resilientMessageService = null
+    resilientMessageService = null,
   ) {
     this.fileRepository = fileRepository;
     this.kafkaProducer = kafkaProducer;
@@ -83,7 +83,7 @@ class UploadFile {
         } catch (streamErr) {
           console.error(
             "❌ Erreur publication stream file.uploaded:",
-            streamErr.message
+            streamErr.message,
           );
         }
       }

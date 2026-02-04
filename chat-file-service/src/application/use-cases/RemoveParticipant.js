@@ -6,7 +6,7 @@ class RemoveParticipant {
   constructor(
     conversationRepository,
     resilientMessageService = null,
-    userCacheService = null
+    userCacheService = null,
   ) {
     this.conversationRepository = conversationRepository;
     this.resilientMessageService = resilientMessageService;
@@ -19,9 +19,8 @@ class RemoveParticipant {
     }
 
     // Récupérer la conversation
-    const conversation = await this.conversationRepository.findById(
-      conversationId
-    );
+    const conversation =
+      await this.conversationRepository.findById(conversationId);
     if (!conversation) {
       throw new Error("Conversation introuvable");
     }
@@ -29,7 +28,7 @@ class RemoveParticipant {
     // Vérifier que c'est un groupe
     if (conversation.type !== "GROUP") {
       throw new Error(
-        "Seuls les groupes peuvent avoir des participants retirés"
+        "Seuls les groupes peuvent avoir des participants retirés",
       );
     }
 
@@ -62,14 +61,14 @@ class RemoveParticipant {
       } catch (err) {
         console.warn(
           "⚠️ Impossible de récupérer les infos utilisateur:",
-          err.message
+          err.message,
         );
       }
     }
 
     // Retirer le participant
     conversation.participants = conversation.participants.filter(
-      (id) => id !== participantId
+      (id) => id !== participantId,
     );
 
     // Supprimer les unreadCounts
@@ -80,7 +79,7 @@ class RemoveParticipant {
     // Supprimer les métadonnées utilisateur
     if (conversation.userMetadata) {
       conversation.userMetadata = conversation.userMetadata.filter(
-        (meta) => meta.userId !== participantId
+        (meta) => meta.userId !== participantId,
       );
     }
 
@@ -120,12 +119,12 @@ class RemoveParticipant {
           timestamp: Date.now().toString(),
         });
         console.log(
-          `📤 [conversation.participant.removed] publié dans events:conversations`
+          `📤 [conversation.participant.removed] publié dans events:conversations`,
         );
       } catch (streamErr) {
         console.error(
           "❌ Erreur publication stream participant.removed:",
-          streamErr.message
+          streamErr.message,
         );
       }
     }
@@ -156,6 +155,30 @@ class RemoveParticipant {
         });
       } catch (err) {
         console.warn("⚠️ Erreur publication notification:", err.message);
+      }
+    }
+
+    // ✅ PUBLIER DANS LE STREAM REDIS POUR PARTICIPANT RETIRÉ
+    if (this.resilientMessageService) {
+      try {
+        await this.resilientMessageService.publishConversationEvent(
+          "PARTICIPANT_REMOVED",
+          {
+            conversationId: conversationId.toString(),
+            participantId,
+            participantName: participantInfo?.name,
+            removedBy,
+          },
+        );
+        console.log(
+          `✅ Événement PARTICIPANT_REMOVED publié dans Redis stream pour: ${conversationId}`,
+        );
+      } catch (streamError) {
+        console.warn(
+          "⚠️ Erreur publication stream PARTICIPANT_REMOVED:",
+          streamError.message,
+        );
+        // Ne pas bloquer la suppression si la publication stream échoue
       }
     }
 

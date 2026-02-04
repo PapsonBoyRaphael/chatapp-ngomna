@@ -9,7 +9,7 @@ class DeleteFile {
   constructor(
     fileRepository,
     kafkaProducer = null,
-    resilientMessageService = null
+    resilientMessageService = null,
   ) {
     this.fileRepository = fileRepository;
     this.kafkaProducer = kafkaProducer;
@@ -59,7 +59,7 @@ class DeleteFile {
         console.log(`🗑️ Fichier physique supprimé: ${file.path}`);
       } catch (fsErr) {
         console.warn(
-          `⚠️ Impossible de supprimer le fichier physique: ${fsErr.message}`
+          `⚠️ Impossible de supprimer le fichier physique: ${fsErr.message}`,
         );
         // Non-bloquant, continue avec la suppression logique
       }
@@ -100,28 +100,8 @@ class DeleteFile {
       } catch (streamErr) {
         console.error(
           "❌ Erreur publication stream file.deleted:",
-          streamErr.message
+          streamErr.message,
         );
-      }
-    }
-
-    // Publier dans Kafka si disponible
-    if (
-      this.kafkaProducer &&
-      typeof this.kafkaProducer.publishMessage === "function"
-    ) {
-      try {
-        await this.kafkaProducer.publishMessage({
-          eventType: "FILE_DELETED",
-          fileId: fileInfo.fileId,
-          conversationId: fileInfo.conversationId,
-          deleterId: userId,
-          originalName: fileInfo.originalName,
-          physicalDelete,
-          timestamp: new Date().toISOString(),
-        });
-      } catch (kafkaErr) {
-        console.warn("⚠️ Erreur publication Kafka:", kafkaErr.message);
       }
     }
 

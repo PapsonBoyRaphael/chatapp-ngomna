@@ -117,6 +117,9 @@ class ChatHandler {
 
         socket.on("markMessageRead", (data) => {
           if (this.onlineUserManager && socket.userId) {
+            console.log(
+              `📖 Marquage lu par ${socket.matricule} (${socket.userId})...`,
+            );
             this.onlineUserManager.updateLastActivity(socket.userId, socket);
           }
           this.handleMarkMessageRead(socket, data);
@@ -1392,16 +1395,14 @@ class ChatHandler {
               `👥 Rooms conversations rejointes (${conversationIds.length}) en ${joinDuration}ms`,
             );
 
-            if (this.updateMessageStatusUseCase) {
+            if (this.markMessageDeliveredUseCase) {
               const updateStartTime = Date.now();
               await Promise.all(
                 conversationIds.map(async (convId) => {
                   try {
-                    await this.updateMessageStatusUseCase.execute({
+                    await this.markMessageDeliveredUseCase.execute({
                       conversationId: convId,
-                      receiverId: userIdString,
-                      status: "DELIVERED",
-                      messageIds: null,
+                      userId: userIdString,
                     });
                   } catch (deliveredError) {
                     console.warn(
@@ -1551,20 +1552,6 @@ class ChatHandler {
           this.messageDeliveryService.registerUserSocket(userIdString, socket);
           console.log(
             `✅ [${new Date().toISOString()}] Socket enregistré pour ${userIdString}`,
-          );
-
-          // ✅ LIVRER LES MESSAGES EN ATTENTE
-          console.log(
-            `📥 [${new Date().toISOString()}] Livraison messages en attente pour ${userIdString}...`,
-          );
-          const deliveredCount =
-            await this.messageDeliveryService.deliverPendingMessagesOnConnect(
-              userIdString,
-              socket,
-            );
-          const mdsDuration = Date.now() - mdsStartTime;
-          console.log(
-            `✅ [${new Date().toISOString()}] ${deliveredCount} message(s) en attente livré(s) pour ${userIdString} (⏱️ ${mdsDuration}ms)`,
           );
         } catch (mdsError) {
           console.error(
@@ -1839,6 +1826,8 @@ class ChatHandler {
 
       const messageId = result.message._id || result.message.id;
 
+      console.log(result);
+
       // ✅ ÉTAPE 2 : RÉPONDRE À L'EXPÉDITEUR (ACK IMMÉDIAT)
       socket.emit("message_sent", {
         messageId,
@@ -1916,13 +1905,11 @@ class ChatHandler {
 
       const roomName = `conversation_${conversationId}`;
 
-      if (this.updateMessageStatusUseCase) {
+      if (this.markMessageReadUseCase) {
         try {
-          await this.updateMessageStatusUseCase.execute({
+          await this.markMessageReadUseCase.execute({
             conversationId,
-            receiverId: userId,
-            status: "READ",
-            messageIds: null,
+            userId,
           });
         } catch (err) {
           console.warn("⚠️ Erreur marquage read:", err.message);
@@ -2023,16 +2010,15 @@ class ChatHandler {
 
       if (!messageId || !userId) return;
 
-      if (!this.updateMessageStatusUseCase) {
-        console.warn("⚠️ UpdateMessageStatusUseCase non disponible");
+      if (!this.markMessageDeliveredUseCase) {
+        console.warn("⚠️ MarkMessageDeliveredUseCase non disponible");
         return;
       }
 
       try {
-        const result = await this.updateMessageStatusUseCase.execute({
+        const result = await this.markMessageDeliveredUseCase.execute({
           messageId,
-          receiverId: userId,
-          status: "DELIVERED",
+          userId,
           conversationId,
         });
 
@@ -2062,23 +2048,27 @@ class ChatHandler {
 
   async handleMarkMessageRead(socket, data) {
     try {
+      console.log("📖 Marquage message lu demandé:", data);
       const { messageId, conversationId } = data;
       const userId = socket.userId;
 
+      console.log("📖 Utilisateur:", userId, "Message ID:", messageId);
+
       if (!messageId || !userId) return;
 
-      if (!this.updateMessageStatusUseCase) {
-        console.warn("⚠️ UpdateMessageStatusUseCase non disponible");
+      if (!this.markMessageReadUseCase) {
+        console.warn("⚠️ MarkMessageReadUseCase non disponible");
         return;
       }
 
       try {
-        const result = await this.updateMessageStatusUseCase.execute({
+        const result = await this.markMessageReadUseCase.execute({
           messageId,
-          receiverId: userId,
-          status: "READ",
+          userId,
           conversationId,
         });
+
+        console.log("Résultat marquage lu:", result);
 
         if (result && result.modifiedCount > 0) {
           this.io

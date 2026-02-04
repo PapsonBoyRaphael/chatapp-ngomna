@@ -4,7 +4,7 @@ class CreateGroup {
   constructor(
     conversationRepository,
     resilientMessageService = null,
-    userCacheService = null
+    userCacheService = null,
   ) {
     this.conversationRepository = conversationRepository;
     this.resilientMessageService = resilientMessageService;
@@ -27,13 +27,13 @@ class CreateGroup {
     let usersInfo = [];
     try {
       console.log(
-        `🔍 Validation des ${participants.length} participants du groupe...`
+        `🔍 Validation des ${participants.length} participants du groupe...`,
       );
       usersInfo = await this.userCacheService.fetchUsersInfo(participants);
 
       // Vérifier que tous les utilisateurs existent
       const invalidUsers = usersInfo.filter(
-        (u) => u.name === "Utilisateur inconnu"
+        (u) => u.name === "Utilisateur inconnu",
       );
       if (invalidUsers.length > 0) {
         const invalidIds = invalidUsers.map((u) => u.matricule).join(", ");
@@ -46,10 +46,10 @@ class CreateGroup {
     } catch (validationError) {
       console.error(
         `❌ Erreur validation participants:`,
-        validationError.message
+        validationError.message,
       );
       throw new Error(
-        `Impossible de valider les participants: ${validationError.message}`
+        `Impossible de valider les participants: ${validationError.message}`,
       );
     }
 
@@ -135,9 +135,8 @@ class CreateGroup {
     };
     console.log("userMetadata", userMetadata);
 
-    const savedConversation = await this.conversationRepository.save(
-      conversationData
-    );
+    const savedConversation =
+      await this.conversationRepository.save(conversationData);
 
     // ✅ PUBLIER DANS REDIS STREAMS events:conversations
     if (this.resilientMessageService) {
@@ -153,12 +152,12 @@ class CreateGroup {
           timestamp: Date.now().toString(),
         });
         console.log(
-          `📤 [conversation.created] publié dans events:conversations`
+          `📤 [conversation.created] publié dans events:conversations`,
         );
       } catch (streamErr) {
         console.error(
           "❌ Erreur publication stream conversation.created:",
-          streamErr.message
+          streamErr.message,
         );
       }
     }
@@ -167,7 +166,7 @@ class CreateGroup {
     if (this.resilientMessageService) {
       try {
         console.log(
-          `📢 Publication notification système GROUP_CREATED pour: ${savedConversation._id}`
+          `📢 Publication notification système GROUP_CREATED pour: ${savedConversation._id}`,
         );
 
         await this.resilientMessageService.publishSystemMessage(
@@ -191,15 +190,15 @@ class CreateGroup {
           {
             eventType: "GROUP_CREATED",
             stream: "stream:messages:group",
-          }
+          },
         );
         console.log(
-          `✅ Notification système GROUP_CREATED publiée pour: ${savedConversation._id}`
+          `✅ Notification système GROUP_CREATED publiée pour: ${savedConversation._id}`,
         );
       } catch (notifError) {
         console.warn(
           "⚠️ Erreur publication notification GROUP_CREATED:",
-          notifError.message
+          notifError.message,
         );
         // Ne pas bloquer la création si la notification échoue
       }
@@ -216,6 +215,31 @@ class CreateGroup {
         timestamp: new Date().toISOString(),
         source: "CreateGroup-UseCase",
       });
+    }
+
+    // ✅ PUBLIER DANS LE STREAM REDIS POUR CONVERSATION CRÉÉE
+    if (this.resilientMessageService) {
+      try {
+        await this.resilientMessageService.publishConversationEvent(
+          "CONVERSATION_CREATED",
+          {
+            conversationId: String(savedConversation._id),
+            name: savedConversation.name,
+            type: savedConversation.type,
+            createdBy: savedConversation.createdBy,
+            participants: savedConversation.participants,
+          },
+        );
+        console.log(
+          `✅ Événement CONVERSATION_CREATED publié dans Redis stream pour: ${savedConversation._id}`,
+        );
+      } catch (streamError) {
+        console.warn(
+          "⚠️ Erreur publication stream CONVERSATION_CREATED:",
+          streamError.message,
+        );
+        // Ne pas bloquer la création si la publication stream échoue
+      }
     }
 
     return savedConversation;

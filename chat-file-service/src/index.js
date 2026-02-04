@@ -348,6 +348,10 @@ const startServer = async () => {
       // ✅ DÉMARRER LES WORKERS INTERNES (PAS BESOIN D'UN WORKER SÉPARÉ)
       await resilientMessageService.startWorkers();
 
+      // ✅ INJECTER LE SERVICE DANS LE REPOSITORY POUR LES ÉVÉNEMENTS
+      mongoConversationRepository.resilientMessageService =
+        resilientMessageService;
+
       // resilientMessageService.nukeAllRedisData(); //
       // ✅ NOUVELLE : SYNCHRONISER LES MESSAGES EXISTANTS
       // console.log(
@@ -427,7 +431,7 @@ const startServer = async () => {
     const downloadFileUseCase = new DownloadFile(
       fileRepository, // Cached
       fileStorageService,
-      cacheServiceInstance,
+      resilientMessageService, // Pour publier les événements de téléchargement
     );
 
     const createGroupUseCase = new CreateGroup(

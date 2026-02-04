@@ -5,18 +5,58 @@
  * ✅ Acknowledge après livraison
  * ✅ Messages en attente pour utilisateurs déconnectés
  * ✅ Scalable jusqu'à des millions d'utilisateurs
+ * ✅ CONSUMER PARTITIONING: Séparation des consumers par priorité
+ * ✅ SMART CONSUMPTION: Consommation intelligente selon connectivité
+ * ✅ LAZY SUBSCRIPTION: Abonnement progressif aux streams
  */
 
 class MessageDeliveryService {
   constructor(redis, io) {
     if (!redis || !io) {
       throw new Error(
-        "Redis et Socket.io sont requis pour MessageDeliveryService"
+        "Redis et Socket.io sont requis pour MessageDeliveryService",
       );
     }
 
     this.redis = redis;
     this.io = io;
+
+    // ✅ CONFIGURATION DES CONSUMERS PARTITIONNÉS
+    this.WORKER_PARTITIONS = {
+      // CONSUMER 1 : Temps réel critique (3 consumers)
+      HIGH_PRIORITY_WORKER: {
+        name: "high-priority",
+        streams: ["typing", "private", "statusRead", "statusDelivered"],
+        workers: 3,
+        priority: 0,
+      },
+      // CONSUMER 2 : Messages groupe (2 consumers)
+      GROUP_WORKER: {
+        name: "group-messages",
+        streams: ["group", "channel", "reactions", "replies"],
+        workers: 2,
+        priority: 1,
+      },
+      // CONSUMER 3 : Événements système (1 consumer)
+      SYSTEM_WORKER: {
+        name: "system-events",
+        streams: [
+          "notifications",
+          "conversations",
+          "conversationCreated",
+          "conversationUpdated",
+          "participantAdded",
+          "participantRemoved",
+          "conversationDeleted",
+          "files",
+          "analytics",
+          "statusEdited",
+          "statusDeleted",
+        ],
+        workers: 1,
+        priority: 2,
+      },
+    };
 
     // ✅ CONFIGURATION DES STREAMS PAR PRIORITÉ
     this.STREAM_CONFIGS = {
@@ -26,6 +66,7 @@ class MessageDeliveryService {
         groupId: "delivery-typing",
         priority: 0,
         interval: 50, // Consommer TRÈS souvent
+        workerPartition: "HIGH_PRIORITY_WORKER",
       },
       // Priorité 1 : Temps réel (messages privés)
       private: {
@@ -33,6 +74,7 @@ class MessageDeliveryService {
         groupId: "delivery-private",
         priority: 1,
         interval: 100,
+        workerPartition: "HIGH_PRIORITY_WORKER",
       },
       // Priorité 2 : Normal (messages groupe)
       group: {
@@ -40,26 +82,143 @@ class MessageDeliveryService {
         groupId: "delivery-group",
         priority: 2,
         interval: 200,
+        workerPartition: "GROUP_WORKER",
+      },
+      // Priorité 2.5 : Messages canal
+      channel: {
+        streamKey: "stream:messages:channel",
+        groupId: "delivery-channel",
+        priority: 2,
+        interval: 200,
+        workerPartition: "GROUP_WORKER",
       },
       // Priorité 3 : Notifications
       notifications: {
-        streamKey: "stream:messages:system",
-        groupId: "delivery-notifications",
+        streamKey: "events:notifications",
+        groupId: "events-notifications",
         priority: 3,
         interval: 500,
+        workerPartition: "SYSTEM_WORKER",
       },
-      // Priorité 4 : Read receipts (faible priorité)
-      readReceipts: {
-        streamKey: "stream:events:read",
+      // Priorité 3.5 : Événements conversations
+      conversations: {
+        streamKey: "events:conversations",
+        groupId: "events-conversations",
+        priority: 3,
+        interval: 500,
+        workerPartition: "SYSTEM_WORKER",
+      },
+      // Priorité 3.5 : Événements conversation spécifiques
+      conversationCreated: {
+        streamKey: "stream:conversation:created",
+        groupId: "events-conversation-created",
+        priority: 3,
+        interval: 500,
+        workerPartition: "SYSTEM_WORKER",
+      },
+      conversationUpdated: {
+        streamKey: "stream:conversation:updated",
+        groupId: "events-conversation-updated",
+        priority: 3,
+        interval: 500,
+        workerPartition: "SYSTEM_WORKER",
+      },
+      participantAdded: {
+        streamKey: "stream:conversation:participants:added",
+        groupId: "events-participant-added",
+        priority: 3,
+        interval: 500,
+        workerPartition: "SYSTEM_WORKER",
+      },
+      participantRemoved: {
+        streamKey: "stream:conversation:participants:removed",
+        groupId: "events-participant-removed",
+        priority: 3,
+        interval: 500,
+        workerPartition: "SYSTEM_WORKER",
+      },
+      conversationDeleted: {
+        streamKey: "stream:conversation:deleted",
+        groupId: "events-conversation-deleted",
+        priority: 3,
+        interval: 500,
+        workerPartition: "SYSTEM_WORKER",
+      },
+      // Priorité 3.5 : Événements fichiers
+      files: {
+        streamKey: "events:files",
+        groupId: "events-files",
+        priority: 3,
+        interval: 500,
+        workerPartition: "SYSTEM_WORKER",
+      },
+      // Priorité 4 : Message status (faible priorité)
+      statusDelivered: {
+        streamKey: "stream:status:delivered",
+        groupId: "delivery-delivered",
+        priority: 4,
+        interval: 1000,
+        workerPartition: "HIGH_PRIORITY_WORKER",
+      },
+      statusRead: {
+        streamKey: "stream:status:read",
         groupId: "delivery-read",
         priority: 4,
         interval: 1000,
+        workerPartition: "HIGH_PRIORITY_WORKER",
       },
+      statusEdited: {
+        streamKey: "stream:status:edited",
+        groupId: "delivery-edited",
+        priority: 5,
+        interval: 1500,
+        workerPartition: "SYSTEM_WORKER",
+      },
+      statusDeleted: {
+        streamKey: "stream:status:deleted",
+        groupId: "delivery-deleted",
+        priority: 5,
+        interval: 1500,
+        workerPartition: "SYSTEM_WORKER",
+      },
+      // Priorité 6 : Interactions (réactions, réponses)
+      reactions: {
+        streamKey: "stream:events:reactions",
+        groupId: "delivery-reactions",
+        priority: 6,
+        interval: 2000,
+        workerPartition: "GROUP_WORKER",
+      },
+      replies: {
+        streamKey: "stream:events:replies",
+        groupId: "delivery-replies",
+        priority: 6,
+        interval: 2000,
+        workerPartition: "GROUP_WORKER",
+      },
+      // Priorité 7 : Analytics (faible priorité)
+      analytics: {
+        streamKey: "events:analytics",
+        groupId: "events-analytics",
+        priority: 7,
+        interval: 3000,
+        workerPartition: "SYSTEM_WORKER",
+      },
+    };
+
+    // ✅ PHASES D'ABONNEMENT PROGRESSIF (LAZY SUBSCRIPTION)
+    this.SUBSCRIPTION_PHASES = {
+      PHASE_1: ["typing", "private", "statusRead", "statusDelivered"], // Immédiat
+      PHASE_2: ["group", "channel"], // Après 1s
+      PHASE_3: ["notifications", "conversations"], // Après 3s
+      PHASE_4: ["files", "reactions", "replies"], // Après 10s
+      PHASE_5: ["analytics", "statusEdited", "statusDeleted"], // Background
     };
 
     this.streamConsumers = new Map(); // streamKey → { redis, config, isRunning, interval }
     this.userSockets = new Map(); // userId → [socketIds]
     this.userConversations = new Map(); // userId → [conversationIds]
+    this.activeUserStreams = new Map(); // userId → Set of active stream types
 
     // ✅ CONFIGURATION GÉNÉRALE
     this.pendingMessagesPrefix = "pending:messages:"; // pending:messages:2
@@ -67,25 +226,30 @@ class MessageDeliveryService {
     this.maxMessagesPerRead = 20;
 
     this.isRunning = false;
+    this.workers = new Map(); // workerPartition → worker instances
   }
 
   /**
-   * ✅ INITIALISER TOUS LES CONSUMERS
+   * ✅ INITIALISER TOUS LES WORKERS PARTITIONNÉS
    */
   async initialize() {
     try {
-      console.log("🚀 Initialisation MessageDeliveryService Multi-Streams...");
+      console.log(
+        "🚀 Initialisation MessageDeliveryService avec Workers Partitionnés...",
+      );
 
-      // Créer un consumer pour chaque stream
-      for (const [streamType, config] of Object.entries(this.STREAM_CONFIGS)) {
-        await this.createStreamConsumer(streamType, config);
+      // Créer les workers pour chaque partition
+      for (const [partitionKey, partitionConfig] of Object.entries(
+        this.WORKER_PARTITIONS,
+      )) {
+        await this.createWorkerPartition(partitionKey, partitionConfig);
       }
 
-      // Démarrer les consumers
+      // Démarrer tous les consumers
       this.startAllConsumers();
 
       console.log(
-        `✅ MessageDeliveryService initialisé avec ${this.streamConsumers.size} streams`
+        `✅ MessageDeliveryService initialisé avec ${this.workers.size} partitions de workers`,
       );
       return true;
     } catch (error) {
@@ -95,46 +259,96 @@ class MessageDeliveryService {
   }
 
   /**
-   * ✅ CRÉER UN CONSUMER POUR UN STREAM (CORRIGÉ)
+   * ✅ CRÉER UNE PARTITION DE WORKERS
    */
-  async createStreamConsumer(streamType, config) {
+  async createWorkerPartition(partitionKey, partitionConfig) {
     try {
+      console.log(
+        `🔧 Création partition ${partitionKey} avec ${partitionConfig.workers} worker(s)...`,
+      );
+
+      const workers = [];
+
+      // Créer le nombre spécifié de workers pour cette partition
+      for (let i = 0; i < partitionConfig.workers; i++) {
+        const worker = await this.createWorkerInstance(
+          partitionKey,
+          partitionConfig,
+          i,
+        );
+        workers.push(worker);
+      }
+
+      this.workers.set(partitionKey, {
+        config: partitionConfig,
+        workers: workers,
+        isRunning: false,
+      });
+
+      console.log(
+        `✅ Partition ${partitionKey} créée avec ${workers.length} worker(s)`,
+      );
+    } catch (error) {
+      console.error(`❌ Erreur création partition ${partitionKey}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ CRÉER UNE INSTANCE DE WORKER
+   */
+  async createWorkerInstance(partitionKey, partitionConfig, workerIndex) {
+    try {
+      const workerId = `${partitionKey}-worker-${workerIndex}`;
       const redisConsumer = this.redis.duplicate();
       await redisConsumer.connect();
 
-      // ✅ CRÉER UN SEUL CONSUMER GROUP (pas par utilisateur)
-      try {
-        await redisConsumer.xGroupCreate(
-          config.streamKey,
-          config.groupId,
-          "$",
-          { MKSTREAM: true }
-        );
-        console.log(
-          `✅ Consumer group créé: ${config.groupId} pour ${streamType}`
-        );
-      } catch (groupErr) {
-        if (!groupErr.message.includes("BUSYGROUP")) {
-          throw groupErr;
+      // Créer les consumers pour les streams de cette partition
+      const streamConsumers = new Map();
+
+      for (const streamType of partitionConfig.streams) {
+        const config = this.STREAM_CONFIGS[streamType];
+        if (!config) {
+          console.warn(`⚠️ Configuration manquante pour stream: ${streamType}`);
+          continue;
         }
-        console.log(`ℹ️ Consumer group existant: ${config.groupId}`);
+
+        // Créer le consumer group pour ce stream
+        try {
+          await redisConsumer.xGroupCreate(
+            config.streamKey,
+            config.groupId,
+            "$",
+            { MKSTREAM: true },
+          );
+          console.log(
+            `✅ Consumer group créé: ${config.groupId} pour ${streamType}`,
+          );
+        } catch (groupErr) {
+          if (!groupErr.message.includes("BUSYGROUP")) {
+            throw groupErr;
+          }
+        }
+
+        streamConsumers.set(config.streamKey, {
+          redis: redisConsumer,
+          config,
+          streamType,
+          isRunning: false,
+          interval: null,
+        });
       }
 
-      // ✅ ENREGISTRER LE CONSUMER
-      this.streamConsumers.set(config.streamKey, {
+      return {
+        id: workerId,
         redis: redisConsumer,
-        config,
-        streamType,
+        streamConsumers,
+        partitionKey,
         isRunning: false,
-        interval: null,
-      });
-
-      console.log(`🔧 Consumer configuré: ${streamType} (${config.streamKey})`);
+      };
     } catch (error) {
-      console.error(
-        `❌ Erreur création consumer ${streamType}:`,
-        error.message
-      );
+      console.error(`❌ Erreur création worker ${workerId}:`, error);
+      throw error;
     }
   }
 
@@ -144,53 +358,94 @@ class MessageDeliveryService {
   startAllConsumers() {
     this.isRunning = true;
 
-    // Trier par priorité (0 = plus haute)
-    const sorted = Array.from(this.streamConsumers.values()).sort(
-      (a, b) => a.config.priority - b.config.priority
-    );
-
-    for (const consumer of sorted) {
-      this.startConsumerForStream(consumer);
+    for (const [partitionKey, partition] of this.workers.entries()) {
+      this.startConsumerPartition(partitionKey, partition);
     }
 
-    console.log("▶️ Tous les consumers démarrés avec priorisation");
+    console.log("▶️ Tous les consumers démarrés avec partitionnement");
   }
 
   /**
-   * ✅ DÉMARRER UN CONSUMER AVEC SON INTERVALLE
+   * ✅ DÉMARRER UNE PARTITION DE CONSUMERS
    */
-  startConsumerForStream(consumer) {
-    if (consumer.isRunning) {
-      return;
+  startConsumerPartition(partitionKey, partition) {
+    if (partition.isRunning) return;
+
+    partition.isRunning = true;
+
+    // Démarrer chaque consumer de la partition
+    for (const worker of partition.workers) {
+      this.startConsumerInstance(worker);
     }
 
-    consumer.isRunning = true;
+    console.log(
+      `▶️ Partition ${partitionKey} démarrée avec ${partition.workers.length} consumer(s)`,
+    );
+  }
 
+  /**
+   * ✅ DÉMARRER UNE INSTANCE DE CONSUMER
+   */
+  startConsumerInstance(worker) {
+    if (worker.isRunning) return;
+
+    worker.isRunning = true;
+
+    // Trier les streams par priorité pour ce consumer
+    const sortedConsumers = Array.from(worker.streamConsumers.values()).sort(
+      (a, b) => a.config.priority - b.config.priority,
+    );
+
+    // Démarrer un consumer pour chaque stream
+    for (const consumer of sortedConsumers) {
+      this.startStreamConsumerForWorker(worker, consumer);
+    }
+
+    console.log(
+      `⏱️ Consumer ${worker.id} démarré avec ${sortedConsumers.length} stream(s)`,
+    );
+  }
+
+  /**
+   * ✅ DÉMARRER UN CONSUMER DE STREAM POUR UN WORKER
+   */
+  startStreamConsumerForWorker(worker, consumer) {
+    if (consumer.isRunning) return;
+
+    consumer.isRunning = true;
     const interval = consumer.config.interval;
 
     consumer.interval = setInterval(async () => {
-      if (!this.isRunning) return;
+      if (!this.isRunning || !worker.isRunning) return;
 
       try {
-        await this.consumeStream(consumer);
+        await this.consumeStreamSmart(consumer);
       } catch (error) {
         console.error(
-          `❌ Erreur boucle ${consumer.streamType}:`,
-          error.message
+          `❌ Erreur boucle ${consumer.streamType} (${worker.id}):`,
+          error.message,
         );
       }
     }, interval);
 
     console.log(
-      `⏱️ Consumer ${consumer.streamType} démarré (interval: ${interval}ms, priorité: ${consumer.config.priority})`
+      `⏱️ Consumer ${consumer.streamType} démarré (${worker.id}, interval: ${interval}ms, priorité: ${consumer.config.priority})`,
     );
   }
 
   /**
-   * ✅ CONSOMMER UN STREAM (CORRIGÉ)
+   * ✅ CONSOMMER UN STREAM AVEC LOGIQUE INTELLIGENTE
    */
-  async consumeStream(consumer) {
+  async consumeStreamSmart(consumer) {
     try {
+      // ✅ STRATÉGIE DE CONSOMMATION INTELLIGENTE
+      // Si aucun utilisateur n'est connecté et que le stream n'est pas critique, ralentir
+      if (this.userSockets.size === 0 && consumer.config.priority > 2) {
+        // Pas d'utilisateurs connectés, skip les streams non-critiques
+        await this.sleep(consumer.config.interval * 2);
+        return;
+      }
+
       // ✅ UTILISER UN CONSUMER ID GÉNÉRIQUE (pas par utilisateur)
       const consumerId = `${consumer.config.groupId}:delivery-worker`;
 
@@ -200,7 +455,7 @@ class MessageDeliveryService {
           consumer.config.groupId,
           consumerId,
           { key: consumer.config.streamKey, id: ">" },
-          { COUNT: this.maxMessagesPerRead, BLOCK: this.blockTimeout }
+          { COUNT: this.maxMessagesPerRead, BLOCK: this.blockTimeout },
         );
 
         if (messages && messages.length > 0) {
@@ -214,19 +469,19 @@ class MessageDeliveryService {
               await this.distributeMessageToRecipient(
                 consumer.streamType,
                 message,
-                entry.id
+                entry.id,
               );
 
               // ✅ ACK APRÈS LIVRAISON RÉUSSIE
               await consumer.redis.xAck(
                 consumer.config.streamKey,
                 consumer.config.groupId,
-                entry.id
+                entry.id,
               );
             } catch (messageError) {
               console.warn(
                 `⚠️ Erreur traitement message ${consumer.streamType}:`,
-                messageError.message
+                messageError.message,
               );
             }
           }
@@ -235,16 +490,23 @@ class MessageDeliveryService {
         if (!streamError.message.includes("timeout")) {
           console.warn(
             `⚠️ Erreur consommation stream ${consumer.streamType}:`,
-            streamError.message
+            streamError.message,
           );
         }
       }
     } catch (error) {
       console.error(
-        `❌ Erreur consumeStream ${consumer.streamType}:`,
-        error.message
+        `❌ Erreur consumeStreamSmart ${consumer.streamType}:`,
+        error.message,
       );
     }
+  }
+
+  /**
+   * ✅ UTILITAIRE SLEEP POUR RALENTIR LA CONSOMMATION
+   */
+  sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**
@@ -266,17 +528,24 @@ class MessageDeliveryService {
             const receiverId = String(message.receiverId);
 
             console.log(
-              `➡️ Livraison message privé: ${message.senderId} → ${receiverId}`
+              `➡️ Livraison message privé: ${message.senderId} → ${receiverId}`,
             );
 
-            // ✅ VÉRIFIER QUE LE DESTINATAIRE EST CONNECTÉ
-            if (this.userSockets.has(receiverId)) {
-              await this.deliverPrivateMessage(message, receiverId);
+            // ✅ VÉRIFIER QUE LE STREAM EST ACTIF POUR LE DESTINATAIRE
+            if (this.isStreamActiveForUser(receiverId, streamType)) {
+              // ✅ VÉRIFIER QUE LE DESTINATAIRE EST CONNECTÉ
+              if (this.userSockets.has(receiverId)) {
+                await this.deliverPrivateMessage(message, receiverId);
+              } else {
+                console.log(
+                  `⏳ Destinataire ${receiverId} déconnecté, message en attente`,
+                );
+                await this.addToPendingQueue(receiverId, message, "message");
+              }
             } else {
               console.log(
-                `⏳ Destinataire ${receiverId} déconnecté, message en attente`
+                `⏸️ Stream ${streamType} pas encore actif pour ${receiverId}, message ignoré`,
               );
-              await this.addToPendingQueue(receiverId, message);
             }
           } else {
             console.warn("⚠️ Message privé sans receiverId:", message);
@@ -287,13 +556,27 @@ class MessageDeliveryService {
         case "group":
           if (message.conversationId) {
             console.log(
-              `➡️ Livraison message groupe: ${message.conversationId}`
+              `➡️ Livraison message groupe: ${message.conversationId}`,
             );
 
-            // ✅ LIVRER À TOUS LES PARTICIPANTS CONNECTÉS
+            // ✅ LIVRER À TOUS LES PARTICIPANTS CONNECTÉS DONT LE STREAM EST ACTIF
             await this.deliverGroupMessageToAllParticipants(message);
           } else {
             console.warn("⚠️ Message groupe sans conversationId:", message);
+          }
+          break;
+
+        // ✅ CAS 2.5 : MESSAGES CANAL
+        case "channel":
+          if (message.conversationId) {
+            console.log(
+              `➡️ Livraison message canal: ${message.conversationId}`,
+            );
+
+            // ✅ LIVRER À TOUS LES PARTICIPANTS CONNECTÉS DONT LE STREAM EST ACTIF
+            await this.deliverChannelMessageToAllParticipants(message);
+          } else {
+            console.warn("⚠️ Message canal sans conversationId:", message);
           }
           break;
 
@@ -304,27 +587,110 @@ class MessageDeliveryService {
           }
           break;
 
-        // ✅ CAS 4 : READ RECEIPTS
-        case "readReceipts":
-          if (message.messageId && message.senderId) {
-            // Livrer à l'expéditeur original du message
-            const originalSender = String(message.senderId);
-            if (this.userSockets.has(originalSender)) {
-              await this.deliverReadReceipt(message, originalSender);
+        // ✅ CAS 4-7 : MESSAGE STATUS
+        case "statusDelivered":
+        case "statusRead":
+        case "statusEdited":
+        case "statusDeleted":
+          if (message.messageId && message.userId) {
+            const targetUser = String(message.userId);
+            // Livrer le statut du message à l'expéditeur original
+            if (this.isStreamActiveForUser(targetUser, streamType)) {
+              await this.deliverMessageStatus(message);
             }
           }
           break;
 
-        // ✅ CAS 5 : NOTIFICATIONS SYSTÈME
+        // ✅ CAS 8 : NOTIFICATIONS SYSTÈME
         case "notifications":
           if (message.userId) {
             const targetUser = String(message.userId);
-            if (this.userSockets.has(targetUser)) {
-              await this.deliverNotification(message, targetUser);
-            } else {
-              await this.addToPendingQueue(targetUser, message);
+            if (this.isStreamActiveForUser(targetUser, streamType)) {
+              if (this.userSockets.has(targetUser)) {
+                await this.deliverNotification(message, targetUser);
+              } else {
+                await this.addToPendingQueue(targetUser, message, "message");
+              }
             }
           }
+          break;
+
+        // ✅ CAS 9 : ÉVÉNEMENTS CONVERSATIONS
+        case "conversations":
+          if (message.conversationId) {
+            await this.deliverConversationEventToParticipants(message);
+          }
+          break;
+
+        // ✅ CAS 9.1 : CONVERSATION CRÉÉE
+        case "conversationCreated":
+          if (message.conversationId) {
+            await this.deliverConversationCreatedEvent(message);
+          }
+          break;
+
+        // ✅ CAS 9.2 : CONVERSATION MISE À JOUR
+        case "conversationUpdated":
+          if (message.conversationId) {
+            await this.deliverConversationUpdatedEvent(message);
+          }
+          break;
+
+        // ✅ CAS 9.3 : PARTICIPANT AJOUTÉ
+        case "participantAdded":
+          if (message.conversationId) {
+            await this.deliverParticipantAddedEvent(message);
+          }
+          break;
+
+        // ✅ CAS 9.4 : PARTICIPANT RETIRÉ
+        case "participantRemoved":
+          if (message.conversationId) {
+            await this.deliverParticipantRemovedEvent(message);
+          }
+          break;
+
+        // ✅ CAS 9.5 : CONVERSATION SUPPRIMÉE
+        case "conversationDeleted":
+          if (message.conversationId) {
+            await this.deliverConversationDeletedEvent(message);
+          }
+          break;
+
+        // ✅ CAS 10 : ÉVÉNEMENTS FICHIERS
+        case "files":
+          if (message.userId) {
+            const targetUser = String(message.userId);
+            if (this.isStreamActiveForUser(targetUser, streamType)) {
+              await this.deliverFileEvent(message);
+            } else {
+              // ✅ UTILISATEUR DÉCONNECTÉ - AJOUTER EN FILE D'ATTENTE
+              console.log(
+                `⏳ Utilisateur ${targetUser} déconnecté - événement fichier en attente`,
+              );
+              await this.addToPendingQueue(targetUser, message, "files");
+            }
+          }
+          break;
+
+        // ✅ CAS 11 : RÉACTIONS
+        case "reactions":
+          if (message.messageId) {
+            await this.deliverReactionEvent(message);
+          }
+          break;
+
+        // ✅ CAS 12 : RÉPONSES
+        case "replies":
+          if (message.messageId) {
+            await this.deliverReplyEvent(message);
+          }
+          break;
+
+        // ✅ CAS 13 : ANALYTICS
+        case "analytics":
+          // Analytics events peuvent être ignorés côté client
+          console.log(`📊 Analytics event reçu: ${message.event}`);
           break;
 
         default:
@@ -359,29 +725,36 @@ class MessageDeliveryService {
           console.log(
             `📢 Message système trouvé avec ${
               participants.length
-            } participant(s): ${participants.join(", ")}`
+            } participant(s): ${participants.join(", ")}`,
           );
 
-          // Livrer à chaque participant connecté
+          // Livrer à chaque participant connecté dont le stream est actif
           for (const participantId of participants) {
             const userIdStr = String(participantId);
-            if (this.userSockets.has(userIdStr)) {
+            if (
+              this.isStreamActiveForUser(userIdStr, "group") &&
+              this.userSockets.has(userIdStr)
+            ) {
               targetParticipants.push(userIdStr);
               console.log(
-                `✅ Participant ${userIdStr} connecté - sera notifié`
+                `✅ Participant ${userIdStr} connecté et stream actif - sera notifié`,
               );
-            } else {
+            } else if (!this.userSockets.has(userIdStr)) {
               console.log(
-                `⏳ Participant ${userIdStr} non connecté - message en attente`
+                `⏳ Participant ${userIdStr} non connecté - message en attente`,
               );
               // Ajouter en queue pour délivrance ultérieure
-              await this.addToPendingQueue(userIdStr, message);
+              await this.addToPendingQueue(userIdStr, message, "message");
+            } else {
+              console.log(
+                `⏸️ Participant ${userIdStr} connecté mais stream 'group' pas actif`,
+              );
             }
           }
         } catch (parseErr) {
           console.warn(
             "⚠️ Erreur parsing participants du message système:",
-            parseErr.message
+            parseErr.message,
           );
         }
       } else {
@@ -390,9 +763,12 @@ class MessageDeliveryService {
           // ✅ IGNORER L'EXPÉDITEUR
           if (userId === senderId) continue;
 
-          // ✅ VÉRIFIER SI L'UTILISATEUR EST DANS LA CONVERSATION
+          // ✅ VÉRIFIER SI L'UTILISATEUR EST DANS LA CONVERSATION ET QUE LE STREAM EST ACTIF
           const userConversations = this.userConversations.get(userId) || [];
-          if (userConversations.includes(conversationId)) {
+          if (
+            userConversations.includes(conversationId) &&
+            this.isStreamActiveForUser(userId, "group")
+          ) {
             targetParticipants.push(userId);
           }
         }
@@ -401,7 +777,7 @@ class MessageDeliveryService {
       console.log(
         `👥 Livraison message ${isSystemMessage ? "SYSTÈME" : "groupe"} à ${
           targetParticipants.length
-        } utilisateur(s) connecté(s)`
+        } utilisateur(s) connecté(s) avec stream actif`,
       );
 
       // ✅ LIVRER À CHAQUE UTILISATEUR CONNECTÉ
@@ -412,10 +788,52 @@ class MessageDeliveryService {
       console.log(
         `✅ Message ${isSystemMessage ? "SYSTÈME" : "groupe"} livré: ${
           isSystemMessage ? message.subType : senderId
-        } → conv:${conversationId} (${targetParticipants.length} destinataires)`
+        } → conv:${conversationId} (${targetParticipants.length} destinataires)`,
       );
     } catch (error) {
       console.error("❌ Erreur livraison message groupe:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER UN MESSAGE DE CANAL À TOUS LES PARTICIPANTS
+   */
+  async deliverChannelMessageToAllParticipants(message) {
+    try {
+      const conversationId = String(message.conversationId);
+      const senderId = String(message.senderId);
+
+      // ✅ TROUVER LES DESTINATAIRES CONNECTÉS AVEC STREAM ACTIF
+      let targetParticipants = [];
+
+      for (const [userId, socketIds] of this.userSockets.entries()) {
+        // ✅ IGNORER L'EXPÉDITEUR
+        if (userId === senderId) continue;
+
+        // ✅ VÉRIFIER SI L'UTILISATEUR EST DANS LA CONVERSATION ET QUE LE STREAM EST ACTIF
+        const userConversations = this.userConversations.get(userId) || [];
+        if (
+          userConversations.includes(conversationId) &&
+          this.isStreamActiveForUser(userId, "channel")
+        ) {
+          targetParticipants.push(userId);
+        }
+      }
+
+      console.log(
+        `📺 Livraison message canal à ${targetParticipants.length} utilisateur(s) connecté(s) avec stream actif`,
+      );
+
+      // ✅ LIVRER À CHAQUE UTILISATEUR CONNECTÉ
+      for (const userId of targetParticipants) {
+        await this.deliverChannelMessage(message, userId);
+      }
+
+      console.log(
+        `✅ Message canal livré: ${senderId} → conv:${conversationId} (${targetParticipants.length} destinataires)`,
+      );
+    } catch (error) {
+      console.error("❌ Erreur livraison message canal:", error);
     }
   }
 
@@ -427,12 +845,15 @@ class MessageDeliveryService {
       const conversationId = String(message.conversationId);
       const senderId = String(message.senderId);
 
-      // ✅ LIVRER À TOUS LES PARTICIPANTS SAUF L'EXPÉDITEUR
+      // ✅ LIVRER À TOUS LES PARTICIPANTS SAUF L'EXPÉDITEUR AVEC STREAM ACTIF
       for (const [userId, socketIds] of this.userSockets.entries()) {
         if (userId === senderId) continue;
 
         const userConversations = this.userConversations.get(userId) || [];
-        if (userConversations.includes(conversationId)) {
+        if (
+          userConversations.includes(conversationId) &&
+          this.isStreamActiveForUser(userId, "typing")
+        ) {
           await this.deliverTypingEvent(message, userId);
         }
       }
@@ -450,12 +871,12 @@ class MessageDeliveryService {
     const userIdStr = String(userId);
 
     console.log(
-      `➡️ Routing message ${streamType} pour utilisateur ${userIdStr}`
+      `➡️ Routing message ${streamType} pour utilisateur ${userIdStr}`,
     );
 
     console.log(
       "Receiver check:",
-      message.receiverId && String(message.receiverId) === userIdStr
+      message.receiverId && String(message.receiverId) === userIdStr,
     );
 
     switch (streamType) {
@@ -477,6 +898,16 @@ class MessageDeliveryService {
         }
         break;
 
+      // ✅ CAS 2.5 : MESSAGES CANAL
+      case "channel":
+        if (
+          message.conversationId &&
+          (await this.isUserInConversation(userIdStr, message.conversationId))
+        ) {
+          await this.deliverChannelMessage(message, userIdStr);
+        }
+        break;
+
       // ✅ CAS 3 : TYPING EVENTS
       case "typing":
         if (message.receiverId && String(message.receiverId) === userIdStr) {
@@ -484,16 +915,53 @@ class MessageDeliveryService {
         }
         break;
 
-      // ✅ CAS 4 : READ RECEIPTS
-      case "readReceipts":
-        if (message.senderId && String(message.senderId) === userIdStr) {
-          await this.deliverReadReceipt(message, userIdStr);
+      // ✅ CAS 4-7 : MESSAGE STATUS
+      case "statusDelivered":
+      case "statusRead":
+      case "statusEdited":
+      case "statusDeleted":
+        if (message.userId && String(message.userId) === userIdStr) {
+          await this.deliverMessageStatus(message, userIdStr);
         }
         break;
 
-      // ✅ CAS 5 : NOTIFICATIONS SYSTÈME
+      // ✅ CAS 8 : NOTIFICATIONS SYSTÈME
       case "notifications":
         await this.deliverNotification(message, userIdStr);
+        break;
+
+      // ✅ CAS 9 : ÉVÉNEMENTS CONVERSATIONS
+      case "conversations":
+        if (
+          message.conversationId &&
+          (await this.isUserInConversation(userIdStr, message.conversationId))
+        ) {
+          await this.deliverConversationEvent(message, userIdStr);
+        }
+        break;
+
+      // ✅ CAS 10 : ÉVÉNEMENTS FICHIERS
+      case "files":
+        if (message.userId && String(message.userId) === userIdStr) {
+          await this.deliverFileEvent(message);
+        }
+        break;
+
+      // ✅ CAS 11 : RÉACTIONS
+      case "reactions":
+        // Les réactions sont broadcastées à tous
+        await this.deliverReactionEvent(message);
+        break;
+
+      // ✅ CAS 12 : RÉPONSES
+      case "replies":
+        // Les réponses sont broadcastées à tous
+        await this.deliverReplyEvent(message);
+        break;
+
+      // ✅ CAS 13 : ANALYTICS
+      case "analytics":
+        // Analytics ignorés côté client
         break;
 
       default:
@@ -575,13 +1043,13 @@ class MessageDeliveryService {
           if (isSystemMessage) {
             socket.emit("newMessage", messageData);
             console.log(
-              `📢 Message SYSTÈME livré: ${message.subType} → userId:${userId}`
+              `📢 Message SYSTÈME livré: ${message.subType} → userId:${userId}`,
             );
           } else {
             // ✅ CAS 2 : MESSAGE NORMAL - EVENT 'message:group'
             socket.emit("message:group", messageData);
             console.log(
-              `📬 Message groupe livré: ${message.senderId} → userId:${userId}`
+              `📬 Message groupe livré: ${message.senderId} → userId:${userId}`,
             );
           }
         }
@@ -619,9 +1087,9 @@ class MessageDeliveryService {
   }
 
   /**
-   * ✅ LIVRER UN ACCUSÉ DE LECTURE
+   * ✅ LIVRER UN STATUT DE MESSAGE
    */
-  async deliverReadReceipt(message, userId) {
+  async deliverMessageStatus(message, userId) {
     try {
       const socketIds = this.userSockets.get(userId);
 
@@ -632,49 +1100,566 @@ class MessageDeliveryService {
       for (const socketId of socketIds) {
         const socket = this.io.sockets.sockets.get(socketId);
         if (socket) {
-          socket.emit("read:receipt", {
+          socket.emit("message:status", {
             messageId: message.messageId,
-            conversationId: message.conversationId,
-            readBy: message.readBy,
-            readAt: message.timestamp,
-          });
-        }
-      }
-    } catch (error) {
-      console.error("❌ Erreur deliverReadReceipt:", error);
-    }
-  }
-
-  /**
-   * ✅ LIVRER UNE NOTIFICATION
-   */
-  async deliverNotification(message, userId) {
-    try {
-      const socketIds = this.userSockets.get(userId);
-
-      if (!socketIds || socketIds.length === 0) {
-        return;
-      }
-
-      for (const socketId of socketIds) {
-        const socket = this.io.sockets.sockets.get(socketId);
-        if (socket) {
-          socket.emit("notification:system", {
-            notificationId: message.messageId,
-            title: message.title,
-            message: message.content,
-            type: message.type,
+            userId: message.userId,
+            status: message.status,
             timestamp: message.timestamp,
           });
         }
       }
     } catch (error) {
-      console.error("❌ Erreur deliverNotification:", error);
+      console.error("❌ Erreur deliverMessageStatus:", error);
     }
   }
 
   /**
-   * ✅ ENREGISTRER UN SOCKET UTILISATEUR
+   * ✅ LIVRER UN MESSAGE DE CANAL
+   */
+  async deliverChannelMessage(message, userId) {
+    try {
+      const socketIds = this.userSockets.get(userId);
+
+      if (!socketIds || socketIds.length === 0) {
+        return;
+      }
+
+      // ✅ CONSTRUIRE LES DONNÉES DU MESSAGE
+      const messageData = {
+        messageId: message.messageId,
+        conversationId: message.conversationId,
+        senderId: message.senderId,
+        senderName: message.senderName || "Système",
+        content: message.content,
+        type: message.type,
+        status: message.status || "DELIVERED",
+        timestamp: message.timestamp || message.createdAt,
+        metadata: message.metadata,
+      };
+
+      // ✅ ENVOYER À TOUTES LES CONNEXIONS DE L'UTILISATEUR
+      for (const socketId of socketIds) {
+        const socket = this.io.sockets.sockets.get(socketId);
+        if (socket) {
+          socket.emit("message:channel", messageData);
+          console.log(
+            `📺 Message canal livré: ${message.senderId} → userId:${userId}`,
+          );
+        }
+      }
+    } catch (error) {
+      console.error("❌ Erreur deliverChannelMessage:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER UN ÉVÉNEMENT CONVERSATION
+   */
+  async deliverConversationEvent(message, userId) {
+    try {
+      const socketIds = this.userSockets.get(userId);
+
+      if (!socketIds || socketIds.length === 0) {
+        return;
+      }
+
+      for (const socketId of socketIds) {
+        const socket = this.io.sockets.sockets.get(socketId);
+        if (socket) {
+          socket.emit("conversation:event", {
+            conversationId: message.conversationId,
+            event: message.event,
+            userId: message.userId,
+            data: message.data,
+            timestamp: message.timestamp,
+          });
+        }
+      }
+
+      console.log(`🏢 Événement conversation livré: ${message.event}`);
+    } catch (error) {
+      console.error("❌ Erreur deliverConversationEvent:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER UN ÉVÉNEMENT CONVERSATION
+   */
+  async deliverConversationEventToParticipants(message) {
+    try {
+      const conversationId = String(message.conversationId);
+
+      // ✅ LIVRER À TOUS LES PARTICIPANTS CONNECTÉS DE LA CONVERSATION AVEC STREAM ACTIF
+      for (const [userId, socketIds] of this.userSockets.entries()) {
+        const userConversations = this.userConversations.get(userId) || [];
+        if (
+          userConversations.includes(conversationId) &&
+          this.isStreamActiveForUser(userId, "conversations")
+        ) {
+          await this.deliverConversationEvent(message, userId);
+        }
+      }
+
+      console.log(`🏢 Événement conversation livré: ${conversationId}`);
+    } catch (error) {
+      console.error("❌ Erreur livraison événement conversation:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER UN ÉVÉNEMENT CONVERSATION CRÉÉE
+   */
+  async deliverConversationCreatedEvent(message) {
+    try {
+      const conversationId = String(message.conversationId);
+
+      // ✅ RÉCUPÉRER TOUS LES PARTICIPANTS DE LA CONVERSATION
+      const allParticipants = message.participants || [];
+
+      console.log(
+        `🆕 Livraison événement conversation créée à ${allParticipants.length} participant(s)`,
+      );
+
+      for (const participantId of allParticipants) {
+        const userId = String(participantId);
+
+        if (
+          this.userSockets.has(userId) &&
+          this.isStreamActiveForUser(userId, "conversationCreated")
+        ) {
+          // ✅ UTILISATEUR CONNECTÉ - LIVRAISON IMMÉDIATE
+          await this.deliverConversationCreated(message, userId);
+        } else {
+          // ✅ UTILISATEUR DÉCONNECTÉ - STOCKAGE EN ATTENTE
+          console.log(
+            `⏳ Participant ${userId} déconnecté, événement conversation créée en attente`,
+          );
+          await this.addToPendingQueue(userId, message, "conversationCreated");
+        }
+      }
+
+      console.log(
+        `🆕 Événement conversation créée distribué: ${conversationId}`,
+      );
+    } catch (error) {
+      console.error("❌ Erreur livraison événement conversation créée:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER UN ÉVÉNEMENT CONVERSATION MISE À JOUR
+   */
+  async deliverConversationUpdatedEvent(message) {
+    try {
+      const conversationId = String(message.conversationId);
+
+      // ✅ RÉCUPÉRER TOUS LES PARTICIPANTS DE LA CONVERSATION
+      const allParticipants =
+        await this.getAllConversationParticipants(conversationId);
+
+      console.log(
+        `📝 Livraison événement conversation mise à jour à ${allParticipants.length} participant(s)`,
+      );
+
+      for (const participantId of allParticipants) {
+        const userId = String(participantId);
+
+        if (
+          this.userSockets.has(userId) &&
+          this.isStreamActiveForUser(userId, "conversationUpdated")
+        ) {
+          // ✅ UTILISATEUR CONNECTÉ - LIVRAISON IMMÉDIATE
+          await this.deliverConversationUpdated(message, userId);
+        } else {
+          // ✅ UTILISATEUR DÉCONNECTÉ - STOCKAGE EN ATTENTE
+          console.log(
+            `⏳ Participant ${userId} déconnecté, événement conversation mise à jour en attente`,
+          );
+          await this.addToPendingQueue(userId, message, "conversationUpdated");
+        }
+      }
+
+      console.log(
+        `📝 Événement conversation mise à jour distribué: ${conversationId}`,
+      );
+    } catch (error) {
+      console.error(
+        "❌ Erreur livraison événement conversation mise à jour:",
+        error,
+      );
+    }
+  }
+
+  /**
+   * ✅ LIVRER UN ÉVÉNEMENT PARTICIPANT AJOUTÉ
+   */
+  async deliverParticipantAddedEvent(message) {
+    try {
+      const conversationId = String(message.conversationId);
+
+      // ✅ RÉCUPÉRER TOUS LES PARTICIPANTS DE LA CONVERSATION
+      const allParticipants =
+        await this.getAllConversationParticipants(conversationId);
+
+      console.log(
+        `➕ Livraison événement participant ajouté à ${allParticipants.length} participant(s)`,
+      );
+
+      for (const participantId of allParticipants) {
+        const userId = String(participantId);
+
+        if (
+          this.userSockets.has(userId) &&
+          this.isStreamActiveForUser(userId, "participantAdded")
+        ) {
+          // ✅ UTILISATEUR CONNECTÉ - LIVRAISON IMMÉDIATE
+          await this.deliverParticipantAdded(message, userId);
+        } else {
+          // ✅ UTILISATEUR DÉCONNECTÉ - STOCKAGE EN ATTENTE
+          console.log(
+            `⏳ Participant ${userId} déconnecté, événement participant ajouté en attente`,
+          );
+          await this.addToPendingQueue(userId, message, "participantAdded");
+        }
+      }
+
+      console.log(
+        `➕ Événement participant ajouté distribué: ${conversationId}`,
+      );
+    } catch (error) {
+      console.error("❌ Erreur livraison événement participant ajouté:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER UN ÉVÉNEMENT PARTICIPANT RETIRÉ
+   */
+  async deliverParticipantRemovedEvent(message) {
+    try {
+      const conversationId = String(message.conversationId);
+
+      // ✅ RÉCUPÉRER TOUS LES PARTICIPANTS DE LA CONVERSATION
+      const allParticipants =
+        await this.getAllConversationParticipants(conversationId);
+
+      console.log(
+        `➖ Livraison événement participant retiré à ${allParticipants.length} participant(s)`,
+      );
+
+      for (const participantId of allParticipants) {
+        const userId = String(participantId);
+
+        if (
+          this.userSockets.has(userId) &&
+          this.isStreamActiveForUser(userId, "participantRemoved")
+        ) {
+          // ✅ UTILISATEUR CONNECTÉ - LIVRAISON IMMÉDIATE
+          await this.deliverParticipantRemoved(message, userId);
+        } else {
+          // ✅ UTILISATEUR DÉCONNECTÉ - STOCKAGE EN ATTENTE
+          console.log(
+            `⏳ Participant ${userId} déconnecté, événement participant retiré en attente`,
+          );
+          await this.addToPendingQueue(userId, message, "participantRemoved");
+        }
+      }
+
+      console.log(
+        `➖ Événement participant retiré distribué: ${conversationId}`,
+      );
+    } catch (error) {
+      console.error("❌ Erreur livraison événement participant retiré:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER UN ÉVÉNEMENT CONVERSATION SUPPRIMÉE
+   */
+  async deliverConversationDeletedEvent(message) {
+    try {
+      const conversationId = String(message.conversationId);
+
+      // ✅ RÉCUPÉRER TOUS LES PARTICIPANTS DE LA CONVERSATION
+      const allParticipants =
+        await this.getAllConversationParticipants(conversationId);
+
+      console.log(
+        `🗑️ Livraison événement conversation supprimée à ${allParticipants.length} participant(s)`,
+      );
+
+      for (const participantId of allParticipants) {
+        const userId = String(participantId);
+
+        if (
+          this.userSockets.has(userId) &&
+          this.isStreamActiveForUser(userId, "conversationDeleted")
+        ) {
+          // ✅ UTILISATEUR CONNECTÉ - LIVRAISON IMMÉDIATE
+          await this.deliverConversationDeleted(message, userId);
+        } else {
+          // ✅ UTILISATEUR DÉCONNECTÉ - STOCKAGE EN ATTENTE
+          console.log(
+            `⏳ Participant ${userId} déconnecté, événement conversation supprimée en attente`,
+          );
+          await this.addToPendingQueue(userId, message, "conversationDeleted");
+        }
+      }
+
+      console.log(
+        `🗑️ Événement conversation supprimée distribué: ${conversationId}`,
+      );
+    } catch (error) {
+      console.error(
+        "❌ Erreur livraison événement conversation supprimée:",
+        error,
+      );
+    }
+  }
+
+  /**
+   * ✅ LIVRER ÉVÉNEMENT CONVERSATION CRÉÉE À UN UTILISATEUR
+   */
+  async deliverConversationCreated(message, userId) {
+    try {
+      const socketIds = this.userSockets.get(userId);
+
+      if (!socketIds || socketIds.length === 0) {
+        return;
+      }
+
+      for (const socketId of socketIds) {
+        const socket = this.io.sockets.sockets.get(socketId);
+        if (socket) {
+          socket.emit("conversation:created", {
+            conversationId: message.conversationId,
+            name: message.name,
+            type: message.type,
+            createdBy: message.createdBy,
+            participants: message.participants,
+            timestamp: message.timestamp,
+          });
+        }
+      }
+
+      console.log(`🆕 Conversation créée livrée à ${userId}`);
+    } catch (error) {
+      console.error("❌ Erreur deliverConversationCreated:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER ÉVÉNEMENT CONVERSATION MISE À JOUR À UN UTILISATEUR
+   */
+  async deliverConversationUpdated(message, userId) {
+    try {
+      const socketIds = this.userSockets.get(userId);
+
+      if (!socketIds || socketIds.length === 0) {
+        return;
+      }
+
+      for (const socketId of socketIds) {
+        const socket = this.io.sockets.sockets.get(socketId);
+        if (socket) {
+          socket.emit("conversation:updated", {
+            conversationId: message.conversationId,
+            name: message.name,
+            updatedBy: message.updatedBy,
+            changes: message.changes,
+            timestamp: message.timestamp,
+          });
+        }
+      }
+
+      console.log(`📝 Conversation mise à jour livrée à ${userId}`);
+    } catch (error) {
+      console.error("❌ Erreur deliverConversationUpdated:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER ÉVÉNEMENT PARTICIPANT AJOUTÉ À UN UTILISATEUR
+   */
+  async deliverParticipantAdded(message, userId) {
+    try {
+      const socketIds = this.userSockets.get(userId);
+
+      if (!socketIds || socketIds.length === 0) {
+        return;
+      }
+
+      for (const socketId of socketIds) {
+        const socket = this.io.sockets.sockets.get(socketId);
+        if (socket) {
+          socket.emit("conversation:participant:added", {
+            conversationId: message.conversationId,
+            participantId: message.participantId,
+            participantName: message.participantName,
+            addedBy: message.addedBy,
+            timestamp: message.timestamp,
+          });
+        }
+      }
+
+      console.log(`➕ Participant ajouté livré à ${userId}`);
+    } catch (error) {
+      console.error("❌ Erreur deliverParticipantAdded:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER ÉVÉNEMENT PARTICIPANT RETIRÉ À UN UTILISATEUR
+   */
+  async deliverParticipantRemoved(message, userId) {
+    try {
+      const socketIds = this.userSockets.get(userId);
+
+      if (!socketIds || socketIds.length === 0) {
+        return;
+      }
+
+      for (const socketId of socketIds) {
+        const socket = this.io.sockets.sockets.get(socketId);
+        if (socket) {
+          socket.emit("conversation:participant:removed", {
+            conversationId: message.conversationId,
+            participantId: message.participantId,
+            participantName: message.participantName,
+            removedBy: message.removedBy,
+            timestamp: message.timestamp,
+          });
+        }
+      }
+
+      console.log(`➖ Participant retiré livré à ${userId}`);
+    } catch (error) {
+      console.error("❌ Erreur deliverParticipantRemoved:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER ÉVÉNEMENT CONVERSATION SUPPRIMÉE À UN UTILISATEUR
+   */
+  async deliverConversationDeleted(message, userId) {
+    try {
+      const socketIds = this.userSockets.get(userId);
+
+      if (!socketIds || socketIds.length === 0) {
+        return;
+      }
+
+      for (const socketId of socketIds) {
+        const socket = this.io.sockets.sockets.get(socketId);
+        if (socket) {
+          socket.emit("conversation:deleted", {
+            conversationId: message.conversationId,
+            deletedBy: message.deletedBy,
+            timestamp: message.timestamp,
+          });
+        }
+      }
+
+      console.log(`🗑️ Conversation supprimée livrée à ${userId}`);
+    } catch (error) {
+      console.error("❌ Erreur deliverConversationDeleted:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER UN ÉVÉNEMENT FICHIER
+   */
+  async deliverFileEvent(message) {
+    try {
+      const userId = String(message.userId);
+      const socketIds = this.userSockets.get(userId);
+
+      if (!socketIds || socketIds.length === 0) {
+        return;
+      }
+
+      for (const socketId of socketIds) {
+        const socket = this.io.sockets.sockets.get(socketId);
+        if (socket) {
+          socket.emit("file:event", {
+            fileId: message.fileId,
+            event: message.event,
+            fileName: message.fileName,
+            fileSize: message.fileSize,
+            timestamp: message.timestamp,
+          });
+        }
+      }
+
+      console.log(`📁 Événement fichier livré: ${message.event}`);
+    } catch (error) {
+      console.error("❌ Erreur livraison événement fichier:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER UN ÉVÉNEMENT RÉACTION
+   */
+  async deliverReactionEvent(message) {
+    try {
+      const messageId = String(message.messageId);
+
+      // ✅ LIVRER À TOUS LES UTILISATEURS CONNECTÉS (broadcast)
+      for (const [userId, socketIds] of this.userSockets.entries()) {
+        if (!socketIds || socketIds.length === 0) continue;
+
+        for (const socketId of socketIds) {
+          const socket = this.io.sockets.sockets.get(socketId);
+          if (socket) {
+            socket.emit("message:reaction", {
+              messageId: message.messageId,
+              userId: message.userId,
+              reaction: message.reaction,
+              action: message.action, // "add" ou "remove"
+              timestamp: message.timestamp,
+            });
+          }
+        }
+      }
+
+      console.log(`😀 Réaction livrée pour message: ${messageId}`);
+    } catch (error) {
+      console.error("❌ Erreur livraison réaction:", error);
+    }
+  }
+
+  /**
+   * ✅ LIVRER UN ÉVÉNEMENT RÉPONSE
+   */
+  async deliverReplyEvent(message) {
+    try {
+      const messageId = String(message.messageId);
+
+      // ✅ LIVRER À TOUS LES UTILISATEURS CONNECTÉS (broadcast)
+      for (const [userId, socketIds] of this.userSockets.entries()) {
+        if (!socketIds || socketIds.length === 0) continue;
+
+        for (const socketId of socketIds) {
+          const socket = this.io.sockets.sockets.get(socketId);
+          if (socket) {
+            socket.emit("message:reply", {
+              messageId: message.messageId,
+              replyId: message.replyId,
+              userId: message.userId,
+              content: message.content,
+              timestamp: message.timestamp,
+            });
+          }
+        }
+      }
+
+      console.log(`💬 Réponse livrée pour message: ${messageId}`);
+    } catch (error) {
+      console.error("❌ Erreur livraison réponse:", error);
+    }
+  }
+
+  /**
+   * ✅ ENREGISTRER UN SOCKET UTILISATEUR AVEC ABONNEMENT PROGRESSIF
    */
   registerUserSocket(userId, socket, conversationIds = []) {
     try {
@@ -686,16 +1671,117 @@ class MessageDeliveryService {
 
       this.userSockets.get(userIdStr).push(socket.id);
       this.userConversations.set(userIdStr, conversationIds);
+      this.activeUserStreams.set(userIdStr, new Set()); // Initialiser les streams actifs
 
       console.log(
         `✅ Socket enregistré: ${userIdStr} (${
           this.userSockets.get(userIdStr).length
-        } socket(s))`
+        } socket(s))`,
       );
+
+      // ✅ DÉMARRER L'ABONNEMENT PROGRESSIF
+      this.subscribeUserToStreams(userIdStr, socket.id);
 
       return true;
     } catch (error) {
       console.error("❌ Erreur registerUserSocket:", error);
+      return false;
+    }
+  }
+
+  /**
+   * ✅ ABONNEMENT PROGRESSIF AUX STREAMS (LAZY SUBSCRIPTION)
+   */
+  subscribeUserToStreams(userId, socketId) {
+    try {
+      const userIdStr = String(userId);
+      const phases = this.SUBSCRIPTION_PHASES;
+
+      console.log(`🔄 Démarrage abonnement progressif pour ${userIdStr}`);
+
+      // Phase 1 : Immédiat (streams critiques)
+      this.activateUserStreams(userIdStr, phases.PHASE_1);
+      console.log(
+        `📡 Phase 1 activée pour ${userIdStr}: ${phases.PHASE_1.join(", ")}`,
+      );
+
+      // Phase 2 : Délai de 1 seconde
+      setTimeout(() => {
+        if (this.userSockets.has(userIdStr)) {
+          // Vérifier que l'utilisateur est toujours connecté
+          this.activateUserStreams(userIdStr, phases.PHASE_2);
+          console.log(
+            `📡 Phase 2 activée pour ${userIdStr}: ${phases.PHASE_2.join(", ")}`,
+          );
+        }
+      }, 1000);
+
+      // Phase 3 : Délai de 3 secondes
+      setTimeout(() => {
+        if (this.userSockets.has(userIdStr)) {
+          this.activateUserStreams(userIdStr, phases.PHASE_3);
+          console.log(
+            `📡 Phase 3 activée pour ${userIdStr}: ${phases.PHASE_3.join(", ")}`,
+          );
+        }
+      }, 3000);
+
+      // Phase 4 : Délai de 10 secondes
+      setTimeout(() => {
+        if (this.userSockets.has(userIdStr)) {
+          this.activateUserStreams(userIdStr, phases.PHASE_4);
+          console.log(
+            `📡 Phase 4 activée pour ${userIdStr}: ${phases.PHASE_4.join(", ")}`,
+          );
+        }
+      }, 10000);
+
+      // Phase 5 : Background (30 secondes)
+      setTimeout(() => {
+        if (this.userSockets.has(userIdStr)) {
+          this.activateUserStreams(userIdStr, phases.PHASE_5);
+          console.log(
+            `📡 Phase 5 activée pour ${userIdStr}: ${phases.PHASE_5.join(", ")}`,
+          );
+        }
+      }, 30000);
+    } catch (error) {
+      console.error(`❌ Erreur abonnement progressif pour ${userId}:`, error);
+    }
+  }
+
+  /**
+   * ✅ ACTIVER LES STREAMS POUR UN UTILISATEUR
+   */
+  activateUserStreams(userId, streamTypes) {
+    try {
+      const userIdStr = String(userId);
+      const activeStreams = this.activeUserStreams.get(userIdStr) || new Set();
+
+      for (const streamType of streamTypes) {
+        activeStreams.add(streamType);
+      }
+
+      this.activeUserStreams.set(userIdStr, activeStreams);
+
+      console.log(
+        `✅ Streams activés pour ${userIdStr}: ${streamTypes.join(", ")}`,
+      );
+    } catch (error) {
+      console.error(`❌ Erreur activation streams pour ${userId}:`, error);
+    }
+  }
+
+  /**
+   * ✅ VÉRIFIER SI UN STREAM EST ACTIF POUR UN UTILISATEUR
+   */
+  isStreamActiveForUser(userId, streamType) {
+    try {
+      const userIdStr = String(userId);
+      const activeStreams = this.activeUserStreams.get(userIdStr);
+      return activeStreams ? activeStreams.has(streamType) : false;
+    } catch (error) {
+      console.error(`❌ Erreur vérification stream actif:`, error);
       return false;
     }
   }
@@ -721,6 +1807,7 @@ class MessageDeliveryService {
       if (sockets.length === 0) {
         this.userSockets.delete(userIdStr);
         this.userConversations.delete(userIdStr);
+        this.activeUserStreams.delete(userIdStr); // Nettoyer les streams actifs
       }
 
       return true;
@@ -731,100 +1818,274 @@ class MessageDeliveryService {
   }
 
   /**
-   * ✅ LIVRER LES MESSAGES EN ATTENTE À LA CONNEXION
+   * ✅ RÉCUPÉRER TOUS LES PARTICIPANTS D'UNE CONVERSATION
+   */
+  async getAllConversationParticipants(conversationId) {
+    try {
+      // ✅ ESSAYER DEPUIS LE CACHE MÉMOIRE D'ABORD
+      const connectedUsers = Array.from(this.userSockets.keys());
+      const conversationParticipants = [];
+
+      for (const userId of connectedUsers) {
+        const userConversations = this.userConversations.get(userId) || [];
+        if (userConversations.includes(conversationId)) {
+          conversationParticipants.push(userId);
+        }
+      }
+
+      // ✅ SI ON A DES PARTICIPANTS EN CACHE, LES RETOURNER
+      if (conversationParticipants.length > 0) {
+        return conversationParticipants;
+      }
+
+      // ✅ SINON, RETOURNER UNE LISTE VIDE (CAS D'ERREUR OU CONVERSATION INEXISTANTE)
+      console.warn(
+        `⚠️ Aucun participant trouvé pour la conversation ${conversationId}`,
+      );
+      return [];
+    } catch (error) {
+      console.error(
+        `❌ Erreur récupération participants conversation ${conversationId}:`,
+        error,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * ✅ LIVRER LES ÉVÉNEMENTS EN ATTENTE À LA CONNEXION
    */
   async deliverPendingMessagesOnConnect(userId, socket) {
     try {
       const userIdStr = String(userId);
 
-      console.log(`📥 Livraison messages en attente pour ${userIdStr}...`);
+      console.log(`📥 Livraison événements en attente pour ${userIdStr}...`);
 
       let deliveredCount = 0;
 
-      // ✅ RÉCUPÉRER LES MESSAGES EN ATTENTE
-      const pendingKey = `${this.pendingMessagesPrefix}${userIdStr}`;
+      // ✅ TYPES D'ÉVÉNEMENTS À TRAITER
+      const eventTypes = [
+        "message",
+        "conversationCreated",
+        "conversationUpdated",
+        "participantAdded",
+        "participantRemoved",
+        "conversationDeleted",
+      ];
 
-      try {
-        const pendingMessages = await this.redis.lRange(pendingKey, 0, -1);
+      for (const eventType of eventTypes) {
+        const pendingKey = `pending:${eventType}:${userIdStr}`;
 
-        console.log(
-          `📨 ${pendingMessages.length} message(s) en attente trouvé(s) pour ${userIdStr}`
-        );
+        try {
+          const pendingEvents = await this.redis.lRange(pendingKey, 0, -1);
 
-        for (const messageJson of pendingMessages) {
-          try {
-            const message = JSON.parse(messageJson);
+          console.log(
+            `📨 ${pendingEvents.length} événement(s) ${eventType} en attente trouvé(s) pour ${userIdStr}`,
+          );
 
-            // ✅ DISTRIBUER LE MESSAGE
-            await this.deliverPrivateMessage(message, userIdStr);
+          for (const eventJson of pendingEvents) {
+            try {
+              const event = JSON.parse(eventJson);
 
-            // ✅ SUPPRIMER DE LA LISTE D'ATTENTE
-            await this.redis.lRem(pendingKey, 1, messageJson);
+              // ✅ TRAITER SELON LE TYPE D'ÉVÉNEMENT
+              await this.deliverPendingEvent(event, userIdStr, socket);
 
-            deliveredCount++;
-            console.log(
-              `✅ Message en attente livré et supprimé: ${message.messageId}`
-            );
-          } catch (error) {
-            console.error(
-              `❌ Erreur traitement message en attente:`,
-              error.message
-            );
+              // ✅ SUPPRIMER DE LA LISTE D'ATTENTE
+              await this.redis.lRem(pendingKey, 1, eventJson);
+
+              deliveredCount++;
+              console.log(
+                `✅ Événement ${eventType} en attente livré et supprimé`,
+              );
+            } catch (error) {
+              console.error(
+                `❌ Erreur traitement événement ${eventType} en attente:`,
+                error.message,
+              );
+            }
           }
+        } catch (pendingError) {
+          console.warn(
+            `⚠️ Erreur récupération événements ${eventType} en attente:`,
+            pendingError.message,
+          );
         }
-      } catch (pendingError) {
-        console.warn(
-          `⚠️ Erreur récupération messages en attente:`,
-          pendingError.message
-        );
       }
 
       console.log(
-        `✅ ${deliveredCount} message(s) livré(s) à ${userIdStr} à la connexion`
+        `✅ ${deliveredCount} événement(s) livré(s) à ${userIdStr} à la connexion`,
       );
 
       return deliveredCount;
     } catch (error) {
-      console.error("❌ Erreur livraison messages en attente:", error);
+      console.error("❌ Erreur livraison événements en attente:", error);
       return 0;
     }
   }
 
   /**
-   * ✅ VÉRIFIER SI L'UTILISATEUR EST DANS LA CONVERSATION
+   * ✅ LIVRER UN ÉVÉNEMENT EN ATTENTE À LA CONNEXION
    */
-  async isUserInConversation(userId, conversationId) {
+  async deliverPendingEvent(event, userId, socket) {
     try {
-      const conversationIds = this.userConversations.get(String(userId)) || [];
-      return conversationIds.includes(String(conversationId));
+      switch (event.eventType) {
+        case "message":
+          // ✅ LIVRER MESSAGE PRIVÉ EN ATTENTE
+          await this.deliverPrivateMessage(event, userId);
+          break;
+
+        case "conversationCreated":
+          // ✅ LIVRER ÉVÉNEMENT CONVERSATION CRÉÉE EN ATTENTE
+          await this.deliverConversationCreated(event, userId);
+          break;
+
+        case "conversationUpdated":
+          // ✅ LIVRER ÉVÉNEMENT CONVERSATION MISE À JOUR EN ATTENTE
+          await this.deliverConversationUpdated(event, userId);
+          break;
+
+        case "participantAdded":
+          // ✅ LIVRER ÉVÉNEMENT PARTICIPANT AJOUTÉ EN ATTENTE
+          await this.deliverParticipantAdded(event, userId);
+          break;
+
+        case "participantRemoved":
+          // ✅ LIVRER ÉVÉNEMENT PARTICIPANT RETIRÉ EN ATTENTE
+          await this.deliverParticipantRemoved(event, userId);
+          break;
+
+        case "conversationDeleted":
+          // ✅ LIVRER ÉVÉNEMENT CONVERSATION SUPPRIMÉE EN ATTENTE
+          await this.deliverConversationDeleted(event, userId);
+          break;
+
+        case "files":
+          // ✅ LIVRER ÉVÉNEMENT FICHIER EN ATTENTE
+          await this.deliverFileEvent(event);
+          break;
+
+        default:
+          console.warn(
+            `⚠️ Type d'événement en attente inconnu: ${event.eventType}`,
+          );
+      }
     } catch (error) {
-      console.warn("⚠️ Erreur isUserInConversation:", error);
-      return false;
+      console.error(
+        `❌ Erreur livraison événement ${event.eventType} en attente:`,
+        error,
+      );
     }
   }
 
   /**
-   * ✅ AJOUTER UN MESSAGE EN ATTENTE
+   * ✅ AJOUTER UN ÉVÉNEMENT EN ATTENTE (MESSAGES OU ÉVÉNEMENTS CONVERSATION)
    */
-  async addToPendingQueue(userId, message) {
+  async addToPendingQueue(userId, eventData, eventType = "message") {
     try {
-      const pendingKey = `${this.pendingMessagesPrefix}${userId}`;
-      const messageJson = JSON.stringify({
-        messageId: message.messageId,
-        conversationId: message.conversationId,
-        senderId: message.senderId,
-        receiverId: message.receiverId,
-        content: message.content,
-        type: message.type,
-        status: message.status || "SENT",
-        timestamp: message.timestamp,
-        metadata: message.metadata,
-      });
+      const userIdStr = String(userId);
+      const pendingKey = `pending:${eventType}:${userIdStr}`;
 
-      await this.redis.lPush(pendingKey, messageJson);
+      // ✅ ADAPTER LA STRUCTURE SELON LE TYPE D'ÉVÉNEMENT
+      let eventJson;
+      switch (eventType) {
+        case "message":
+          // ✅ STRUCTURE POUR LES MESSAGES PRIVÉS
+          eventJson = JSON.stringify({
+            eventType: "message",
+            messageId: eventData.messageId,
+            conversationId: eventData.conversationId,
+            senderId: eventData.senderId,
+            receiverId: eventData.receiverId,
+            content: eventData.content,
+            type: eventData.type,
+            status: eventData.status || "SENT",
+            timestamp: eventData.timestamp,
+            metadata: eventData.metadata,
+          });
+          break;
+
+        case "conversationCreated":
+          // ✅ STRUCTURE POUR ÉVÉNEMENT CONVERSATION CRÉÉE
+          eventJson = JSON.stringify({
+            eventType: "conversationCreated",
+            conversationId: eventData.conversationId,
+            name: eventData.name,
+            type: eventData.type,
+            createdBy: eventData.createdBy,
+            participants: eventData.participants,
+            timestamp: eventData.timestamp,
+          });
+          break;
+
+        case "conversationUpdated":
+          // ✅ STRUCTURE POUR ÉVÉNEMENT CONVERSATION MISE À JOUR
+          eventJson = JSON.stringify({
+            eventType: "conversationUpdated",
+            conversationId: eventData.conversationId,
+            name: eventData.name,
+            updatedBy: eventData.updatedBy,
+            changes: eventData.changes,
+            timestamp: eventData.timestamp,
+          });
+          break;
+
+        case "participantAdded":
+          // ✅ STRUCTURE POUR ÉVÉNEMENT PARTICIPANT AJOUTÉ
+          eventJson = JSON.stringify({
+            eventType: "participantAdded",
+            conversationId: eventData.conversationId,
+            participantId: eventData.participantId,
+            participantName: eventData.participantName,
+            addedBy: eventData.addedBy,
+            timestamp: eventData.timestamp,
+          });
+          break;
+
+        case "participantRemoved":
+          // ✅ STRUCTURE POUR ÉVÉNEMENT PARTICIPANT RETIRÉ
+          eventJson = JSON.stringify({
+            eventType: "participantRemoved",
+            conversationId: eventData.conversationId,
+            participantId: eventData.participantId,
+            participantName: eventData.participantName,
+            removedBy: eventData.removedBy,
+            timestamp: eventData.timestamp,
+          });
+          break;
+
+        case "conversationDeleted":
+          // ✅ STRUCTURE POUR ÉVÉNEMENT CONVERSATION SUPPRIMÉE
+          eventJson = JSON.stringify({
+            eventType: "conversationDeleted",
+            conversationId: eventData.conversationId,
+            deletedBy: eventData.deletedBy,
+            timestamp: eventData.timestamp,
+          });
+          break;
+
+        case "files":
+          // ✅ STRUCTURE POUR ÉVÉNEMENT FICHIER
+          eventJson = JSON.stringify({
+            eventType: "files",
+            fileId: eventData.fileId,
+            event: eventData.event,
+            fileName: eventData.fileName,
+            fileSize: eventData.fileSize,
+            userId: eventData.userId,
+            timestamp: eventData.timestamp,
+          });
+          break;
+
+        default:
+          throw new Error(`Type d'événement non supporté: ${eventType}`);
+      }
+
+      await this.redis.lPush(pendingKey, eventJson);
       await this.redis.expire(pendingKey, 86400); // 24h TTL
 
-      console.log(`📝 Message ajouté en attente pour ${userId}`);
+      console.log(
+        `📝 Événement ${eventType} ajouté en attente pour ${userIdStr}`,
+      );
     } catch (error) {
       console.error("❌ Erreur addToPendingQueue:", error);
     }
@@ -847,7 +2108,7 @@ class MessageDeliveryService {
         } catch (err) {
           console.warn(
             `⚠️ Erreur fermeture consumer ${streamKey}:`,
-            err.message
+            err.message,
           );
         }
       }
@@ -873,14 +2134,14 @@ class MessageDeliveryService {
       connectedUsers: this.userSockets.size,
       totalSockets: Array.from(this.userSockets.values()).reduce(
         (sum, sockets) => sum + sockets.length,
-        0
+        0,
       ),
       users: Array.from(this.userSockets.entries()).map(
         ([userId, sockets]) => ({
           userId,
           socketsCount: sockets.length,
           conversationsCount: (this.userConversations.get(userId) || []).length,
-        })
+        }),
       ),
     };
   }
@@ -906,7 +2167,7 @@ class MessageDeliveryService {
     const userIdStr = String(userId);
 
     console.log(
-      `🔍 ========== DIAGNOSTIC LIVRAISON POUR ${userIdStr} ==========`
+      `🔍 ========== DIAGNOSTIC LIVRAISON POUR ${userIdStr} ==========`,
     );
 
     try {
@@ -949,7 +2210,7 @@ class MessageDeliveryService {
             "-",
             {
               COUNT: 5,
-            }
+            },
           );
 
           const relevantMessages = recentMessages.filter((msg) => {
@@ -958,7 +2219,7 @@ class MessageDeliveryService {
             return (
               data.receiverId === userIdStr ||
               (this.userConversations.get(userIdStr) || []).includes(
-                data.conversationId
+                data.conversationId,
               )
             );
           });
@@ -972,7 +2233,7 @@ class MessageDeliveryService {
           };
 
           console.log(
-            `   ${streamChecks[streamType].status} ${streamType}: ${length} total, ${relevantMessages.length} pour ${userIdStr}`
+            `   ${streamChecks[streamType].status} ${streamType}: ${length} total, ${relevantMessages.length} pour ${userIdStr}`,
           );
 
           if (relevantMessages.length > 0) {
@@ -981,7 +2242,7 @@ class MessageDeliveryService {
               console.log(
                 `      ${i + 1}. ID: ${msg.id} | receiver: ${
                   data.receiverId || "N/A"
-                } | conv: ${data.conversationId}`
+                } | conv: ${data.conversationId}`,
               );
             });
           }
@@ -1006,7 +2267,7 @@ class MessageDeliveryService {
         };
 
         console.log(
-          `   ${diagnostics.checks.pendingQueue.status}: ${pendingMessages.length} message(s)`
+          `   ${diagnostics.checks.pendingQueue.status}: ${pendingMessages.length} message(s)`,
         );
 
         if (pendingMessages.length > 0) {
@@ -1016,7 +2277,7 @@ class MessageDeliveryService {
               console.log(
                 `      ${i + 1}. De: ${msg.senderId} | Conv: ${
                   msg.conversationId
-                }`
+                }`,
               );
             } catch (e) {
               console.log(`      ${i + 1}. [JSON invalide]`);
@@ -1039,7 +2300,7 @@ class MessageDeliveryService {
       };
 
       console.log(
-        `   ${diagnostics.checks.conversations.status}: ${conversations.length} conversation(s)`
+        `   ${diagnostics.checks.conversations.status}: ${conversations.length} conversation(s)`,
       );
 
       // ✅ CHECK 5 : Consumer groups
@@ -1051,7 +2312,7 @@ class MessageDeliveryService {
         try {
           const consumerGroupInfo = await this.redis.xInfoConsumers(
             consumer.config.streamKey,
-            consumer.config.groupId
+            consumer.config.groupId,
           );
 
           consumerChecks[streamType] = {
@@ -1064,7 +2325,7 @@ class MessageDeliveryService {
           console.log(
             `   ${streamType}: ${consumerGroupInfo.length} consumer(s) [${
               consumer.isRunning ? "▶️ ACTIF" : "⏸️ INACTIF"
-            }]`
+            }]`,
           );
         } catch (groupErr) {
           console.log(`   ❌ ${streamType}: ${groupErr.message}`);
@@ -1080,14 +2341,14 @@ class MessageDeliveryService {
       console.log(
         `   Connecté: ${isRegistered ? "✅ OUI" : "❌ NON"} (${
           socketIds.length
-        } socket(s))`
+        } socket(s))`,
       );
       console.log(
-        `   Messages en attente: ${diagnostics.checks.pendingQueue.count}`
+        `   Messages en attente: ${diagnostics.checks.pendingQueue.count}`,
       );
       const totalRelevant = Object.values(streamChecks).reduce(
         (sum, s) => sum + (s.relevantMessages || 0),
-        0
+        0,
       );
       console.log(`   Messages dans les streams: ${totalRelevant}`);
       console.log(`🔍 ========== FIN DIAGNOSTIC ==========\n`);
@@ -1096,6 +2357,103 @@ class MessageDeliveryService {
     } catch (error) {
       console.error("❌ Erreur diagnostic:", error);
       return { error: error.message };
+    }
+  }
+
+  /**
+   * ✅ ARRÊTER TOUS LES WORKERS (SHUTDOWN)
+   */
+  async shutdown() {
+    try {
+      console.log("🛑 Arrêt MessageDeliveryService...");
+
+      this.isRunning = false;
+
+      // Arrêter tous les workers
+      for (const [partitionKey, partition] of this.workers.entries()) {
+        await this.stopWorkerPartition(partitionKey, partition);
+      }
+
+      // Fermer toutes les connexions Redis
+      for (const [partitionKey, partition] of this.workers.entries()) {
+        for (const worker of partition.workers) {
+          if (worker.redis) {
+            await worker.redis.disconnect();
+          }
+        }
+      }
+
+      this.workers.clear();
+      console.log("✅ MessageDeliveryService arrêté proprement");
+    } catch (error) {
+      console.error("❌ Erreur arrêt MessageDeliveryService:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ ARRÊTER UNE PARTITION DE WORKERS
+   */
+  async stopWorkerPartition(partitionKey, partition) {
+    if (!partition.isRunning) return;
+
+    partition.isRunning = false;
+
+    // Arrêter chaque worker de la partition
+    for (const worker of partition.workers) {
+      await this.stopWorkerInstance(worker);
+    }
+
+    console.log(`🛑 Partition ${partitionKey} arrêtée`);
+  }
+
+  /**
+   * ✅ ARRÊTER UNE INSTANCE DE WORKER
+   */
+  async stopWorkerInstance(worker) {
+    if (!worker.isRunning) return;
+
+    worker.isRunning = false;
+
+    // Arrêter tous les consumers de ce worker
+    for (const [streamKey, consumer] of worker.streamConsumers.entries()) {
+      if (consumer.isRunning && consumer.interval) {
+        clearInterval(consumer.interval);
+        consumer.isRunning = false;
+      }
+    }
+
+    console.log(`🛑 Worker ${worker.id} arrêté`);
+  }
+
+  /**
+   * ✅ LIVRER UN ÉVÉNEMENT FICHIER
+   */
+  async deliverFileEvent(message) {
+    try {
+      const userId = String(message.userId);
+      const socketIds = this.userSockets.get(userId);
+
+      if (!socketIds || socketIds.length === 0) {
+        return;
+      }
+
+      for (const socketId of socketIds) {
+        const socket = this.io.sockets.sockets.get(socketId);
+        if (socket) {
+          socket.emit("file:event", {
+            fileId: message.fileId,
+            event: message.event,
+            fileName: message.fileName,
+            fileSize: message.fileSize,
+            timestamp: message.timestamp,
+          });
+        }
+      }
+
+      console.log(`📁 Événement fichier livré: ${message.event}`);
+    } catch (error) {
+      console.error("❌ Erreur livraison événement fichier:", error);
     }
   }
 
@@ -1121,21 +2479,21 @@ class MessageDeliveryService {
     const totalInStreams =
       Object.values(diagnostics.checks.streams || {}).reduce(
         (sum, s) => sum + (s.relevantMessages || 0),
-        0
+        0,
       ) || 0;
 
     if (totalInStreams > 0 && !diagnostics.checks.userRegistration.registered) {
       console.log(
-        "   ⚠️ Messages bloqués dans le stream (utilisateur déconnecté)"
+        "   ⚠️ Messages bloqués dans le stream (utilisateur déconnecté)",
       );
       console.log(
-        "   → Les consumers continuent à tourner, messages seront livrés"
+        "   → Les consumers continuent à tourner, messages seront livrés",
       );
     }
 
     // ✅ PROBLÈME 3 : Aucun consumer actif
     const inactiveConsumers = Object.entries(
-      diagnostics.checks.consumerGroups || {}
+      diagnostics.checks.consumerGroups || {},
     ).filter((entry) => !entry[1].active);
 
     if (inactiveConsumers.length > 0) {

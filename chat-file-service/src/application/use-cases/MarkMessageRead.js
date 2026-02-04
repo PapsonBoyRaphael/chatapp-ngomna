@@ -3,7 +3,7 @@ class MarkMessageRead {
     messageRepository,
     conversationRepository = null,
     kafkaProducer = null,
-    resilientMessageService = null
+    resilientMessageService = null,
   ) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
@@ -25,16 +25,17 @@ class MarkMessageRead {
     userId,
   }) {
     const start = Date.now();
+    messageId = null; // forcer l'utilisation de conversationId + messageIds pour la mise à jour en masse
     try {
       if (!userId) throw new Error("userId requis");
 
       let result;
-      if (messageId) {
+      if (messageId || messageId === "") {
         // un message spécifique
         result = await this.messageRepository.markMessagesAsRead(
           messageId,
           userId,
-          "READ"
+          "READ",
         );
       } else {
         // mise à jour en masse
@@ -42,70 +43,39 @@ class MarkMessageRead {
           conversationId,
           userId,
           "READ",
-          messageIds || []
+          messageIds || [],
         );
       }
 
-      // ✅ PUBLIER DANS REDIS STREAMS events:messages
+      // ✅ PUBLIER DANS REDIS STREAMS - STATUT READ
       if (this.resilientMessageService && result && result.modifiedCount > 0) {
         try {
-          await this.resilientMessageService.addToStream("events:messages", {
-            event: "message.read",
-            conversationId: conversationId || "unknown",
-            messageIds: JSON.stringify(
-              messageIds || (messageId ? [messageId] : "ALL")
-            ),
-            readerId: userId,
-            readAt: new Date().toISOString(),
-            modifiedCount: result.modifiedCount.toString(),
-            timestamp: Date.now().toString(),
-          });
-          console.log(`📤 [message.read] publié dans events:messages`);
+          // Pour chaque message marqué comme lu, publier un événement séparé
+          const messageIdsToPublish =
+            messageIds || (messageId ? [messageId] : []);
+
+          if (messageIdsToPublish.length > 0) {
+            for (const msgId of messageIdsToPublish) {
+              await this.resilientMessageService.publishMessageStatus(
+                msgId,
+                userId,
+                "READ",
+              );
+            }
+          } else {
+            // Si pas de messageIds spécifiques, on ne peut pas publier d'événement individuel
+            console.log(
+              "ℹ️ Pas de messageIds spécifiques pour publication READ",
+            );
+          }
+
+          console.log(
+            `📤 [READ] événements publiés pour ${messageIdsToPublish.length} messages`,
+          );
         } catch (streamErr) {
           console.error(
-            "❌ Erreur publication stream message.read:",
-            streamErr.message
-          );
-        }
-      }
-
-      // publication Kafka
-      if (this.kafkaProducer && result && result.modifiedCount > 0) {
-        try {
-          await (typeof this.kafkaProducer.publishMessage === "function"
-            ? this.kafkaProducer.publishMessage({
-                eventType: "MESSAGES_READ",
-                conversationId,
-                receiverId: userId,
-                messageId: messageId || null,
-                messageIds: messageIds || (messageId ? [messageId] : "ALL"),
-                modifiedCount: result.modifiedCount,
-                timestamp: new Date().toISOString(),
-                source: "MarkMessageRead-UseCase",
-              })
-            : this.kafkaProducer.send({
-                topic: "chat.message.status",
-                messages: [
-                  {
-                    key: conversationId || messageId || userId,
-                    value: JSON.stringify({
-                      eventType: "MESSAGES_READ",
-                      conversationId,
-                      receiverId: userId,
-                      messageId: messageId || null,
-                      messageIds:
-                        messageIds || (messageId ? [messageId] : "ALL"),
-                      modifiedCount: result.modifiedCount,
-                      timestamp: new Date().toISOString(),
-                      source: "MarkMessageRead-UseCase",
-                    }),
-                  },
-                ],
-              }));
-        } catch (kErr) {
-          console.warn(
-            "⚠️ Erreur publication Kafka MarkMessageRead:",
-            kErr.message
+            "❌ Erreur publication statuts READ:",
+            streamErr.message,
           );
         }
       }

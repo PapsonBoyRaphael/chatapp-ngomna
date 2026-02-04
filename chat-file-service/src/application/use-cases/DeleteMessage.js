@@ -7,7 +7,7 @@ class DeleteMessage {
     messageRepository,
     conversationRepository = null,
     kafkaProducer = null,
-    resilientMessageService = null
+    resilientMessageService = null,
   ) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
@@ -78,44 +78,20 @@ class DeleteMessage {
       result = await this.messageRepository.save(message);
     }
 
-    // ✅ PUBLIER DANS REDIS STREAMS events:messages
+    // ✅ PUBLIER DANS REDIS STREAMS - STATUT DELETED
     if (this.resilientMessageService) {
       try {
-        await this.resilientMessageService.addToStream("events:messages", {
-          event: "message.deleted",
-          messageId: messageId,
-          conversationId: conversationId || "unknown",
-          deleterId: userId,
-          deleteType: deleteType,
-          deletedAt: new Date().toISOString(),
-          timestamp: Date.now().toString(),
-        });
-        console.log(`📤 [message.deleted] publié dans events:messages`);
+        await this.resilientMessageService.publishMessageStatus(
+          messageId,
+          userId,
+          "DELETED",
+        );
+        console.log(`📤 [DELETED] événement publié pour message ${messageId}`);
       } catch (streamErr) {
         console.error(
-          "❌ Erreur publication stream message.deleted:",
-          streamErr.message
+          "❌ Erreur publication statut DELETED:",
+          streamErr.message,
         );
-      }
-    }
-
-    // Publier dans Kafka
-    if (
-      this.kafkaProducer &&
-      typeof this.kafkaProducer.publishMessage === "function"
-    ) {
-      try {
-        await this.kafkaProducer.publishMessage({
-          eventType: "MESSAGE_DELETED",
-          messageId,
-          conversationId,
-          deleterId: userId,
-          deleteType,
-          timestamp: new Date().toISOString(),
-          source: "DeleteMessage-UseCase",
-        });
-      } catch (kafkaErr) {
-        console.warn("⚠️ Erreur publication Kafka:", kafkaErr.message);
       }
     }
 
@@ -126,14 +102,13 @@ class DeleteMessage {
       deleteType === "FOR_EVERYONE"
     ) {
       try {
-        const conversation = await this.conversationRepository.findById(
-          conversationId
-        );
+        const conversation =
+          await this.conversationRepository.findById(conversationId);
         if (conversation?.lastMessage?.messageId === messageId) {
           // Récupérer le message précédent
           const messages = await this.messageRepository.findByConversationId(
             conversationId,
-            { limit: 1, sort: { createdAt: -1 } }
+            { limit: 1, sort: { createdAt: -1 } },
           );
 
           conversation.lastMessage = messages[0]

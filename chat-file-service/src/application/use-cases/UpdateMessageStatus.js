@@ -5,14 +5,15 @@ class UpdateMessageStatus {
     this.kafkaProducer = kafkaProducer;
   }
 
-  async execute({ conversationId, receiverId, status, messageIds = null }) {
+  async execute({ messageId, receiverId, status, conversationId }) {
     try {
+      messageId = null; // forcer l'utilisation de conversationId + messageIds
       console.log(`📝 Mise à jour statut messages:`, {
         conversationId,
         receiverId,
         status,
-        messageIdsCount: messageIds?.length || 0,
-        type: messageIds ? "specific" : "all",
+        messageIdCount: messageId?.length || 0,
+        type: messageId ? "specific" : "all",
       });
 
       // Validation
@@ -22,7 +23,7 @@ class UpdateMessageStatus {
       const validStatuses = ["SENT", "DELIVERED", "READ", "DELETED"];
       if (!validStatuses.includes(status)) {
         throw new Error(
-          `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`
+          `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`,
         );
       }
 
@@ -33,7 +34,7 @@ class UpdateMessageStatus {
         conversationId,
         receiverId,
         status,
-        messageIds || []
+        messageId || [],
       );
 
       result = await updatePromise;
@@ -43,7 +44,7 @@ class UpdateMessageStatus {
         try {
           await this.conversationRepository.resetUnreadCountInUserMetadata(
             conversationId,
-            receiverId
+            receiverId,
           );
           console.log(`✅ Compteur non-lus réinitialisé pour ${receiverId}`);
         } catch (error) {
@@ -74,35 +75,15 @@ class UpdateMessageStatus {
       const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED"];
       if (!validStatuses.includes(status)) {
         throw new Error(
-          `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`
+          `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`,
         );
       }
 
       const result = await this.messageRepository.updateSingleMessageStatus(
         messageId,
         receiverId,
-        status
+        status,
       );
-
-      // Publication Kafka si modification réussie (inchangé)
-      if (this.kafkaProducer && result.modifiedCount > 0) {
-        try {
-          await this.kafkaProducer.publishMessage({
-            eventType: "SINGLE_MESSAGE_STATUS_UPDATED",
-            messageId,
-            receiverId,
-            status,
-            timestamp: new Date().toISOString(),
-            source: "UpdateMessageStatus-UseCase",
-          });
-          console.log(`📤 Événement Kafka publié pour message ${messageId}`);
-        } catch (kafkaError) {
-          console.warn(
-            "⚠️ Erreur publication message unique:",
-            kafkaError.message
-          );
-        }
-      }
 
       return result;
     } catch (error) {

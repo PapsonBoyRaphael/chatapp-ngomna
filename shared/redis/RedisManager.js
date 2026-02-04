@@ -377,7 +377,8 @@ class RedisManager {
     if (this.streamManager) {
       return {
         STREAMS: this.streamManager.STREAMS,
-        MULTI_STREAMS: this.streamManager.MULTI_STREAMS,
+        MESSAGE_STREAMS: this.streamManager.MESSAGE_STREAMS,
+        EVENT_STREAMS: this.streamManager.EVENT_STREAMS,
         STREAM_MAXLEN: this.streamManager.STREAM_MAXLEN,
       };
     }
@@ -389,26 +390,60 @@ class RedisManager {
         RETRY: "retry:stream",
         DLQ: "dlq:stream",
         FALLBACK: "fallback:stream",
-        MESSAGES: "messages:stream",
+        METRICS: "metrics:stream",
       },
-      MULTI_STREAMS: {
+      MESSAGE_STREAMS: {
         PRIVATE: "stream:messages:private",
         GROUP: "stream:messages:group",
+        CHANNEL: "stream:messages:channel",
+        STATUS: {
+          DELIVERED: "stream:status:delivered",
+          READ: "stream:status:read",
+          EDITED: "stream:status:edited",
+          DELETED: "stream:status:deleted",
+        },
         TYPING: "stream:events:typing",
-        READ_RECEIPTS: "stream:events:read",
-        NOTIFICATIONS: "stream:messages:system",
+        REACTIONS: "stream:events:reactions",
+        REPLIES: "stream:events:replies",
+      },
+      EVENT_STREAMS: {
+        CONVERSATIONS: "events:conversations",
+        FILES: "events:files",
+        NOTIFICATIONS: "events:notifications",
+        ANALYTICS: "events:analytics",
       },
       STREAM_MAXLEN: {
-        "messages:stream": 5000,
-        "retry:stream": 5000,
+        // Streams techniques
         "wal:stream": 10000,
-        "fallback:stream": 5000,
+        "retry:stream": 5000,
         "dlq:stream": 1000,
+        "fallback:stream": 5000,
+        "metrics:stream": 10000,
+
+        // Streams fonctionnels - contenu messages
         "stream:messages:private": 10000,
         "stream:messages:group": 20000,
+        "stream:messages:channel": 20000,
+
+        // Streams fonctionnels - métadonnées messages
+        "stream:status:delivered": 5000,
+        "stream:status:read": 5000,
+        "stream:status:edited": 2000,
+        "stream:status:deleted": 2000,
+
+        // Streams fonctionnels - interactions
         "stream:events:typing": 2000,
-        "stream:events:read": 5000,
-        "stream:messages:system": 2000,
+        "stream:events:reactions": 5000,
+        "stream:events:replies": 5000,
+
+        // Streams événementiels
+        "events:conversations": 5000,
+        "events:users:presence": 10000,
+        "events:users:profile": 2000,
+        "events:users:settings": 1000,
+        "events:files": 5000,
+        "events:notifications": 2000,
+        "events:analytics": 10000,
       },
     };
   }

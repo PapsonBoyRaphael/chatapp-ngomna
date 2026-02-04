@@ -6,7 +6,7 @@ class AddParticipant {
   constructor(
     conversationRepository,
     resilientMessageService = null,
-    userCacheService = null
+    userCacheService = null,
   ) {
     this.conversationRepository = conversationRepository;
     this.resilientMessageService = resilientMessageService;
@@ -19,9 +19,8 @@ class AddParticipant {
     }
 
     // Récupérer la conversation
-    const conversation = await this.conversationRepository.findById(
-      conversationId
-    );
+    const conversation =
+      await this.conversationRepository.findById(conversationId);
     if (!conversation) {
       throw new Error("Conversation introuvable");
     }
@@ -29,7 +28,7 @@ class AddParticipant {
     // Vérifier que c'est un groupe
     if (conversation.type !== "GROUP") {
       throw new Error(
-        "Seuls les groupes peuvent avoir des participants ajoutés"
+        "Seuls les groupes peuvent avoir des participants ajoutés",
       );
     }
 
@@ -54,7 +53,7 @@ class AddParticipant {
       } catch (err) {
         console.warn(
           "⚠️ Impossible de récupérer les infos utilisateur:",
-          err.message
+          err.message,
         );
       }
     }
@@ -126,12 +125,12 @@ class AddParticipant {
           timestamp: Date.now().toString(),
         });
         console.log(
-          `📤 [conversation.participant.added] publié dans events:conversations`
+          `📤 [conversation.participant.added] publié dans events:conversations`,
         );
       } catch (streamErr) {
         console.error(
           "❌ Erreur publication stream participant.added:",
-          streamErr.message
+          streamErr.message,
         );
       }
     }
@@ -159,6 +158,30 @@ class AddParticipant {
         });
       } catch (err) {
         console.warn("⚠️ Erreur publication notification:", err.message);
+      }
+    }
+
+    // ✅ PUBLIER DANS LE STREAM REDIS POUR PARTICIPANT AJOUTÉ
+    if (this.resilientMessageService) {
+      try {
+        await this.resilientMessageService.publishConversationEvent(
+          "PARTICIPANT_ADDED",
+          {
+            conversationId: conversationId.toString(),
+            participantId,
+            participantName: participantInfo?.name,
+            addedBy,
+          },
+        );
+        console.log(
+          `✅ Événement PARTICIPANT_ADDED publié dans Redis stream pour: ${conversationId}`,
+        );
+      } catch (streamError) {
+        console.warn(
+          "⚠️ Erreur publication stream PARTICIPANT_ADDED:",
+          streamError.message,
+        );
+        // Ne pas bloquer l'ajout si la publication stream échoue
       }
     }
 

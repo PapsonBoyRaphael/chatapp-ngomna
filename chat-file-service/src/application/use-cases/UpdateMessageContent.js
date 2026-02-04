@@ -2,7 +2,7 @@ class UpdateMessageContent {
   constructor(
     messageRepository,
     kafkaProducer = null,
-    resilientMessageService = null
+    resilientMessageService = null,
   ) {
     this.messageRepository = messageRepository;
     this.kafkaProducer = kafkaProducer;
@@ -49,39 +49,21 @@ class UpdateMessageContent {
     // Sauvegarder la modification
     const updated = await this.messageRepository.save(message);
 
-    // ✅ PUBLIER DANS REDIS STREAMS events:messages
+    // ✅ PUBLIER DANS REDIS STREAMS - STATUT EDITED
     if (this.resilientMessageService) {
       try {
-        await this.resilientMessageService.addToStream("events:messages", {
-          event: "message.edited",
-          messageId: messageId,
-          conversationId: message.conversationId?.toString() || "unknown",
-          editorId: userId,
-          newContent: newContent.substring(0, 200), // Limiter la taille
-          editedAt: new Date().toISOString(),
-          timestamp: Date.now().toString(),
-        });
-        console.log(`📤 [message.edited] publié dans events:messages`);
+        await this.resilientMessageService.publishMessageStatus(
+          messageId,
+          userId,
+          "EDITED",
+        );
+        console.log(`📤 [EDITED] événement publié pour message ${messageId}`);
       } catch (streamErr) {
         console.error(
-          "❌ Erreur publication stream message.edited:",
-          streamErr.message
+          "❌ Erreur publication statut EDITED:",
+          streamErr.message,
         );
       }
-    }
-
-    // Publier l'événement Kafka si besoin
-    if (
-      this.kafkaProducer &&
-      typeof this.kafkaProducer.publishMessage === "function"
-    ) {
-      await this.kafkaProducer.publishMessage({
-        eventType: "MESSAGE_EDITED",
-        messageId,
-        userId,
-        newContent,
-        timestamp: new Date().toISOString(),
-      });
     }
 
     return updated;

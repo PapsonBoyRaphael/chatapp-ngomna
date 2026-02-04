@@ -10,36 +10,103 @@ class StreamManager {
   constructor(redisClient, options = {}) {
     this.redis = redisClient;
 
-    // ✅ CONFIGURATION DES STREAMS - RÉSILIENCE
+    // ✅ STREAMS TECHNIQUES (infrastructure)
     this.STREAMS = {
       WAL: options.walStream || "wal:stream",
       RETRY: options.retryStream || "retry:stream",
       DLQ: options.dlqStream || "dlq:stream",
       FALLBACK: options.fallbackStream || "fallback:stream",
-      MESSAGES: options.messagesStream || "messages:stream",
+      METRICS: options.metricsStream || "metrics:stream", // Nouveau
     };
 
-    // ✅ MULTI-STREAMS PAR TYPE
-    this.MULTI_STREAMS = {
+    // ✅ STREAMS FONCTIONNELS (domaine message)
+    this.MESSAGE_STREAMS = {
+      // Contenu des messages
       PRIVATE: options.privateStream || "stream:messages:private",
       GROUP: options.groupStream || "stream:messages:group",
-      TYPING: options.typingStream || "stream:events:typing",
-      READ_RECEIPTS: options.readReceiptsStream || "stream:events:read",
-      NOTIFICATIONS: options.notificationsStream || "stream:messages:system",
+      CHANNEL: options.channelStream || "stream:messages:channel", // Si besoin
+
+      // Métadonnées des messages
+      STATUS: {
+        DELIVERED: "stream:status:delivered",
+        READ: "stream:status:read",
+        EDITED: "stream:status:edited",
+        DELETED: "stream:status:deleted",
+      },
+
+      // Interactions
+      TYPING: "stream:events:typing",
+      REACTIONS: "stream:events:reactions",
+      REPLIES: "stream:events:replies",
+    };
+
+    // ✅ STREAMS ÉVÉNEMENTIELS (domaine métier)
+    this.EVENT_STREAMS = {
+      // Événements de création/suppression
+      CONVERSATIONS: "events:conversations",
+
+      // Événements spécifiques aux conversations
+      CONVERSATION_EVENTS: {
+        CREATED: "stream:conversation:created",
+        UPDATED: "stream:conversation:updated",
+        PARTICIPANT_ADDED: "stream:conversation:participants:added",
+        PARTICIPANT_REMOVED: "stream:conversation:participants:removed",
+        DELETED: "stream:conversation:deleted",
+      },
+
+      // Événements fichiers
+      FILES: "events:files",
+
+      // Événements système/notifications
+      NOTIFICATIONS: "events:notifications",
+
+      // Événements analytiques
+      ANALYTICS: "events:analytics",
     };
 
     // ✅ CONFIGURATION DES TAILLES MAXIMALES
     this.STREAM_MAXLEN = {
-      [this.STREAMS.MESSAGES]: options.messagesMaxLen || 5000,
-      [this.STREAMS.RETRY]: options.retryMaxLen || 5000,
+      // Streams techniques
       [this.STREAMS.WAL]: options.walMaxLen || 10000,
-      [this.STREAMS.FALLBACK]: options.fallbackMaxLen || 5000,
+      [this.STREAMS.RETRY]: options.retryMaxLen || 5000,
       [this.STREAMS.DLQ]: options.dlqMaxLen || 1000,
-      [this.MULTI_STREAMS.PRIVATE]: options.privateMaxLen || 10000,
-      [this.MULTI_STREAMS.GROUP]: options.groupMaxLen || 20000,
-      [this.MULTI_STREAMS.TYPING]: options.typingMaxLen || 2000,
-      [this.MULTI_STREAMS.READ_RECEIPTS]: options.readReceiptsMaxLen || 5000,
-      [this.MULTI_STREAMS.NOTIFICATIONS]: options.notificationsMaxLen || 2000,
+      [this.STREAMS.FALLBACK]: options.fallbackMaxLen || 5000,
+      [this.STREAMS.METRICS]: options.metricsMaxLen || 10000,
+
+      // Streams fonctionnels - contenu messages
+      [this.MESSAGE_STREAMS.PRIVATE]: options.privateMaxLen || 10000,
+      [this.MESSAGE_STREAMS.GROUP]: options.groupMaxLen || 20000,
+      [this.MESSAGE_STREAMS.CHANNEL]: options.channelMaxLen || 20000,
+
+      // Streams fonctionnels - métadonnées messages
+      [this.MESSAGE_STREAMS.STATUS.DELIVERED]: options.deliveredMaxLen || 5000,
+      [this.MESSAGE_STREAMS.STATUS.READ]: options.readMaxLen || 5000,
+      [this.MESSAGE_STREAMS.STATUS.EDITED]: options.editedMaxLen || 2000,
+      [this.MESSAGE_STREAMS.STATUS.DELETED]: options.deletedMaxLen || 2000,
+
+      // Streams fonctionnels - interactions
+      [this.MESSAGE_STREAMS.TYPING]: options.typingMaxLen || 2000,
+      [this.MESSAGE_STREAMS.REACTIONS]: options.reactionsMaxLen || 5000,
+      [this.MESSAGE_STREAMS.REPLIES]: options.repliesMaxLen || 5000,
+
+      // Streams événementiels
+      [this.EVENT_STREAMS.CONVERSATIONS]: options.conversationsMaxLen || 5000,
+
+      // Streams événements conversation spécifiques
+      [this.EVENT_STREAMS.CONVERSATION_EVENTS.CREATED]:
+        options.conversationCreatedMaxLen || 2000,
+      [this.EVENT_STREAMS.CONVERSATION_EVENTS.UPDATED]:
+        options.conversationUpdatedMaxLen || 2000,
+      [this.EVENT_STREAMS.CONVERSATION_EVENTS.PARTICIPANT_ADDED]:
+        options.participantAddedMaxLen || 2000,
+      [this.EVENT_STREAMS.CONVERSATION_EVENTS.PARTICIPANT_REMOVED]:
+        options.participantRemovedMaxLen || 2000,
+      [this.EVENT_STREAMS.CONVERSATION_EVENTS.DELETED]:
+        options.conversationDeletedMaxLen || 1000,
+
+      [this.EVENT_STREAMS.FILES]: options.filesMaxLen || 5000,
+      [this.EVENT_STREAMS.NOTIFICATIONS]: options.notificationsMaxLen || 2000,
+      [this.EVENT_STREAMS.ANALYTICS]: options.analyticsMaxLen || 10000,
     };
 
     this.consumerGroupsInitialized = false;
@@ -81,7 +148,7 @@ class StreamManager {
       ) {
         console.warn(
           `⚠️ ATTENTION: Champ 'data' vide ou undefined dans ${streamName}`,
-          { fields: Object.keys(fields) }
+          { fields: Object.keys(fields) },
         );
       }
 
@@ -107,14 +174,14 @@ class StreamManager {
         const normalizedFields = {};
         for (const [key, value] of Object.entries(fields || {})) {
           normalizedFields[key] = String(
-            value === null || value === undefined ? "" : value
+            value === null || value === undefined ? "" : value,
           );
         }
         return await this.redis.xAdd(streamName, "*", normalizedFields);
       } catch (retryErr) {
         console.error(
           `❌ Échec complet addToStream ${streamName}:`,
-          retryErr.message
+          retryErr.message,
         );
         return null;
       }
@@ -157,14 +224,36 @@ class StreamManager {
 
     try {
       const groupConfigs = {
+        // Streams techniques
         [this.STREAMS.RETRY]: "retry-workers",
         [this.STREAMS.DLQ]: "dlq-processors",
         [this.STREAMS.FALLBACK]: "fallback-workers",
-        [this.MULTI_STREAMS.PRIVATE]: "delivery-private",
-        [this.MULTI_STREAMS.GROUP]: "delivery-group",
-        [this.MULTI_STREAMS.TYPING]: "delivery-typing",
-        [this.MULTI_STREAMS.READ_RECEIPTS]: "delivery-read",
-        [this.MULTI_STREAMS.NOTIFICATIONS]: "delivery-notifications",
+        [this.STREAMS.METRICS]: "metrics-processors",
+
+        // Streams fonctionnels - contenu messages
+        [this.MESSAGE_STREAMS.PRIVATE]: "delivery-private",
+        [this.MESSAGE_STREAMS.GROUP]: "delivery-group",
+        [this.MESSAGE_STREAMS.CHANNEL]: "delivery-channel",
+
+        // Streams fonctionnels - métadonnées messages
+        [this.MESSAGE_STREAMS.STATUS.DELIVERED]: "delivery-delivered",
+        [this.MESSAGE_STREAMS.STATUS.READ]: "delivery-read",
+        [this.MESSAGE_STREAMS.STATUS.EDITED]: "delivery-edited",
+        [this.MESSAGE_STREAMS.STATUS.DELETED]: "delivery-deleted",
+
+        // Streams fonctionnels - interactions
+        [this.MESSAGE_STREAMS.TYPING]: "delivery-typing",
+        [this.MESSAGE_STREAMS.REACTIONS]: "delivery-reactions",
+        [this.MESSAGE_STREAMS.REPLIES]: "delivery-replies",
+
+        // Streams événementiels
+        [this.EVENT_STREAMS.CONVERSATIONS]: "events-conversations",
+        [this.EVENT_STREAMS.USERS.PRESENCE]: "events-presence",
+        [this.EVENT_STREAMS.USERS.PROFILE]: "events-profile",
+        [this.EVENT_STREAMS.USERS.SETTINGS]: "events-settings",
+        [this.EVENT_STREAMS.FILES]: "events-files",
+        [this.EVENT_STREAMS.NOTIFICATIONS]: "events-notifications",
+        [this.EVENT_STREAMS.ANALYTICS]: "events-analytics",
       };
 
       for (const [stream, group] of Object.entries(groupConfigs)) {
@@ -224,7 +313,7 @@ class StreamManager {
         groupName,
         consumerName,
         [{ key: streamName, id: ">" }],
-        { COUNT: options.count || 10, BLOCK: options.block || 0 }
+        { COUNT: options.count || 10, BLOCK: options.block || 0 },
       );
 
       if (!messages || messages.length === 0) return [];
@@ -334,7 +423,7 @@ class StreamManager {
         Array.from({ length: entry[1].length / 2 }, (_, i) => [
           entry[1][i * 2],
           entry[1][i * 2 + 1],
-        ])
+        ]),
       );
       return { id, fields };
     }

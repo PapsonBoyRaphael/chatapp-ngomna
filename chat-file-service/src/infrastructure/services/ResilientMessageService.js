@@ -20,7 +20,7 @@ class ResilientMessageService {
     messageRepository,
     mongoRepository = null,
     mongoConversationRepository = null,
-    io = null
+    io = null,
   ) {
     this.redis = redisClient;
     this.messageRepository = messageRepository;
@@ -50,7 +50,8 @@ class ResilientMessageService {
 
     // ✅ Utiliser les configs de StreamManager au lieu de les dupliquer
     this.STREAMS = this.streamManager.STREAMS;
-    this.MULTI_STREAMS = this.streamManager.MULTI_STREAMS;
+    this.MESSAGE_STREAMS = this.streamManager.MESSAGE_STREAMS;
+    this.EVENT_STREAMS = this.streamManager.EVENT_STREAMS;
     this.STREAM_MAXLEN = this.streamManager.STREAM_MAXLEN;
 
     // ✅ MÉTRIQUES (garder les spécifiques au service)
@@ -92,7 +93,7 @@ class ResilientMessageService {
     // ✅ Les workers seront initialisés explicitement depuis index.js
 
     console.log(
-      "✅ ResilientMessageService initialisé (Intégration shared + StreamManager + WorkerManager)"
+      "✅ ResilientMessageService initialisé (Intégration shared + StreamManager + WorkerManager)",
     );
   }
 
@@ -119,7 +120,7 @@ class ResilientMessageService {
         if (typeof callback !== "function") {
           console.warn(
             `⚠️ Callback '${key}' n'est pas une fonction:`,
-            typeof callback
+            typeof callback,
           );
         }
       }
@@ -129,7 +130,7 @@ class ResilientMessageService {
     } catch (error) {
       console.error(
         "❌ Erreur initialisation callbacks workers:",
-        error.message
+        error.message,
       );
       throw error;
     }
@@ -146,7 +147,7 @@ class ResilientMessageService {
       this.workerManager.startAll();
       this.isRunning = true;
       console.log(
-        "✅ Tous les workers de résilience démarrés via WorkerManager"
+        "✅ Tous les workers de résilience démarrés via WorkerManager",
       );
     } catch (error) {
       console.error("❌ Erreur démarrage workers:", error.message);
@@ -209,10 +210,10 @@ class ResilientMessageService {
   async readFromStream(streamName, options = {}) {
     const messages = await this.streamManager.readFromStream(
       streamName,
-      options
+      options,
     );
     return messages.map((entry) =>
-      this.streamManager.parseStreamMessage(entry)
+      this.streamManager.parseStreamMessage(entry),
     );
   }
 
@@ -248,15 +249,34 @@ class ResilientMessageService {
 
     try {
       const groupConfigs = {
+        // Streams techniques
         [this.STREAMS.RETRY]: "retry-workers",
         [this.STREAMS.DLQ]: "dlq-processors",
         [this.STREAMS.FALLBACK]: "fallback-workers",
-        // Multi-streams
-        [this.MULTI_STREAMS.PRIVATE]: "delivery-private",
-        [this.MULTI_STREAMS.GROUP]: "delivery-group",
-        [this.MULTI_STREAMS.TYPING]: "delivery-typing",
-        [this.MULTI_STREAMS.READ_RECEIPTS]: "delivery-read",
-        [this.MULTI_STREAMS.NOTIFICATIONS]: "delivery-notifications",
+        [this.STREAMS.METRICS]: "metrics-processors",
+
+        // Streams fonctionnels - contenu messages
+        [this.MESSAGE_STREAMS.PRIVATE]: "delivery-private",
+        [this.MESSAGE_STREAMS.GROUP]: "delivery-group",
+        [this.MESSAGE_STREAMS.CHANNEL]: "delivery-channel",
+
+        // Streams fonctionnels - métadonnées messages
+        [this.MESSAGE_STREAMS.STATUS.DELIVERED]: "delivery-delivered",
+        [this.MESSAGE_STREAMS.STATUS.READ]: "delivery-read",
+        [this.MESSAGE_STREAMS.STATUS.EDITED]: "delivery-edited",
+        [this.MESSAGE_STREAMS.STATUS.DELETED]: "delivery-deleted",
+
+        // Streams fonctionnels - interactions
+        [this.MESSAGE_STREAMS.TYPING]: "delivery-typing",
+        [this.MESSAGE_STREAMS.REACTIONS]: "delivery-reactions",
+        [this.MESSAGE_STREAMS.REPLIES]: "delivery-replies",
+
+        // Streams événementiels
+        [this.EVENT_STREAMS.CONVERSATIONS]: "events-conversations",
+
+        [this.EVENT_STREAMS.FILES]: "events-files",
+        [this.EVENT_STREAMS.NOTIFICATIONS]: "events-notifications",
+        [this.EVENT_STREAMS.ANALYTICS]: "events-analytics",
       };
 
       for (const [stream, group] of Object.entries(groupConfigs)) {
@@ -482,7 +502,7 @@ class ResilientMessageService {
     try {
       const retries = await this.redis.xRead(
         [{ key: this.STREAMS.RETRY, id: "0" }],
-        { COUNT: this.batchSize }
+        { COUNT: this.batchSize },
       );
 
       if (!retries || retries.length === 0) return;
@@ -516,7 +536,7 @@ class ResilientMessageService {
               "❌ Erreur parsing:",
               e.message,
               "Data reçu:",
-              message.data?.substring(0, 50)
+              message.data?.substring(0, 50),
             );
             await this.redis.xDel(this.STREAMS.RETRY, id);
             continue;
@@ -576,7 +596,7 @@ class ResilientMessageService {
     try {
       const fallbacks = await this.redis.xRead(
         [{ key: this.STREAMS.FALLBACK, id: "0" }],
-        { COUNT: this.batchSize }
+        { COUNT: this.batchSize },
       );
 
       if (!fallbacks || fallbacks.length === 0) return;
@@ -619,7 +639,7 @@ class ResilientMessageService {
             });
 
             console.log(
-              `✅ Fallback rejoué: ${fallbackId} → ${mongoMessage._id}`
+              `✅ Fallback rejoué: ${fallbackId} → ${mongoMessage._id}`,
             );
 
             await this.publishToMessageStream(mongoMessage, {
@@ -653,7 +673,7 @@ class ResilientMessageService {
               },
               saveError,
               1,
-              { operation: "processFallback", fallbackId, poison: true }
+              { operation: "processFallback", fallbackId, poison: true },
             );
             await this.redis.del(hashKey);
             await this.redis.xDel(this.STREAMS.FALLBACK, id);
@@ -686,7 +706,7 @@ class ResilientMessageService {
               Array.from({ length: entry[1].length / 2 }, (_, i) => [
                 entry[1][i * 2],
                 entry[1][i * 2 + 1],
-              ])
+              ]),
             )
           : entry.message;
 
@@ -714,7 +734,7 @@ class ResilientMessageService {
 
           if (age > walTimeout) {
             console.warn(
-              `⚠️ WAL incomplet: ${walId} (${(age / 1000).toFixed(2)}s)`
+              `⚠️ WAL incomplet: ${walId} (${(age / 1000).toFixed(2)}s)`,
             );
 
             const existingMessage = await this.messageRepository
@@ -733,7 +753,7 @@ class ResilientMessageService {
                 },
                 new Error("Message lost - incomplete WAL"),
                 0,
-                { operation: "processWALRecovery", walId, poison: true }
+                { operation: "processWALRecovery", walId, poison: true },
               );
             }
 
@@ -763,7 +783,7 @@ class ResilientMessageService {
           this.STREAMS.DLQ,
           "+",
           "-",
-          { COUNT: 5 }
+          { COUNT: 5 },
         );
 
         dlqMessages.forEach((msg) => {
@@ -772,7 +792,7 @@ class ResilientMessageService {
                 Array.from({ length: msg[1].length / 2 }, (_, i) => [
                   msg[1][i * 2],
                   msg[1][i * 2 + 1],
-                ])
+                ]),
               )
             : msg.message;
 
@@ -825,9 +845,8 @@ class ResilientMessageService {
             .find((p) => p !== String(senderId));
         } else if (this.mongoRepository && conversationId) {
           try {
-            const conversation = await this.mongoRepository.findById(
-              conversationId
-            );
+            const conversation =
+              await this.mongoRepository.findById(conversationId);
             if (conversation?.participants) {
               receiverId = conversation.participants
                 .map((p) => String(p.userId || p))
@@ -867,7 +886,7 @@ class ResilientMessageService {
         receiverId !== "" &&
         receiverId !== "undefined"
       ) {
-        streamName = this.MULTI_STREAMS.PRIVATE;
+        streamName = this.MESSAGE_STREAMS.PRIVATE;
         streamDescription = "PRIVÉ";
         this.metrics.privateMessagesPublished++;
       }
@@ -877,7 +896,7 @@ class ResilientMessageService {
         conversationId !== "null" &&
         conversationId !== ""
       ) {
-        streamName = this.MULTI_STREAMS.GROUP;
+        streamName = this.MESSAGE_STREAMS.GROUP;
         streamDescription = "GROUPE";
         this.metrics.groupMessagesPublished++;
       }
@@ -906,7 +925,7 @@ class ResilientMessageService {
     if (!this.redis) return null;
 
     try {
-      const streamId = await this.addToStream(this.MULTI_STREAMS.TYPING, {
+      const streamId = await this.addToStream(this.MESSAGE_STREAMS.TYPING, {
         conversationId: conversationId.toString(),
         userId: userId.toString(),
         isTyping: isTyping.toString(),
@@ -925,28 +944,45 @@ class ResilientMessageService {
   }
 
   /**
-   * ✅ PUBLIER UN ACCUSÉ DE LECTURE
+   * ✅ PUBLIER UN STATUT DE MESSAGE
    */
-  async publishReadReceipt(messageId, conversationId, userId, readAt = null) {
+  async publishMessageStatus(messageId, userId, status, timestamp = null) {
     if (!this.redis) return null;
 
     try {
-      const streamId = await this.addToStream(
-        this.MULTI_STREAMS.READ_RECEIPTS,
-        {
-          messageId: messageId.toString(),
-          conversationId: conversationId.toString(),
-          userId: userId.toString(),
-          readAt: (readAt || new Date()).toISOString(),
-          timestamp: new Date().toISOString(),
-          publishedAt: Date.now().toString(),
-        }
-      );
+      // Choisir le stream approprié selon le statut
+      let streamName;
+      switch (status.toUpperCase()) {
+        case "DELIVERED":
+          streamName = this.MESSAGE_STREAMS.STATUS.DELIVERED;
+          break;
+        case "READ":
+          streamName = this.MESSAGE_STREAMS.STATUS.READ;
+          break;
+        case "EDITED":
+          streamName = this.MESSAGE_STREAMS.STATUS.EDITED;
+          break;
+        case "DELETED":
+          streamName = this.MESSAGE_STREAMS.STATUS.DELETED;
+          break;
+        default:
+          console.warn(
+            `⚠️ Statut inconnu: ${status}, utilisation DELIVERED par défaut`,
+          );
+          streamName = this.MESSAGE_STREAMS.STATUS.DELIVERED;
+      }
 
-      console.log(`📖 Read receipt publié: ${streamId}`);
+      const streamId = await this.addToStream(streamName, {
+        messageId: messageId.toString(),
+        userId: userId.toString(),
+        status: status,
+        timestamp: (timestamp || new Date()).toISOString(),
+      });
+
+      console.log(`📊 Message status publié: ${streamId} (${status})`);
       return streamId;
     } catch (error) {
-      console.error("❌ Erreur publication read receipt:", error.message);
+      console.error("❌ Erreur publication message status:", error.message);
       return null;
     }
   }
@@ -959,7 +995,7 @@ class ResilientMessageService {
 
     try {
       const streamId = await this.addToStream(
-        this.MULTI_STREAMS.NOTIFICATIONS,
+        this.EVENT_STREAMS.NOTIFICATIONS,
         {
           userId: userId.toString(),
           title: title.substring(0, 100),
@@ -967,7 +1003,7 @@ class ResilientMessageService {
           type: type,
           timestamp: new Date().toISOString(),
           publishedAt: Date.now().toString(),
-        }
+        },
       );
 
       console.log(`🔔 Notification publiée: ${streamId}`);
@@ -985,7 +1021,7 @@ class ResilientMessageService {
     if (!this.redis) return null;
 
     try {
-      const streamName = options.stream || this.MULTI_STREAMS.MESSAGES_GROUP;
+      const streamName = options.stream || this.MESSAGE_STREAMS.GROUP;
 
       // ✅ CONSTRUIRE LES CHAMPS DU STREAM
       const fields = {
@@ -1005,7 +1041,7 @@ class ResilientMessageService {
       // ✅ AJOUTER AU STREAM (résilient avec WAL, retry, etc.)
       const streamId = await this.addToStream(streamName, fields);
       console.log(
-        `📢 Message système publié (${messageData.subType}): ${streamId}`
+        `📢 Message système publié (${messageData.subType}): ${streamId}`,
       );
 
       // ✅ OPTIONNEL : ÉMETTRE IMMÉDIATEMENT VIA SOCKET.IO AUX CONNECTÉS
@@ -1025,12 +1061,12 @@ class ResilientMessageService {
             status: "DELIVERED",
           });
           console.log(
-            `✅ Message système émis Socket.IO à ${messageData.conversationId}`
+            `✅ Message système émis Socket.IO à ${messageData.conversationId}`,
           );
         } catch (socketError) {
           console.warn(
             "⚠️ Erreur émission Socket.IO message système:",
-            socketError.message
+            socketError.message,
           );
         }
       }
@@ -1038,6 +1074,93 @@ class ResilientMessageService {
       return streamId;
     } catch (error) {
       console.error("❌ Erreur publication message système:", error.message);
+      return null;
+    }
+  }
+
+  /**
+   * ✅ PUBLIER UN ÉVÉNEMENT DE CONVERSATION (création, mise à jour, participants)
+   */
+  async publishConversationEvent(eventType, conversationData) {
+    if (!this.redis) return null;
+
+    try {
+      // ✅ DÉTERMINER LE STREAM SELON LE TYPE D'ÉVÉNEMENT
+      let streamName;
+      switch (eventType) {
+        case "CONVERSATION_CREATED":
+          streamName =
+            this.streamManager.EVENT_STREAMS.CONVERSATION_EVENTS.CREATED;
+          break;
+        case "CONVERSATION_UPDATED":
+          streamName =
+            this.streamManager.EVENT_STREAMS.CONVERSATION_EVENTS.UPDATED;
+          break;
+        case "PARTICIPANT_ADDED":
+          streamName =
+            this.streamManager.EVENT_STREAMS.CONVERSATION_EVENTS
+              .PARTICIPANT_ADDED;
+          break;
+        case "PARTICIPANT_REMOVED":
+          streamName =
+            this.streamManager.EVENT_STREAMS.CONVERSATION_EVENTS
+              .PARTICIPANT_REMOVED;
+          break;
+        case "CONVERSATION_DELETED":
+          streamName =
+            this.streamManager.EVENT_STREAMS.CONVERSATION_EVENTS.DELETED;
+          break;
+        default:
+          console.warn(
+            `⚠️ Type d'événement conversation inconnu: ${eventType}`,
+          );
+          return null;
+      }
+
+      // ✅ CONSTRUIRE LES CHAMPS DU STREAM
+      const fields = {
+        eventType,
+        conversationId: conversationData.conversationId || conversationData._id,
+        timestamp: new Date().toISOString(),
+        ts: Date.now().toString(),
+      };
+
+      // ✅ AJOUTER LES CHAMPS SPÉCIFIQUES SELON LE TYPE
+      if (eventType === "CONVERSATION_CREATED") {
+        fields.name = conversationData.name;
+        fields.type = conversationData.type;
+        fields.createdBy = conversationData.createdBy;
+        fields.participants = JSON.stringify(
+          conversationData.participants || [],
+        );
+      } else if (eventType === "CONVERSATION_UPDATED") {
+        fields.name = conversationData.name;
+        fields.updatedBy = conversationData.updatedBy;
+        fields.changes = JSON.stringify(conversationData.changes || {});
+      } else if (eventType === "PARTICIPANT_ADDED") {
+        fields.participantId = conversationData.participantId;
+        fields.participantName = conversationData.participantName;
+        fields.addedBy = conversationData.addedBy;
+      } else if (eventType === "PARTICIPANT_REMOVED") {
+        fields.participantId = conversationData.participantId;
+        fields.participantName = conversationData.participantName;
+        fields.removedBy = conversationData.removedBy;
+      } else if (eventType === "CONVERSATION_DELETED") {
+        fields.deletedBy = conversationData.deletedBy;
+      }
+
+      // ✅ AJOUTER AU STREAM
+      const streamId = await this.addToStream(streamName, fields);
+      console.log(
+        `🏢 Événement conversation publié (${eventType}): ${streamId}`,
+      );
+
+      return streamId;
+    } catch (error) {
+      console.error(
+        "❌ Erreur publication événement conversation:",
+        error.message,
+      );
       return null;
     }
   }
@@ -1053,7 +1176,7 @@ class ResilientMessageService {
       if (messageData.conversationId && this.mongoRepository) {
         try {
           const conversation = await this.mongoRepository.findById(
-            messageData.conversationId
+            messageData.conversationId,
           );
 
           if (conversation) {
@@ -1061,13 +1184,13 @@ class ResilientMessageService {
             console.log(
               `👥 Participants trouvés: ${conversationParticipants
                 .map((p) => p.userId || p)
-                .join(", ")}`
+                .join(", ")}`,
             );
           }
         } catch (convError) {
           console.warn(
             "⚠️ Erreur récupération participants:",
-            convError.message
+            convError.message,
           );
         }
       }
@@ -1079,7 +1202,7 @@ class ResilientMessageService {
       let savedMessage;
       try {
         savedMessage = await this.circuitBreaker.execute(() =>
-          this.messageRepository.save(messageData)
+          this.messageRepository.save(messageData),
         );
 
         this.metrics.successfulSaves++;
@@ -1185,7 +1308,7 @@ class ResilientMessageService {
         });
 
         console.log(
-          `📋 ${conversations.length} conversation(s) à synchroniser`
+          `📋 ${conversations.length} conversation(s) à synchroniser`,
         );
 
         for (const conversation of conversations) {
@@ -1202,7 +1325,7 @@ class ResilientMessageService {
               try {
                 const result = await this.mongoRepository.findByConversation(
                   conversationId,
-                  { page, limit, sort: { createdAt: 1 } } // Plus ancien en premier
+                  { page, limit, sort: { createdAt: 1 } }, // Plus ancien en premier
                 );
 
                 const messages = result.messages || result || [];
@@ -1228,7 +1351,7 @@ class ResilientMessageService {
                   } catch (msgError) {
                     console.warn(
                       `⚠️ Erreur sync message ${message._id}:`,
-                      msgError.message
+                      msgError.message,
                     );
                     errors++;
                   }
@@ -1242,7 +1365,7 @@ class ResilientMessageService {
               } catch (pageError) {
                 console.warn(
                   `⚠️ Erreur lecture page ${page} pour ${conversationId}:`,
-                  pageError.message
+                  pageError.message,
                 );
                 hasMore = false;
               }
@@ -1250,14 +1373,14 @@ class ResilientMessageService {
           } catch (convError) {
             console.warn(
               `⚠️ Erreur sync conversation ${conversation._id}:`,
-              convError.message
+              convError.message,
             );
             errors++;
           }
         }
 
         console.log(
-          `✅ SYNCHRONISATION TERMINÉE: ${synced} message(s) publiés, ${errors} erreur(s)`
+          `✅ SYNCHRONISATION TERMINÉE: ${synced} message(s) publiés, ${errors} erreur(s)`,
         );
 
         // Log les statistiques
@@ -1388,8 +1511,8 @@ class ResilientMessageService {
       const streamsToClean = streamKey
         ? [streamKey]
         : [
-            this.MULTI_STREAMS.PRIVATE,
-            this.MULTI_STREAMS.GROUP,
+            this.MESSAGE_STREAMS.PRIVATE,
+            this.MESSAGE_STREAMS.GROUP,
             this.STREAMS.MESSAGES,
           ];
 
@@ -1419,7 +1542,7 @@ class ResilientMessageService {
                   Array.from({ length: entry[1].length / 2 }, (_, i) => [
                     entry[1][i * 2],
                     entry[1][i * 2 + 1],
-                  ])
+                  ]),
                 )
               : entry.message;
 
@@ -1443,24 +1566,24 @@ class ResilientMessageService {
           }
 
           console.log(
-            `📊 Stream ${stream}: ${allMessages.length} entrées, ${seen.size} uniques, ${duplicates.length} doublon(s)`
+            `📊 Stream ${stream}: ${allMessages.length} entrées, ${seen.size} uniques, ${duplicates.length} doublon(s)`,
           );
 
           // 3. ✅ ANALYSE DÉTAILLÉE DES DOUBLONS
           if (duplicates.length > 0) {
             console.log(
-              `🔍 Analyse détaillée des ${duplicates.length} doublon(s):`
+              `🔍 Analyse détaillée des ${duplicates.length} doublon(s):`,
             );
 
             for (const [messageId, entries] of messageIdToEntries.entries()) {
               if (entries.length > 1) {
                 console.log(
-                  `  📝 Message ${messageId}: ${entries.length} occurrences`
+                  `  📝 Message ${messageId}: ${entries.length} occurrences`,
                 );
 
                 // Garder le plus ancien (premier dans le stream)
                 const sortedEntries = entries.sort((a, b) =>
-                  a.entryId.localeCompare(b.entryId)
+                  a.entryId.localeCompare(b.entryId),
                 );
 
                 const toKeep = sortedEntries[0];
@@ -1488,7 +1611,7 @@ class ResilientMessageService {
                 console.log(
                   `🗑️ Batch ${Math.ceil((i + 1) / batchSize)}: ${
                     batch.length
-                  } doublons supprimés`
+                  } doublons supprimés`,
                 );
 
                 // Petit délai pour ne pas surcharger Redis
@@ -1502,7 +1625,7 @@ class ResilientMessageService {
 
             totalDuplicatesRemoved += removedCount;
             console.log(
-              `✅ ${removedCount} doublon(s) supprimé(s) de ${stream}`
+              `✅ ${removedCount} doublon(s) supprimé(s) de ${stream}`,
             );
           } else {
             console.log(`✅ Aucun doublon dans ${stream}`);
@@ -1510,14 +1633,14 @@ class ResilientMessageService {
         } catch (streamError) {
           console.error(
             `❌ Erreur analyse stream ${stream}:`,
-            streamError.message
+            streamError.message,
           );
         }
       }
 
       if (totalDuplicatesRemoved > 0) {
         console.log(
-          `🎉 NETTOYAGE TERMINÉ: ${totalDuplicatesRemoved} doublon(s) supprimé(s) au total`
+          `🎉 NETTOYAGE TERMINÉ: ${totalDuplicatesRemoved} doublon(s) supprimé(s) au total`,
         );
 
         // ✅ LOGS DES STATISTIQUES APRÈS NETTOYAGE
@@ -1549,7 +1672,7 @@ class ResilientMessageService {
 
     console.log("☢️ ===== NETTOYAGE COMPLET REDIS =====");
     console.warn(
-      "⚠️ ATTENTION: Cette opération va supprimer TOUTES les données de chat Redis!"
+      "⚠️ ATTENTION: Cette opération va supprimer TOUTES les données de chat Redis!",
     );
 
     try {
@@ -1629,7 +1752,7 @@ class ResilientMessageService {
 
           if (keysForPattern.length > 0) {
             console.log(
-              `🗑️ ${keysForPattern.length} clé(s) avec pattern: ${pattern}`
+              `🗑️ ${keysForPattern.length} clé(s) avec pattern: ${pattern}`,
             );
 
             // ✅ SUPPRESSION PAR BATCH POUR PERFORMANCE
@@ -1647,8 +1770,8 @@ class ResilientMessageService {
                 if (keysForPattern.length > batchSize) {
                   console.log(
                     `    📦 Batch ${Math.ceil((i + 1) / batchSize)}/${Math.ceil(
-                      keysForPattern.length / batchSize
-                    )}: ${deleted} clé(s) supprimée(s)`
+                      keysForPattern.length / batchSize,
+                    )}: ${deleted} clé(s) supprimée(s)`,
                   );
                 }
 
@@ -1659,7 +1782,7 @@ class ResilientMessageService {
               } catch (batchError) {
                 console.error(
                   `❌ Erreur suppression batch:`,
-                  batchError.message
+                  batchError.message,
                 );
               }
             }
@@ -1688,7 +1811,7 @@ class ResilientMessageService {
         "stream:messages:private",
         "stream:messages:group",
         "stream:events:typing",
-        "stream:events:read",
+        "stream:message_status",
         "stream:messages:system",
         "active:conversations",
         "global:stats",
@@ -1738,7 +1861,7 @@ class ResilientMessageService {
       } catch (groupsError) {
         console.warn(
           "⚠️ Erreur suppression consumer groups:",
-          groupsError.message
+          groupsError.message,
         );
         results["consumer:groups"] = { error: groupsError.message };
       }
@@ -1767,7 +1890,7 @@ class ResilientMessageService {
 
       console.log(`📋 ${remainingChatKeys.length} stream(s) restant(s)`);
       console.log(
-        `📊 ${totalRemainingKeys} clé(s) totales restantes dans Redis`
+        `📊 ${totalRemainingKeys} clé(s) totales restantes dans Redis`,
       );
 
       // ✅ RÉINITIALISER LES MÉTRIQUES
@@ -1829,7 +1952,7 @@ class ResilientMessageService {
       return {
         success: false,
         error: `Catégorie inconnue. Disponibles: ${Object.keys(categories).join(
-          ", "
+          ", ",
         )}`,
       };
     }
@@ -1845,7 +1968,7 @@ class ResilientMessageService {
         const deleted = await this.redis.del(...keys);
         totalDeleted += deleted;
         console.log(
-          `✅ ${deleted} clé(s) supprimée(s) pour pattern: ${pattern}`
+          `✅ ${deleted} clé(s) supprimée(s) pour pattern: ${pattern}`,
         );
       }
     }
@@ -1891,7 +2014,7 @@ class ResilientMessageService {
 
         if (cached) {
           console.log(
-            `✅ [CACHED] Conversation depuis cache: ${conversationId}`
+            `✅ [CACHED] Conversation depuis cache: ${conversationId}`,
           );
           await this.cache.renewTTL(cacheKey, this.defaultTTL);
           // ✅ RETOURNER DIRECTEMENT LA CONVERSATION (pas d'objet wrapper)

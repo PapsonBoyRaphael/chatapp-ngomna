@@ -2,11 +2,13 @@ class MarkMessageDelivered {
   constructor(
     messageRepository,
     conversationRepository = null,
-    kafkaProducer = null
+    kafkaProducer = null,
+    resilientMessageService = null,
   ) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
     this.kafkaProducer = kafkaProducer;
+    this.resilientMessageService = resilientMessageService;
   }
 
   /**
@@ -37,69 +39,46 @@ class MarkMessageDelivered {
       });
 
       let result;
+      messageId = null; // forcer l'utilisation de conversationId + messageIds
 
       // ✅ CAS 1 : UN SEUL MESSAGE
       if (messageId) {
         console.log(
-          `📬 Marquage UN seul message: ${messageId} comme DELIVERED`
+          `📬 Marquage UN seul message: ${messageId} comme DELIVERED`,
         );
         result = await this.messageRepository.updateSingleMessageStatus(
           messageId,
           userId,
-          "DELIVERED"
+          "DELIVERED",
         );
       }
       // ✅ CAS 2 : TOUS LES MESSAGES D'UNE CONVERSATION
       else if (conversationId && !messageIds) {
         console.log(
-          `📬 Marquage TOUS messages conversation ${conversationId} comme DELIVERED`
+          `📬 Marquage TOUS messages conversation ${conversationId} comme DELIVERED`,
         );
         result = await this.messageRepository.updateMessageStatus(
           conversationId,
           userId,
           "DELIVERED",
-          [] // messageIds vide = tous les messages
+          [], // messageIds vide = tous les messages
         );
       }
       // ✅ CAS 3 : MESSAGES SPÉCIFIQUES
       else if (conversationId && messageIds) {
         console.log(
-          `📬 Marquage ${messageIds.length} messages spécifiques comme DELIVERED`
+          `📬 Marquage ${messageIds.length} messages spécifiques comme DELIVERED`,
         );
         result = await this.messageRepository.updateMessageStatus(
           conversationId,
           userId,
           "DELIVERED",
-          messageIds
+          messageIds,
         );
       } else {
         throw new Error(
-          "Doit avoir soit messageId, soit conversationId avec ou sans messageIds"
+          "Doit avoir soit messageId, soit conversationId avec ou sans messageIds",
         );
-      }
-
-      // ✅ PUBLICATION KAFKA
-      if (this.kafkaProducer && result && result.modifiedCount > 0) {
-        try {
-          await this.kafkaProducer.publishMessage({
-            eventType: "MESSAGES_DELIVERED",
-            conversationId,
-            receiverId: userId,
-            messageId: messageId || null,
-            messageIds: messageIds || (messageId ? [messageId] : "ALL"),
-            modifiedCount: result.modifiedCount,
-            timestamp: new Date().toISOString(),
-            source: "MarkMessageDelivered-UseCase",
-          });
-          console.log(
-            `📤 Événement MESSAGES_DELIVERED publié: ${result.modifiedCount} messages`
-          );
-        } catch (kafkaError) {
-          console.warn(
-            "⚠️ Erreur publication Kafka MarkMessageDelivered:",
-            kafkaError.message
-          );
-        }
       }
 
       console.log("✅ Mise à jour DELIVERED terminée:", {
@@ -109,6 +88,41 @@ class MarkMessageDelivered {
         modifiedCount: result?.modifiedCount || 0,
         durationMs: Date.now() - start,
       });
+
+      // ✅ PUBLIER DANS REDIS STREAMS - STATUT DELIVERED
+      if (this.resilientMessageService && result && result.modifiedCount > 0) {
+        try {
+          // Pour les messages individuels, publier un événement par message
+          if (messageId) {
+            await this.resilientMessageService.publishMessageStatus(
+              messageId,
+              userId,
+              "DELIVERED",
+            );
+          } else if (messageIds && messageIds.length > 0) {
+            // Pour les messages spécifiques
+            for (const msgId of messageIds) {
+              await this.resilientMessageService.publishMessageStatus(
+                msgId,
+                userId,
+                "DELIVERED",
+              );
+            }
+          } else {
+            // Pour tous les messages d'une conversation, on ne publie pas d'événements individuels
+            console.log(
+              "ℹ️ DELIVERED en masse - pas d'événements individuels publiés",
+            );
+          }
+
+          console.log(`📤 [DELIVERED] événements publiés`);
+        } catch (streamErr) {
+          console.error(
+            "❌ Erreur publication statuts DELIVERED:",
+            streamErr.message,
+          );
+        }
+      }
 
       return result;
     } catch (error) {

@@ -6,7 +6,7 @@ class LeaveConversation {
   constructor(
     conversationRepository,
     resilientMessageService = null,
-    userCacheService = null
+    userCacheService = null,
   ) {
     this.conversationRepository = conversationRepository;
     this.resilientMessageService = resilientMessageService;
@@ -19,9 +19,8 @@ class LeaveConversation {
     }
 
     // Récupérer la conversation
-    const conversation = await this.conversationRepository.findById(
-      conversationId
-    );
+    const conversation =
+      await this.conversationRepository.findById(conversationId);
     if (!conversation) {
       throw new Error("Conversation introuvable");
     }
@@ -39,7 +38,7 @@ class LeaveConversation {
     // Ne pas permettre au créateur de quitter (il doit transférer d'abord)
     if (userId === conversation.createdBy) {
       throw new Error(
-        "Le créateur doit transférer la propriété avant de quitter"
+        "Le créateur doit transférer la propriété avant de quitter",
       );
     }
 
@@ -52,14 +51,14 @@ class LeaveConversation {
       } catch (err) {
         console.warn(
           "⚠️ Impossible de récupérer les infos utilisateur:",
-          err.message
+          err.message,
         );
       }
     }
 
     // Retirer le participant
     conversation.participants = conversation.participants.filter(
-      (id) => id !== userId
+      (id) => id !== userId,
     );
 
     // Supprimer les unreadCounts
@@ -70,7 +69,7 @@ class LeaveConversation {
     // Supprimer les métadonnées utilisateur
     if (conversation.userMetadata) {
       conversation.userMetadata = conversation.userMetadata.filter(
-        (meta) => meta.userId !== userId
+        (meta) => meta.userId !== userId,
       );
     }
 
@@ -109,12 +108,12 @@ class LeaveConversation {
           timestamp: Date.now().toString(),
         });
         console.log(
-          `📤 [conversation.participant.left] publié dans events:conversations`
+          `📤 [conversation.participant.left] publié dans events:conversations`,
         );
       } catch (streamErr) {
         console.error(
           "❌ Erreur publication stream participant.left:",
-          streamErr.message
+          streamErr.message,
         );
       }
     }
