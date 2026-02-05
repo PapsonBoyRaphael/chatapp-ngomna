@@ -3,9 +3,8 @@
  * Configuration robuste avec fallback
  */
 
-// Utiliser les nouvelles variables d'environnement
-
-const redis = require("redis");
+// Charger le module redis directement (CommonJS)
+const { createClient } = require("redis");
 
 const redisConfig = {
   host: process.env.REDIS_HOST || "localhost",
@@ -32,9 +31,9 @@ class RedisConfig {
 
   async connect() {
     try {
-      this.client = redis.createClient(redisConfig);
-      this.pubClient = redis.createClient(redisConfig);
-      this.subClient = redis.createClient(redisConfig);
+      this.client = createClient(redisConfig);
+      this.pubClient = createClient(redisConfig);
+      this.subClient = createClient(redisConfig);
 
       this.client.on("error", (err) => {
         console.error("❌ Erreur Redis:", err);

@@ -1,7 +1,6 @@
 const File = require("../../domain/entities/File");
 const musicMetadata = require("music-metadata");
 const path = require("path");
-const { v4: uuidv4 } = require("uuid");
 
 class UploadFile {
   constructor(
@@ -23,24 +22,21 @@ class UploadFile {
         throw new Error("Données de fichier incomplètes");
       }
 
-      // ✅ GÉNÉRER UUID CUSTOM (32 caractères hex sans tirets)
-      const fileId = uuidv4().replace(/-/g, "");
-      console.log(`🆔 ID fichier généré (UUID): ${fileId}`);
-
-      // ✅ CONSTRUIRE LE NOM DU FICHIER BASÉ SUR L'UUID
-      const ext = path.extname(fileData.originalName) || ".bin";
-      const safeFileName = `${fileId}${ext.toLowerCase()}`;
-      console.log(`📝 Nom sécurisé généré: ${safeFileName}`);
+      // ✅ EXTRAIRE L'UUID DU FILENAME (sans extension)
+      const ext = path.extname(fileData.fileName);
+      const fileId = fileData.fileName.replace(ext, "");
+      console.log(`🆔 ID fichier extrait du fileName: ${fileId}`);
+      console.log(`📝 Nom de fichier reçu: ${fileData.fileName}`);
 
       // ✅ CRÉER UNE INSTANCE DE L'ENTITÉ FILE AVEC LES MÉTADONNÉES
       const fileEntity = new File({
-        _id: fileId, // Assigner l'ID custom (string)
+        _id: fileId, // Assigner l'ID custom (string) extrait du fileName
         originalName: fileData.originalName,
-        fileName: safeFileName, // Utiliser le nom sécurisé généré
+        fileName: fileData.fileName, // Utiliser le nom reçu du contrôleur
         mimeType: fileData.mimeType,
         size: fileData.size,
-        path: fileData.path,
-        url: fileData.url,
+        path: fileData.path, // ✅ Utiliser le path reçu du contrôleur (qui utilise déjà fileName)
+        url: fileData.url, // ✅ Utiliser l'url reçue du contrôleur
         uploadedBy: fileData.uploadedBy,
         conversationId: fileData.conversationId,
         status: "COMPLETED",
@@ -70,12 +66,13 @@ class UploadFile {
         try {
           await this.resilientMessageService.addToStream("events:files", {
             event: "file.uploaded",
+            userId: savedFile.uploadedBy, // ✅ REQUIS : l'utilisateur qui a uploadé le fichier
             fileId: savedFile._id,
+            fileName: savedFile.fileName,
+            fileSize: savedFile.size.toString(),
             conversationId: savedFile.conversationId?.toString() || "unknown",
-            uploaderId: savedFile.uploadedBy?.toString() || "unknown",
             originalName: savedFile.originalName,
             mimeType: savedFile.mimeType,
-            size: savedFile.size.toString(),
             url: savedFile.url,
             timestamp: Date.now().toString(),
           });

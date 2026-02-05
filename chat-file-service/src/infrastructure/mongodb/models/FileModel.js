@@ -2,6 +2,11 @@ const mongoose = require("mongoose");
 
 const fileSchema = new mongoose.Schema(
   {
+    _id: {
+      type: String,
+      required: true,
+      trim: true,
+    },
     originalName: {
       type: String,
       required: true,
@@ -299,7 +304,7 @@ const fileSchema = new mongoose.Schema(
     timestamps: true,
     versionKey: false,
     collection: "files",
-  }
+  },
 );
 
 // ===============================
@@ -330,7 +335,7 @@ fileSchema.index(
   },
   {
     expireAfterSeconds: 0,
-  }
+  },
 );
 
 // ===============================
@@ -380,7 +385,7 @@ fileSchema.methods.markAsCompleted = async function () {
 fileSchema.methods.incrementDownloadCount = async function (
   userId = null,
   userAgent = null,
-  ip = null
+  ip = null,
 ) {
   this.downloadCount++;
   this.metadata.usage.lastDownload = new Date();
@@ -456,7 +461,7 @@ fileSchema.methods.formatFileSize = function () {
 fileSchema.methods.publishKafkaEvent = async function (
   eventType,
   additionalData = {},
-  saveDocument = false // ✅ NOUVEAU PARAMÈTRE
+  saveDocument = false, // ✅ NOUVEAU PARAMÈTRE
 ) {
   try {
     // ✅ CRÉER L'OBJET AVEC LES PROPRIÉTÉS SÉPARÉES

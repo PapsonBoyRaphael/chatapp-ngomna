@@ -35,7 +35,7 @@ const {
   RedisManager,
   UserCache,
   UserStreamConsumer,
-} = require("@chatapp-ngomna/shared");
+} = require("../shared");
 
 // Services
 const ThumbnailService = require("./infrastructure/services/ThumbnailService");
@@ -352,6 +352,14 @@ const startServer = async () => {
       mongoConversationRepository.resilientMessageService =
         resilientMessageService;
 
+      // ✅ PASSER LA RÉFÉRENCE À messageDeliveryService POUR LA VÉRIFICATION D'ÉTAT ONLINE
+      if (messageDeliveryService) {
+        resilientMessageService.messageDeliveryService = messageDeliveryService;
+        console.log(
+          "✅ Référence messageDeliveryService injectée dans resilientMessageService",
+        );
+      }
+
       // resilientMessageService.nukeAllRedisData(); //
       // ✅ NOUVELLE : SYNCHRONISER LES MESSAGES EXISTANTS
       // console.log(
@@ -446,7 +454,8 @@ const startServer = async () => {
     const markMessageDeliveredUseCase = new MarkMessageDelivered(
       messageRepository, // Cached
       conversationRepository, // Cached
-      cacheServiceInstance,
+      null, // kafkaProducer
+      resilientMessageService, // ✅ AJOUTÉ pour publication events:messages
     );
 
     const markMessageReadUseCase = new MarkMessageRead(

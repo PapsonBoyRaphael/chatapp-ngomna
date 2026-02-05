@@ -4,7 +4,9 @@
  * ✅ Signature compatible avec l'utilisation locale (redis en param)
  */
 
-const { OnlineUserManager: SharedOnlineUserManager } = require("@chatapp-ngomna/shared");
+const {
+  OnlineUserManager: SharedOnlineUserManager,
+} = require("../../../shared");
 
 class OnlineUserManager {
   constructor(redis, io = null) {

@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { UserCache } = require("@chatapp-ngomna/shared");
+const { UserCache } = require("../../../shared");
 
 /**
  * UserCacheService - Service intelligent de cache utilisateur avec fallback
@@ -50,8 +50,8 @@ class UserCacheService {
     const fullName = cached.fullName
       ? cached.fullName
       : cached.nom
-      ? `${cached.prenom || ""} ${cached.nom}`.trim()
-      : "Utilisateur inconnu";
+        ? `${cached.prenom || ""} ${cached.nom}`.trim()
+        : "Utilisateur inconnu";
 
     return {
       userId,
@@ -114,7 +114,7 @@ class UserCacheService {
 
       // Étape 2 : Cache miss → Fallback HTTP auth-user-service
       console.log(
-        `⚠️ [UserCacheService] Miss Redis → Fallback HTTP: ${userId}`
+        `⚠️ [UserCacheService] Miss Redis → Fallback HTTP: ${userId}`,
       );
       const userInfo = await this._fetchFromAuthService(userId);
 
@@ -127,7 +127,7 @@ class UserCacheService {
     } catch (error) {
       console.warn(
         `⚠️ [UserCacheService] Erreur fetchUserInfo pour ${userId}:`,
-        error.message
+        error.message,
       );
       return {
         userId,
@@ -175,7 +175,7 @@ class UserCacheService {
       console.log(
         `📊 [UserCacheService] Batch: ${
           results.length - missingIds.length
-        } hits, ${missingIds.length} miss`
+        } hits, ${missingIds.length} miss`,
       );
 
       // Étape 2 : Fallback HTTP pour les utilisateurs manquants
@@ -185,7 +185,7 @@ class UserCacheService {
         // Mise à jour des résultats + cache warming
         for (const fetchedUser of fetchedUsers) {
           const index = results.findIndex(
-            (r) => r.userId === fetchedUser.userId
+            (r) => r.userId === fetchedUser.userId,
           );
           if (index !== -1) {
             results[index] = fetchedUser;
@@ -202,7 +202,7 @@ class UserCacheService {
     } catch (error) {
       console.error(
         `❌ [UserCacheService] Erreur fetchUsersInfo:`,
-        error.message
+        error.message,
       );
       return userIds.map((userId) => ({
         userId,
@@ -232,7 +232,7 @@ class UserCacheService {
       } else {
         console.warn(
           `⚠️ [UserCacheService] Erreur HTTP ${userId}:`,
-          error.message
+          error.message,
         );
       }
 
@@ -263,12 +263,12 @@ class UserCacheService {
 
         const users = response.data.users || [];
         return users.map((user) =>
-          this._normalizeAuthUser(user, user.id || user._id?.toString())
+          this._normalizeAuthUser(user, user.id || user._id?.toString()),
         );
       } catch (batchError) {
         // Fallback : requêtes parallèles individuelles
         console.log(
-          `⚠️ [UserCacheService] Route batch indisponible, fallback requêtes parallèles`
+          `⚠️ [UserCacheService] Route batch indisponible, fallback requêtes parallèles`,
         );
         const requests = userIds.map((id) => this._fetchFromAuthService(id));
         return await Promise.all(requests);
@@ -307,13 +307,13 @@ class UserCacheService {
   async warmCache(userId, userData) {
     try {
       await this.userCache.set(
-        this._buildCachePayload({ userId, ...userData })
+        this._buildCachePayload({ userId, ...userData }),
       );
       console.log(`🔥 [UserCacheService] Warmed ${userId}`);
     } catch (error) {
       console.warn(
         `⚠️ [UserCacheService] Erreur cache warming ${userId}:`,
-        error.message
+        error.message,
       );
     }
   }

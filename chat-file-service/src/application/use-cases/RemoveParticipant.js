@@ -105,27 +105,27 @@ class RemoveParticipant {
     // Sauvegarder
     const updated = await this.conversationRepository.save(conversation);
 
-    // ✅ PUBLIER DANS REDIS STREAMS events:conversations
+    // ✅ PUBLIER DANS LE STREAM REDIS POUR PARTICIPANT RETIRÉ
     if (this.resilientMessageService) {
       try {
-        await this.resilientMessageService.addToStream("events:conversations", {
-          event: "conversation.participant.removed",
-          conversationId: conversationId.toString(),
-          removedBy: removedBy,
-          participantId: participantId,
-          participantName: participantInfo?.name || "Utilisateur inconnu",
-          removedAt: new Date().toISOString(),
-          totalParticipants: conversation.participants.length.toString(),
-          timestamp: Date.now().toString(),
-        });
+        await this.resilientMessageService.publishConversationEvent(
+          "PARTICIPANT_REMOVED",
+          {
+            conversationId: conversationId.toString(),
+            participantId,
+            participantName: participantInfo?.name,
+            removedBy,
+          },
+        );
         console.log(
-          `📤 [conversation.participant.removed] publié dans events:conversations`,
+          `✅ Événement PARTICIPANT_REMOVED publié dans Redis stream pour: ${conversationId}`,
         );
-      } catch (streamErr) {
-        console.error(
-          "❌ Erreur publication stream participant.removed:",
-          streamErr.message,
+      } catch (streamError) {
+        console.warn(
+          "⚠️ Erreur publication stream PARTICIPANT_REMOVED:",
+          streamError.message,
         );
+        // Ne pas bloquer la suppression si la publication stream échoue
       }
     }
 
@@ -155,30 +155,6 @@ class RemoveParticipant {
         });
       } catch (err) {
         console.warn("⚠️ Erreur publication notification:", err.message);
-      }
-    }
-
-    // ✅ PUBLIER DANS LE STREAM REDIS POUR PARTICIPANT RETIRÉ
-    if (this.resilientMessageService) {
-      try {
-        await this.resilientMessageService.publishConversationEvent(
-          "PARTICIPANT_REMOVED",
-          {
-            conversationId: conversationId.toString(),
-            participantId,
-            participantName: participantInfo?.name,
-            removedBy,
-          },
-        );
-        console.log(
-          `✅ Événement PARTICIPANT_REMOVED publié dans Redis stream pour: ${conversationId}`,
-        );
-      } catch (streamError) {
-        console.warn(
-          "⚠️ Erreur publication stream PARTICIPANT_REMOVED:",
-          streamError.message,
-        );
-        // Ne pas bloquer la suppression si la publication stream échoue
       }
     }
 

@@ -12,7 +12,7 @@ const {
   CircuitBreaker,
   StreamManager,
   WorkerManager,
-} = require("@chatapp-ngomna/shared");
+} = require("../../../shared");
 
 class ResilientMessageService {
   constructor(
@@ -947,42 +947,253 @@ class ResilientMessageService {
    * ✅ PUBLIER UN STATUT DE MESSAGE
    */
   async publishMessageStatus(messageId, userId, status, timestamp = null) {
-    if (!this.redis) return null;
+    if (!this.redis) {
+      console.log(`❌ publishMessageStatus: Redis non disponible`);
+      return null;
+    }
 
     try {
+      const userIdStr = userId.toString();
+
+      console.log(`📋 [publishMessageStatus] DÉBUT:`, {
+        messageId: messageId?.toString(),
+        userId: userIdStr,
+        status,
+        timestamp: timestamp?.toISOString(),
+      });
+
+      // ✅ VÉRIFIER SI L'UTILISATEUR EST CONNECTÉ
+      const isUserOnline =
+        this.messageDeliveryService &&
+        this.messageDeliveryService.userSockets &&
+        this.messageDeliveryService.userSockets.has(userIdStr);
+
+      console.log(`🔍 Vérification online status:`, {
+        messageDeliveryService: !!this.messageDeliveryService,
+        userSockets: !!this.messageDeliveryService?.userSockets,
+        userSocketsType: typeof this.messageDeliveryService?.userSockets,
+        userInSockets:
+          this.messageDeliveryService?.userSockets?.has?.(userIdStr),
+        isUserOnline,
+        userIdStr,
+      });
+
       // Choisir le stream approprié selon le statut
       let streamName;
+      let streamType;
       switch (status.toUpperCase()) {
         case "DELIVERED":
           streamName = this.MESSAGE_STREAMS.STATUS.DELIVERED;
+          streamType = "statusDelivered";
           break;
         case "READ":
           streamName = this.MESSAGE_STREAMS.STATUS.READ;
+          streamType = "statusRead";
           break;
         case "EDITED":
           streamName = this.MESSAGE_STREAMS.STATUS.EDITED;
+          streamType = "statusEdited";
           break;
         case "DELETED":
           streamName = this.MESSAGE_STREAMS.STATUS.DELETED;
+          streamType = "statusDeleted";
           break;
         default:
           console.warn(
             `⚠️ Statut inconnu: ${status}, utilisation DELIVERED par défaut`,
           );
           streamName = this.MESSAGE_STREAMS.STATUS.DELIVERED;
+          streamType = "statusDelivered";
       }
 
-      const streamId = await this.addToStream(streamName, {
-        messageId: messageId.toString(),
-        userId: userId.toString(),
-        status: status,
-        timestamp: (timestamp || new Date()).toISOString(),
+      console.log(`📍 Stream selection:`, {
+        status,
+        streamName,
+        streamType,
+        streamNameExists: !!streamName,
       });
 
-      console.log(`📊 Message status publié: ${streamId} (${status})`);
-      return streamId;
+      const eventData = {
+        messageId: messageId.toString(),
+        userId: userIdStr,
+        status: status,
+        timestamp: (timestamp || new Date()).toISOString(),
+      };
+
+      console.log(`📊 Event data:`, eventData);
+
+      // ✅ SI L'UTILISATEUR EST ONLINE
+      if (isUserOnline) {
+        console.log(
+          `✅ [ONLINE] Utilisateur ${userIdStr} connecté → publication immédiate dans ${streamType}`,
+        );
+        try {
+          const streamId = await this.addToStream(streamName, eventData);
+          console.log(
+            `✅ [PUBLISHED] Message status publié: ${streamId} (${status}) dans ${streamName}`,
+            { streamId, status, streamName, eventData },
+          );
+          return streamId;
+        } catch (addErr) {
+          console.error(
+            `❌ [STREAM ERROR] Erreur lors de l'ajout au stream ${streamName}:`,
+            addErr.message,
+          );
+          throw addErr;
+        }
+      } else {
+        // ✅ SI L'UTILISATEUR EST OFFLINE
+        console.log(
+          `⏳ [OFFLINE] Utilisateur ${userIdStr} déconnecté → mise en attente pour ${streamType}`,
+        );
+
+        // ✅ AJOUTER EN FILE D'ATTENTE DE MISE EN ATTENTE (pending:messages:userId:streamType)
+        const pendingKey = `pending:messages:${userIdStr}:${streamType}`;
+        console.log(`📤 Ajout à pending queue: ${pendingKey}`, { eventData });
+
+        try {
+          const pendingId = await this.redis.xAdd(
+            pendingKey,
+            "*",
+            "event",
+            JSON.stringify(eventData),
+            "streamType",
+            streamType,
+            "addedAt",
+            new Date().toISOString(),
+          );
+
+          console.log(
+            `✅ [PENDING] Événement ${status} mis en attente pour ${userIdStr}: ${pendingId}`,
+            { pendingKey, pendingId, streamType },
+          );
+
+          // ✅ DÉFINIR TTL DE 24H POUR L'ATTENTE
+          await this.redis.expire(pendingKey, 86400);
+          console.log(`⏰ TTL défini pour ${pendingKey}: 86400s`);
+
+          return pendingId;
+        } catch (pendingErr) {
+          console.error(
+            `❌ [PENDING ERROR] Erreur lors de l'ajout à la queue pending ${pendingKey}:`,
+            pendingErr.message,
+          );
+          throw pendingErr;
+        }
+      }
     } catch (error) {
-      console.error("❌ Erreur publication message status:", error.message);
+      console.error(
+        "❌ [publishMessageStatus] Erreur publication message status:",
+        error.message,
+      );
+      console.error("Stack trace:", error.stack);
+      return null;
+    }
+  }
+
+  /**
+   * ✅ PUBLIER UN STATUT BULK (plusieurs messages)
+   */
+  async publishBulkMessageStatus(conversationId, userId, status, messageCount) {
+    if (!this.redis) {
+      console.log(`❌ publishBulkMessageStatus: Redis non disponible`);
+      return null;
+    }
+
+    try {
+      const userIdStr = userId.toString();
+
+      console.log(`📦 [publishBulkMessageStatus] DÉBUT:`, {
+        conversationId: conversationId?.toString(),
+        userId: userIdStr,
+        status,
+        messageCount,
+      });
+
+      // ✅ VÉRIFIER SI L'UTILISATEUR EST CONNECTÉ
+      const isUserOnline =
+        this.messageDeliveryService &&
+        this.messageDeliveryService.userSockets &&
+        this.messageDeliveryService.userSockets.has(userIdStr);
+
+      console.log(
+        `🔍 [BULK] Vérification online status: ${isUserOnline} (${userIdStr})`,
+      );
+
+      // Choisir le stream approprié selon le statut
+      let streamName;
+      let streamType;
+      switch (status.toUpperCase()) {
+        case "DELIVERED":
+          streamName = this.MESSAGE_STREAMS.STATUS.DELIVERED;
+          streamType = "statusDelivered";
+          break;
+        case "READ":
+          streamName = this.MESSAGE_STREAMS.STATUS.READ;
+          streamType = "statusRead";
+          break;
+        default:
+          streamName = this.MESSAGE_STREAMS.STATUS.DELIVERED;
+          streamType = "statusDelivered";
+      }
+
+      console.log(`📍 [BULK] Stream selection: ${streamName}`);
+
+      const data = {
+        conversationId: conversationId.toString(),
+        userId: userIdStr,
+        status: status.toUpperCase(),
+        messageCount: messageCount.toString(),
+        isBulk: "true",
+        timestamp: new Date().toISOString(),
+        publishedAt: Date.now().toString(),
+      };
+
+      // ✅ SI L'UTILISATEUR EST ONLINE
+      if (isUserOnline) {
+        console.log(
+          `📡 [BULK] Utilisateur ${userIdStr} ONLINE → publication directe vers ${streamName}`,
+        );
+
+        try {
+          const streamId = await this.addToStream(streamName, data);
+          console.log(`✅ [BULK-ONLINE] Événement bulk publié: ${streamId}`);
+          return streamId;
+        } catch (addErr) {
+          console.error(`❌ [BULK] Erreur addToStream: ${addErr.message}`);
+          throw addErr;
+        }
+      } else {
+        // ✅ SI L'UTILISATEUR EST OFFLINE
+        console.log(
+          `⏳ [BULK-OFFLINE] Utilisateur ${userIdStr} déconnecté → mise en attente pour ${streamType}`,
+        );
+
+        const pendingKey = `pending:messages:${userIdStr}:${streamType}`;
+        console.log(`📥 Ajout à queue de mise en attente: ${pendingKey}`);
+
+        try {
+          // ✅ UTILISER XADD POUR LA QUEUE DE MISE EN ATTENTE (Redis STREAM)
+          const pendingId = await this.addToStream(
+            pendingKey,
+            data,
+            true,
+            86400,
+          );
+          console.log(
+            `✅ [BULK-OFFLINE] Événement bulk en attente: ${pendingId}`,
+          );
+          return pendingId;
+        } catch (queueErr) {
+          console.error(
+            `❌ [BULK] Erreur mise en attente: ${queueErr.message}`,
+          );
+          throw queueErr;
+        }
+      }
+    } catch (error) {
+      console.error("❌ Erreur publication bulk:", error.message);
+      console.error("Stack trace:", error.stack);
       return null;
     }
   }

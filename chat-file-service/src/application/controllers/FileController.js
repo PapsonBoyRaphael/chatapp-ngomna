@@ -1,6 +1,7 @@
 const path = require("path");
 const fs = require("fs").promises;
 const multer = require("multer");
+const { v4: uuidv4 } = require("uuid");
 const UploadFile = require("../../application/use-cases/UploadFile");
 const DownloadFile = require("../use-cases/DownloadFile");
 const upload = multer({ dest: "uploads/" });
@@ -13,7 +14,7 @@ class FileController {
     fileStorageService = null,
     downloadFileUseCase = null,
     mediaProcessingService = null,
-    searchOccurrencesUseCase = null
+    searchOccurrencesUseCase = null,
   ) {
     this.uploadFileUseCase = uploadFileUseCase;
     this.getFileUseCase = getFileUseCase;
@@ -67,13 +68,18 @@ class FileController {
         });
       }
 
-      const remoteFileName = `${Date.now()}_${req.file.originalname}`;
+      // ✅ GÉNÉRER UUID POUR LE FICHIER (utilisé comme ID et fileName)
+      const fileId = uuidv4().replace(/-/g, "");
+      const ext = path.extname(req.file.originalname) || ".bin";
+      const safeFileName = `${fileId}${ext.toLowerCase()}`;
+      console.log(`🆔 ID fichier généré (UUID): ${fileId}`);
+      console.log(`📝 Nom sécurisé généré: ${safeFileName}`);
 
-      // ✅ UPLOAD VERS LE STOCKAGE
+      // ✅ UPLOAD VERS LE STOCKAGE (utiliser le safeFileName)
       const remotePath = await this.fileStorageService.uploadFromBuffer(
         req.file.buffer,
-        remoteFileName,
-        req.file.mimetype
+        safeFileName,
+        req.file.mimetype,
       );
 
       // ✅ EXTRACTION DES MÉTADONNÉES AVEC LE SERVICE
@@ -82,13 +88,13 @@ class FileController {
         fileMetadata = await this.mediaProcessingService.processFile(
           req.file.buffer,
           req.file.originalname, // Correction: originalname au lieu de originalName
-          req.file.mimetype
+          req.file.mimetype,
         );
         console.log(`✅ Métadonnées extraites pour: ${req.file.originalname}`);
       } catch (metadataError) {
         console.warn(
           `⚠️ Erreur extraction métadonnées:`,
-          metadataError.message
+          metadataError.message,
         );
         // Continuer avec des métadonnées basiques même en cas d'erreur
         fileMetadata = {
@@ -96,7 +102,7 @@ class FileController {
             extension: path.extname(req.file.originalname).toLowerCase(),
             fileType: this.mediaProcessingService.getFileType(
               req.file.mimetype,
-              req.file.originalname
+              req.file.originalname,
             ),
             category: "other",
             encoding: "binary",
@@ -108,7 +114,7 @@ class FileController {
       // ✅ CONSTRUCTION COMPLÈTE DU FILEDATA AVEC MÉTADONNÉES
       const fileData = {
         originalName: req.file.originalname,
-        fileName: remoteFileName,
+        fileName: safeFileName, // ✅ Utiliser le nom sécurisé généré (UUID + extension)
         path: remotePath,
         size: req.file.size,
         mimeType: req.file.mimetype,
@@ -116,7 +122,7 @@ class FileController {
         conversationId: req.body.conversationId
           ? String(req.body.conversationId)
           : null,
-        url: remotePath,
+        url: remotePath, // ✅ Utiliser le même chemin pour l'URL
         status: "UPLOADING",
         metadata: {
           technical: {
@@ -233,7 +239,7 @@ class FileController {
         } catch (cleanupError) {
           console.warn(
             "⚠️ Erreur nettoyage après erreur:",
-            cleanupError.message
+            cleanupError.message,
           );
         }
       }
@@ -330,7 +336,7 @@ class FileController {
           limit: parseInt(limit),
           type,
           conversationId,
-        }
+        },
       );
 
       // ✅ ENRICHIR LES FICHIERS AVEC DES INFORMATIONS DE FORMATAGE
@@ -379,7 +385,7 @@ class FileController {
             page: parseInt(page),
             limit: parseInt(limit),
             type,
-          }
+          },
         );
 
       // ✅ ENRICHIR LES FICHIERS
@@ -461,7 +467,7 @@ class FileController {
 
       const result = await this.downloadFileUseCase.executeSingle(
         fileId,
-        String(userId)
+        String(userId),
       );
 
       if (result.downloadUrl) {
@@ -471,7 +477,7 @@ class FileController {
         // Mode actuel : streamer le fichier
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="${result.file.originalName || result.file.fileName}"`
+          `attachment; filename="${result.file.originalName || result.file.fileName}"`,
         );
         res.setHeader("Content-Type", result.file.mimeType);
         res.setHeader("Content-Length", result.file.size);
@@ -520,7 +526,7 @@ class FileController {
 
       res.setHeader(
         "Content-Disposition",
-        `attachment; filename="fichiers_${Date.now()}.zip"`
+        `attachment; filename="fichiers_${Date.now()}.zip"`,
       );
       res.setHeader("Content-Type", "application/zip");
 
@@ -605,14 +611,14 @@ class FileController {
     }
 
     const thumbnailUrl = file.metadata.processing.thumbnails.find(
-      (t) => t.size === size
+      (t) => t.size === size,
     )?.url;
     if (!thumbnailUrl) throw new Error("Taille thumbnail invalide");
 
     // Stream le thumbnail
     const thumbnailStream = await this.fileStorageService.download(
       null,
-      thumbnailUrl
+      thumbnailUrl,
     );
     res.setHeader("Content-Type", "image/webp");
     thumbnailStream.pipe(res);

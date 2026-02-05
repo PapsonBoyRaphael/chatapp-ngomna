@@ -547,9 +547,19 @@ class MessageDeliveryService {
           senderId: message.senderId,
           conversationId: message.conversationId,
         }),
-        ...(!["conversationCreated", "private", "group", "channel"].includes(
-          streamType,
-        ) && {
+        ...(streamType === "files" && {
+          fileId: message.fileId,
+          userId: message.userId,
+          fileName: message.fileName,
+          fileSize: message.fileSize,
+        }),
+        ...(![
+          "conversationCreated",
+          "private",
+          "group",
+          "channel",
+          "files",
+        ].includes(streamType) && {
           messageId: message.messageId,
           senderId: message.senderId,
           receiverId: message.receiverId,
@@ -1169,14 +1179,35 @@ class MessageDeliveryService {
         return;
       }
 
+      // ✅ GÉRER DEUX TYPES D'ÉVÉNEMENTS: individuels (messageId) ou en masse (isBulk)
+      const eventData =
+        message.isBulk === "true" || message.isBulk === true
+          ? {
+              // Événement en masse
+              isBulk: true,
+              conversationId: message.conversationId,
+              userId: message.userId,
+              status: message.status,
+              messageCount: parseInt(message.messageCount) || 0,
+              timestamp: message.timestamp,
+            }
+          : {
+              // Événement individuel
+              messageId: message.messageId,
+              userId: message.userId,
+              status: message.status,
+              timestamp: message.timestamp,
+            };
+
       for (const socketId of socketIds) {
         const socket = this.io.sockets.sockets.get(socketId);
         if (socket) {
-          socket.emit("message:status", {
-            messageId: message.messageId,
-            userId: message.userId,
-            status: message.status,
-            timestamp: message.timestamp,
+          socket.emit("message:status", eventData);
+          console.log(`✅ Statut livré via Socket.IO:`, {
+            socketId,
+            isBulk: eventData.isBulk || false,
+            messageId: eventData.messageId || "N/A",
+            conversationId: eventData.conversationId || "N/A",
           });
         }
       }
@@ -1789,19 +1820,18 @@ class MessageDeliveryService {
         `📡 Phase 1 activée pour ${userIdStr}: ${phases.PHASE_1.join(", ")}`,
       );
 
-      // Phase 2 : Délai de 1 seconde
+      // Phase 2 : Délai de 100ms (group, channel)
       setTimeout(() => {
         if (this.userSockets.has(userIdStr)) {
-          // Vérifier que l'utilisateur est toujours connecté
           this.activateUserStreams(userIdStr, phases.PHASE_2);
           console.log(
             `📡 Phase 2 activée pour ${userIdStr}: ${phases.PHASE_2.join(", ")}`,
           );
           this.deliverPendingEventsForStreamTypes(userIdStr, phases.PHASE_2);
         }
-      }, 1000);
+      }, 100);
 
-      // Phase 3 : Délai de 3 secondes
+      // Phase 3 : Délai de 300ms (conversations, notifications)
       setTimeout(() => {
         if (this.userSockets.has(userIdStr)) {
           this.activateUserStreams(userIdStr, phases.PHASE_3);
@@ -1810,9 +1840,9 @@ class MessageDeliveryService {
           );
           this.deliverPendingEventsForStreamTypes(userIdStr, phases.PHASE_3);
         }
-      }, 3000);
+      }, 300);
 
-      // Phase 4 : Délai de 10 secondes
+      // Phase 4 : Délai de 800ms (files, reactions, replies)
       setTimeout(() => {
         if (this.userSockets.has(userIdStr)) {
           this.activateUserStreams(userIdStr, phases.PHASE_4);
@@ -1821,9 +1851,9 @@ class MessageDeliveryService {
           );
           this.deliverPendingEventsForStreamTypes(userIdStr, phases.PHASE_4);
         }
-      }, 10000);
+      }, 800);
 
-      // Phase 5 : Background (30 secondes)
+      // Phase 5 : Background (1.5 secondes - analytics)
       setTimeout(() => {
         if (this.userSockets.has(userIdStr)) {
           this.activateUserStreams(userIdStr, phases.PHASE_5);
@@ -1832,7 +1862,7 @@ class MessageDeliveryService {
           );
           this.deliverPendingEventsForStreamTypes(userIdStr, phases.PHASE_5);
         }
-      }, 30000);
+      }, 1500);
     } catch (error) {
       console.error(`❌ Erreur abonnement progressif pour ${userId}:`, error);
     }
@@ -1989,6 +2019,11 @@ class MessageDeliveryService {
         participantAdded: "participantAdded",
         participantRemoved: "participantRemoved",
         conversationDeleted: "conversationDeleted",
+        // ✅ AJOUTER LES STATUTS (NOUVELLES CLÉS EN ATTENTE DEPUIS ResilientMessageService)
+        statusDelivered: "statusDelivered",
+        statusRead: "statusRead",
+        statusEdited: "statusEdited",
+        statusDeleted: "statusDeleted",
       };
 
       const eventTypes = new Set();
@@ -2002,10 +2037,15 @@ class MessageDeliveryService {
       let deliveredCount = 0;
 
       for (const eventType of eventTypes) {
-        const pendingKey = `pending:${eventType}:${userIdStr}`;
+        // ✅ GÉRER LES DEUX FORMATS D'ATTENTE
+        // Format ancien: pending:message:userId (Redis LIST)
+        // Format nouveau: pending:messages:userId:streamType (Redis STREAM)
+        const oldPendingKey = `pending:${eventType}:${userIdStr}`;
+        const newPendingKey = `pending:messages:${userIdStr}:${eventType}`;
 
+        // ✅ TRAITER LES ANCIENNES CLÉS (Redis LIST)
         try {
-          const pendingEvents = await this.redis.lRange(pendingKey, 0, -1);
+          const pendingEvents = await this.redis.lRange(oldPendingKey, 0, -1);
 
           console.log(
             `📨 ${pendingEvents.length} événement(s) ${eventType} en attente trouvé(s) pour ${userIdStr}`,
@@ -2028,7 +2068,7 @@ class MessageDeliveryService {
               await this.deliverPendingEvent(event, userIdStr);
 
               // ✅ SUPPRIMER DE LA LISTE D'ATTENTE
-              await this.redis.lRem(pendingKey, 1, eventJson);
+              await this.redis.lRem(oldPendingKey, 1, eventJson);
 
               deliveredCount++;
               console.log(
@@ -2043,7 +2083,81 @@ class MessageDeliveryService {
           }
         } catch (pendingError) {
           console.warn(
-            `⚠️ Erreur récupération événements ${eventType} en attente:`,
+            `⚠️ Erreur récupération événements ${eventType} en attente (old format):`,
+            pendingError.message,
+          );
+        }
+
+        // ✅ TRAITER LES NOUVELLES CLÉS (Redis STREAM - depuis ResilientMessageService)
+        try {
+          const pendingStreamId = await this.redis.xRange(
+            newPendingKey,
+            "-",
+            "+",
+            "COUNT",
+            100,
+          );
+
+          console.log(
+            `📨 ${pendingStreamId.length} événement(s) ${eventType} en attente trouvé(s) pour ${userIdStr} (new format)`,
+          );
+
+          for (const entry of pendingStreamId) {
+            try {
+              // ✅ GÉRER LE FORMAT node-redis v4: entry est un objet {id, message: {...}}
+              const id = entry.id;
+              const fields = entry.message || entry;
+
+              // ✅ RÉCUPÉRER LES DONNÉES DE L'ÉVÉNEMENT
+              let event;
+              if (fields.event) {
+                // Si "event" est une clé stockée dans le stream
+                event =
+                  typeof fields.event === "string"
+                    ? JSON.parse(fields.event)
+                    : fields.event;
+              } else {
+                // Sinon, utiliser tous les champs comme événement
+                event = fields;
+              }
+
+              console.log(`📤 Livraison événement ${eventType} en attente:`, {
+                isBulk: event.isBulk,
+                messageCount: event.messageCount,
+                conversationId: event.conversationId,
+              });
+
+              // ✅ PUBLIER DIRECTEMENT DANS LE STREAM APPROPRIÉ
+              if (
+                eventType === "statusDelivered" ||
+                eventType === "statusRead" ||
+                eventType === "statusEdited" ||
+                eventType === "statusDeleted"
+              ) {
+                // ✅ LIVRER LE STATUT DE MESSAGE
+                await this.deliverMessageStatus(event, userIdStr);
+              } else {
+                // ✅ AUTRES TYPES D'ÉVÉNEMENTS
+                await this.deliverPendingEvent(event, userIdStr);
+              }
+
+              // ✅ SUPPRIMER DE LA STREAM D'ATTENTE
+              await this.redis.xDel(newPendingKey, id);
+
+              deliveredCount++;
+              console.log(
+                `✅ Événement ${eventType} (new format) en attente livré et supprimé`,
+              );
+            } catch (error) {
+              console.error(
+                `❌ Erreur traitement événement ${eventType} (new format) en attente:`,
+                error.message,
+              );
+            }
+          }
+        } catch (pendingError) {
+          console.warn(
+            `⚠️ Erreur récupération événements ${eventType} en attente (new format):`,
             pendingError.message,
           );
         }

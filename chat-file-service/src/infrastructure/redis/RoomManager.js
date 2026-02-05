@@ -4,7 +4,7 @@
  * ✅ Signature compatible avec l'utilisation locale (redis en param)
  */
 
-const { RoomManager: SharedRoomManager } = require("@chatapp-ngomna/shared");
+const { RoomManager: SharedRoomManager } = require("../../../shared");
 
 class RoomManager {
   constructor(redis, io = null) {

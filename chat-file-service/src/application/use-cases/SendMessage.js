@@ -306,10 +306,13 @@ class SendMessage {
       // ✅ ÉTAPE 4 : METTRE À JOUR LA CONVERSATION
       try {
         await this.conversationRepository.updateLastMessage(conversationId, {
+          _id: savedMessage._id || savedMessage.id,
           content: message.content,
+          type: message.type,
           timestamp: message.timestamp,
           senderId: message.senderId,
           messageId: savedMessage._id || savedMessage.id,
+          fileId: message.fileId,
         });
         console.log(`🔄 Conversation mise à jour: ${conversationId}`);
       } catch (updateError) {

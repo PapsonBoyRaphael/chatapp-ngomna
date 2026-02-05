@@ -31,7 +31,7 @@ const AuthController = require("./interfaces/http/controllers/AuthController");
 // Routes
 const createUserRoutes = require("./interfaces/http/routes/userRoutes");
 const createAuthRoutes = require("./interfaces/http/routes/authRoutes");
-const shared = require("@chatapp-ngomna/shared");
+const shared = require("../shared");
 
 // ✅ SHARED MODULE - Cache utilisateur partagé
 let UserCache, UserStreamConsumer, RedisManager;

@@ -5,7 +5,7 @@
  * ✅ Utilise les fonctionnalités avancées du shared
  */
 
-const { CacheService: SharedCacheService } = require("@chatapp-ngomna/shared");
+const { CacheService: SharedCacheService } = require("../../../shared");
 
 class CacheService {
   constructor(redisClient, options = {}) {
@@ -35,7 +35,11 @@ class CacheService {
 
   async cacheLastMessages(conversationId, messages, ttl) {
     if (this._cacheService.cacheLastMessages) {
-      return await this._cacheService.cacheLastMessages(conversationId, messages, ttl);
+      return await this._cacheService.cacheLastMessages(
+        conversationId,
+        messages,
+        ttl,
+      );
     }
     // Fallback : mettre en cache manuellement
     return await this.set(`lastMessages:${conversationId}`, messages, ttl);

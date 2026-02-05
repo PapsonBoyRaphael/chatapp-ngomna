@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { UserCache } = require("@chatapp-ngomna/shared");
+const { UserCache } = require("../../../shared");
 
 /**
  * SmartCachePrewarmer - Système de pré-chauffage intelligent du cache utilisateur
@@ -48,7 +48,7 @@ class SmartCachePrewarmer {
     this.stats.startTime = Date.now();
 
     console.log(
-      "🔥 [SmartCachePrewarmer] Démarrage du pré-chauffage intelligent..."
+      "🔥 [SmartCachePrewarmer] Démarrage du pré-chauffage intelligent...",
     );
 
     try {
@@ -61,7 +61,7 @@ class SmartCachePrewarmer {
       }
 
       console.log(
-        `📊 [SmartCachePrewarmer] ${allUsers.length} utilisateurs à mettre en cache`
+        `📊 [SmartCachePrewarmer] ${allUsers.length} utilisateurs à mettre en cache`,
       );
 
       // Étape 2: Traitement par batch
@@ -96,7 +96,7 @@ class SmartCachePrewarmer {
   async _getAllUsersFromAuthService() {
     try {
       console.log(
-        `🔍 [SmartCachePrewarmer] Récupération de tous les utilisateurs depuis ${this.authServiceUrl}/all`
+        `🔍 [SmartCachePrewarmer] Récupération de tous les utilisateurs depuis ${this.authServiceUrl}/all`,
       );
 
       const response = await axios.get(`${this.authServiceUrl}/all`, {
@@ -110,14 +110,14 @@ class SmartCachePrewarmer {
       } else {
         console.warn(
           "⚠️ [SmartCachePrewarmer] Format de réponse inattendu:",
-          typeof response.data
+          typeof response.data,
         );
         return [];
       }
     } catch (error) {
       console.error(
         "❌ [SmartCachePrewarmer] Erreur récupération users:",
-        error.message
+        error.message,
       );
       return [];
     }
@@ -135,7 +135,7 @@ class SmartCachePrewarmer {
       const batchNumber = Math.floor(i / this.batchSize) + 1;
 
       console.log(
-        `📦 [SmartCachePrewarmer] Batch ${batchNumber}/${totalBatches} (${batch.length} users)`
+        `📦 [SmartCachePrewarmer] Batch ${batchNumber}/${totalBatches} (${batch.length} users)`,
       );
 
       await this._cacheBatch(batch);
@@ -153,7 +153,7 @@ class SmartCachePrewarmer {
    */
   async _cacheBatch(users) {
     console.log(
-      `📊 [SmartCachePrewarmer] Mise en cache de ${users.length} utilisateurs`
+      `📊 [SmartCachePrewarmer] Mise en cache de ${users.length} utilisateurs`,
     );
 
     for (const user of users) {
@@ -161,7 +161,7 @@ class SmartCachePrewarmer {
         if (!user.id) {
           console.warn(
             `⚠️ [SmartCachePrewarmer] Utilisateur sans ID:`,
-            user.matricule
+            user.matricule,
           );
           this.stats.errors++;
           continue;
@@ -185,7 +185,7 @@ class SmartCachePrewarmer {
       } catch (cacheError) {
         console.error(
           `❌ [SmartCachePrewarmer] Erreur cache user ${user.id}:`,
-          cacheError.message
+          cacheError.message,
         );
         this.stats.errors++;
       }

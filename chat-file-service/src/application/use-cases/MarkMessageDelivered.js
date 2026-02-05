@@ -92,8 +92,24 @@ class MarkMessageDelivered {
       // ✅ PUBLIER DANS REDIS STREAMS - STATUT DELIVERED
       if (this.resilientMessageService && result && result.modifiedCount > 0) {
         try {
+          console.log(
+            `🔍 MarkMessageDelivered - Vérifications avant publication:`,
+            {
+              resilientMessageService: !!this.resilientMessageService,
+              result: !!result,
+              modifiedCount: result?.modifiedCount || 0,
+              messageId,
+              messageIds: messageIds?.length || 0,
+              conversationId,
+              userId,
+            },
+          );
+
           // Pour les messages individuels, publier un événement par message
           if (messageId) {
+            console.log(
+              `📤 MarkMessageDelivered: Publication pour messageId ${messageId}`,
+            );
             await this.resilientMessageService.publishMessageStatus(
               messageId,
               userId,
@@ -101,7 +117,11 @@ class MarkMessageDelivered {
             );
           } else if (messageIds && messageIds.length > 0) {
             // Pour les messages spécifiques
+            console.log(
+              `📤 MarkMessageDelivered: Publication pour ${messageIds.length} messages spécifiques`,
+            );
             for (const msgId of messageIds) {
+              console.log(`  - Publication pour messageId: ${msgId}`);
               await this.resilientMessageService.publishMessageStatus(
                 msgId,
                 userId,
@@ -109,19 +129,42 @@ class MarkMessageDelivered {
               );
             }
           } else {
-            // Pour tous les messages d'une conversation, on ne publie pas d'événements individuels
+            // Pour tous les messages d'une conversation, publier un événement en masse
             console.log(
-              "ℹ️ DELIVERED en masse - pas d'événements individuels publiés",
+              "ℹ️ DELIVERED en masse - publication d'un événement agrégé",
             );
+            try {
+              console.log(
+                `📡 Appel publishBulkMessageStatus pour conversation: ${conversationId}, userId: ${userId}, count: ${result?.modifiedCount || 0}`,
+              );
+              await this.resilientMessageService.publishBulkMessageStatus(
+                conversationId,
+                userId,
+                "DELIVERED",
+                result?.modifiedCount || 0,
+              );
+              console.log(`✅ Événement en masse publié avec succès`);
+            } catch (bulkErr) {
+              console.error(
+                `❌ Erreur publication bulk DELIVERED: ${bulkErr.message}`,
+              );
+            }
           }
 
-          console.log(`📤 [DELIVERED] événements publiés`);
+          console.log(`✅ [DELIVERED] événements publiés COMPLÉTÉ`);
         } catch (streamErr) {
           console.error(
             "❌ Erreur publication statuts DELIVERED:",
             streamErr.message,
           );
+          console.error("Stack trace:", streamErr.stack);
         }
+      } else {
+        console.log(`⚠️ Pas de publication DELIVERED:`, {
+          hasResilientMessageService: !!this.resilientMessageService,
+          hasResult: !!result,
+          modifiedCount: result?.modifiedCount || 0,
+        });
       }
 
       return result;

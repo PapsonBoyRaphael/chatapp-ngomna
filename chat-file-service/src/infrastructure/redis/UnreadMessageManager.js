@@ -4,7 +4,9 @@
  * ✅ Signature compatible avec l'utilisation locale
  */
 
-const { UnreadMessageManager: SharedUnreadMessageManager } = require("@chatapp-ngomna/shared");
+const {
+  UnreadMessageManager: SharedUnreadMessageManager,
+} = require("../../../shared");
 
 class UnreadMessageManager {
   constructor(redis, io = null) {

@@ -98,7 +98,7 @@ function setupSocketEvents() {
     if (reconnectAttempts < CONFIG.RECONNECT_ATTEMPTS) {
       log(
         `🔄 Tentative de reconnexion ${reconnectAttempts}/${CONFIG.RECONNECT_ATTEMPTS}`,
-        "info"
+        "info",
       );
     }
   });
@@ -121,7 +121,7 @@ function setupSocketEvents() {
     };
     updateAuthStatus(
       `✅ Authentifié: ${data.matricule} (${data.userId})`,
-      "success"
+      "success",
     );
   });
 
@@ -131,7 +131,7 @@ function setupSocketEvents() {
     currentUser = null;
     updateAuthStatus(
       `❌ Erreur: ${data.message} (Code: ${data.code})`,
-      "error"
+      "error",
     );
   });
 
@@ -340,7 +340,7 @@ function setupSocketEvents() {
         log(
           `📥 Événement reçu: ${event}`,
           "info",
-          args.length > 0 ? args[0] : null
+          args.length > 0 ? args[0] : null,
         );
       }
       callback(...args);
@@ -996,7 +996,7 @@ function log(message, type = "info", data = null) {
     logContent += `<span class="log-data">${JSON.stringify(
       data,
       null,
-      2
+      2,
     )}</span>`;
   }
 
@@ -1068,7 +1068,7 @@ function validateMessageData() {
   // ✅ POUR UNE NOUVELLE CONVERSATION, RECEIVER ID EST REQUIS
   if (conversationId && conversationId.length === 24 && !receiverId) {
     messages.push(
-      "❌ Pour une nouvelle conversation, l'ID destinataire est requis"
+      "❌ Pour une nouvelle conversation, l'ID destinataire est requis",
     );
     isValid = false;
   }
@@ -1108,7 +1108,7 @@ function generateTestIds() {
     receiverId.value = defaultReceiverId;
     conversationId.value = `conv_${Math.min(
       userId,
-      defaultReceiverId
+      defaultReceiverId,
     )}_${Math.max(userId, defaultReceiverId)}_${timestamp}`;
 
     log("🔧 IDs de test générés automatiquement", "info", {
@@ -1126,7 +1126,7 @@ function generateTestIds() {
     receiverId.value = randomUserId2.toString();
     conversationId.value = `conv_${Math.min(
       randomUserId1,
-      randomUserId2
+      randomUserId2,
     )}_${Math.max(randomUserId1, randomUserId2)}_${timestamp}`;
 
     log("🔧 IDs aléatoires générés", "info", {
@@ -1284,7 +1284,7 @@ function createMessageHTML(message) {
           ? `<div class="message-data">${JSON.stringify(
               message.originalData,
               null,
-              2
+              2,
             )}</div>`
           : ""
       }
@@ -1350,9 +1350,8 @@ function toggleAutoScroll() {
 }
 
 function updateMessageStats() {
-  document.getElementById(
-    "messageCount"
-  ).textContent = `${messageCount} messages`;
+  document.getElementById("messageCount").textContent =
+    `${messageCount} messages`;
 }
 
 // ========================================
@@ -1387,11 +1386,11 @@ function updateOnlineUsersDisplay() {
       <div class="user-info">
         <div class="user-name">${escapeHtml(user.matricule)}</div>
         <div class="user-status">En ligne depuis ${formatRelativeTime(
-          user.connectedAt
+          user.connectedAt,
         )}</div>
       </div>
     </div>
-  `
+  `,
     )
     .join("");
 
@@ -1438,7 +1437,7 @@ function updateTypingDisplay() {
         <div class="typing-conversation">dans ${user.conversationId}</div>
       </div>
     </div>
-  `
+  `,
     )
     .join("");
 
@@ -1476,7 +1475,7 @@ function getLastMessageId() {
       msg.type === "message" &&
       msg.title === "✅ Message Envoyé" &&
       msg.originalData &&
-      msg.originalData.messageId
+      msg.originalData.messageId,
   );
 
   if (lastMessage) {
@@ -1672,7 +1671,7 @@ async function fetchMyFiles() {
       log(
         `✅ ${data.data.files.length} fichiers récupérés`,
         "success",
-        data.data.files
+        data.data.files,
       );
     } else {
       statusDiv.innerHTML = `
@@ -1709,16 +1708,16 @@ function formatFileSize(bytes) {
 // ✅ AJOUTER CES FONCTIONS POUR LES ACTIONS SUR LES FICHIERS
 async function downloadFile(fileId) {
   try {
-    const token = getCookie("token");
+    // const token = getCookie("token");
 
-    if (!token) {
-      log("❌ Token manquant. Authentifiez-vous d'abord", "error");
-      return;
-    }
+    // if (!token) {
+    //   log("❌ Token manquant. Authentifiez-vous d'abord", "error");
+    //   return;
+    // }
 
-    const headers = {
-      Authorization: `Bearer ${token}`,
-    };
+    // const headers = {
+    //   Authorization: `Bearer ${token}`,
+    // };
 
     const res = await fetch(`/files/${fileId}`, {
       method: "GET",
@@ -1760,10 +1759,10 @@ let currentConversationTab = "all";
 
 function getConversations() {
   const page = parseInt(
-    document.getElementById("conversationsPage")?.value || 1
+    document.getElementById("conversationsPage")?.value || 1,
   );
   const limit = parseInt(
-    document.getElementById("conversationsLimit")?.value || 20
+    document.getElementById("conversationsLimit")?.value || 20,
   );
 
   log(`📥 Récupération conversations (page ${page}, limit ${limit})`, "info");
@@ -1773,7 +1772,7 @@ function getConversations() {
 
 function getConversationsQuickload() {
   const limit = parseInt(
-    document.getElementById("conversationsLimit")?.value || 10
+    document.getElementById("conversationsLimit")?.value || 10,
   );
 
   log(`⚡ Quick Load conversations (limit ${limit})`, "info");
@@ -1783,10 +1782,10 @@ function getConversationsQuickload() {
 
 function getConversationsFullload() {
   const page = parseInt(
-    document.getElementById("conversationsPage")?.value || 1
+    document.getElementById("conversationsPage")?.value || 1,
   );
   const limit = parseInt(
-    document.getElementById("conversationsLimit")?.value || 50
+    document.getElementById("conversationsLimit")?.value || 50,
   );
 
   log(`📚 Full Load conversations (page ${page}, limit ${limit})`, "info");
@@ -1882,8 +1881,8 @@ function displayConversationsStats(stats, pagination) {
           ? `
         <div class="stat-card">
           <div class="stat-value">${pagination.currentPage || 1} / ${
-              pagination.totalPages || 1
-            }</div>
+            pagination.totalPages || 1
+          }</div>
           <div class="stat-label">📄 Page</div>
         </div>
       `
@@ -1952,7 +1951,7 @@ function displayConversationsList(tab) {
       <div class="conv-header">
         <span class="conv-type">${getConversationTypeIcon(conv.type)}</span>
         <strong class="conv-name">${escapeHtml(
-          conv.name || "Sans nom"
+          conv.name || "Sans nom",
         )}</strong>
         ${
           conv.unreadCount > 0
@@ -1971,10 +1970,10 @@ function displayConversationsList(tab) {
           ? `
         <div class="conv-last-message">
           <span class="last-msg-sender">${escapeHtml(
-            getSenderName(conv.lastMessage, conv.userMetadata)
+            getSenderName(conv.lastMessage, conv.userMetadata),
           )}:</span>
           <span class="last-msg-content">${escapeHtml(
-            (conv.lastMessage.content || "").substring(0, 50)
+            (conv.lastMessage.content || "").substring(0, 50),
           )}${conv.lastMessage.content?.length > 50 ? "..." : ""}</span>
         </div>
       `
@@ -1989,7 +1988,7 @@ function displayConversationsList(tab) {
         }')" class="btn-mini btn-success">➕ Rejoindre</button>
       </div>
     </div>
-  `
+  `,
     )
     .join("");
 }
@@ -2063,7 +2062,7 @@ function getSenderName(lastMessage, userMetadata) {
   // 2. Chercher dans userMetadata par senderId
   if (lastMessage.senderId && Array.isArray(userMetadata)) {
     const sender = userMetadata.find(
-      (meta) => meta.userId === lastMessage.senderId
+      (meta) => meta.userId === lastMessage.senderId,
     );
     if (sender && sender.name && sender.name !== "Utilisateur inconnu") {
       return sender.name;
@@ -2130,13 +2129,6 @@ async function handleFileUpload(e) {
     return;
   }
 
-  const token = getCookie("token");
-  if (!token) {
-    statusDiv.textContent = "❌ Token manquant. Authentifiez-vous d'abord";
-    statusDiv.className = "status error";
-    return;
-  }
-
   const file = fileInput.files[0];
   const conversationId = conversationIdInput.value.trim();
   const formData = new FormData();
@@ -2148,14 +2140,14 @@ async function handleFileUpload(e) {
 
   try {
     // ✅ AJOUTER LE TOKEN DANS LES HEADERS
-    const headers = {
-      Authorization: `Bearer ${token}`,
-    };
+    // const headers = {
+    //   Authorization: `Bearer ${token}`,
+    // };
 
     const res = await fetch("/files/upload", {
       method: "POST",
       body: formData,
-      headers: headers,
+      headers: { "user-id": "570479H" },
     });
 
     const data = await res.json();

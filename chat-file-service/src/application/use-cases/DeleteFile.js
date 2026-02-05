@@ -86,12 +86,13 @@ class DeleteFile {
       try {
         await this.resilientMessageService.addToStream("events:files", {
           event: "file.deleted",
+          userId: userId, // ✅ REQUIS : l'utilisateur qui a supprimé le fichier
           fileId: fileInfo.fileId,
+          fileName: fileInfo.fileName,
+          fileSize: fileInfo.size.toString(),
           conversationId: fileInfo.conversationId || "unknown",
-          deleterId: userId,
           originalName: fileInfo.originalName,
           mimeType: fileInfo.mimeType,
-          size: fileInfo.size.toString(),
           deletedAt: new Date().toISOString(),
           physicalDelete: physicalDelete.toString(),
           timestamp: Date.now().toString(),

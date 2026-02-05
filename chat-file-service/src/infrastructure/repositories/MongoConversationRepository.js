@@ -396,12 +396,37 @@ class MongoConversationRepository {
         },
         lastMessageAt: new Date(),
         updatedAt: new Date(),
+        "metadata.stats.lastActivity": new Date(),
       };
+
+      // ✅ CONSTRUIRE LES INCRÉMENTS EN FONCTION DU TYPE DE MESSAGE
+      const incrementFields = {
+        "metadata.stats.totalMessages": 1,
+      };
+
+      // ✅ INCRÉMENTER LES STATS SELON LE TYPE
+      const messageType = messageData.type?.toUpperCase();
+      if (
+        messageType === "FILE" ||
+        messageType === "DOCUMENT" ||
+        messageData.fileId
+      ) {
+        incrementFields["metadata.stats.totalFiles"] = 1;
+      } else if (messageType === "IMAGE" || messageType === "PHOTO") {
+        incrementFields["metadata.stats.totalImages"] = 1;
+        incrementFields["metadata.stats.totalFiles"] = 1;
+      } else if (messageType === "VIDEO") {
+        incrementFields["metadata.stats.totalVideos"] = 1;
+        incrementFields["metadata.stats.totalFiles"] = 1;
+      }
 
       this.metrics.dbQueries++;
       const conversation = await Conversation.findByIdAndUpdate(
         conversationId,
-        { $set: updateData },
+        {
+          $set: updateData,
+          $inc: incrementFields,
+        },
         { new: true },
       );
 

@@ -1,4 +1,4 @@
-const { UserCache } = require("@chatapp-ngomna/shared");
+const { UserCache } = require("../../../shared");
 
 /**
  * SmartCachePrewarmer - Système de pré-chauffage intelligent du cache utilisateur
