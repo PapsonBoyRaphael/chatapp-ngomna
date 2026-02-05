@@ -12,21 +12,20 @@ class FileStorageService {
     this.encrypt = false; // Active chiffrement (assume client-side primary)
     this.encryptionKey = config.encryptionKey || crypto.randomBytes(32); // Clé si server-side fallback
     this.compression = false; // Active compression
-    this.maxFileSize = config.maxFileSize || 100 * 1024 * 1024; // 100MB limit
+    this.maxFileSize = config.maxFileSize || 1000 * 1024 * 1024; // 1000MB limit
     this.allowedMimes = config.allowedMimes || []; // ✅ ACCEPTE TOUS LES FICHIERS
     this.maxRetries = 3;
 
-    if (this.env === "development" || this.env === "production") {
-      this.minioClient = new Minio.Client({
-        endPoint: config.s3Endpoint.replace(/^https?:\/\//, "").split(":")[0],
-        port: parseInt(config.s3Endpoint.split(":").pop(), 10) || 9000,
-        useSSL: config.s3Endpoint.startsWith("https"),
-        accessKey: config.s3AccessKeyId,
-        secretKey: config.s3SecretAccessKey,
-      });
-      this.bucket = config.s3Bucket;
-      this.s3Endpoint = config.s3Endpoint;
-    }
+    this.minioClient = new Minio.Client({
+      endPoint: config.s3Endpoint.replace(/^https?:\/\//, "").split(":")[0],
+      port: parseInt(config.s3Endpoint.split(":").pop(), 10) || 9000,
+      useSSL: config.s3Endpoint.startsWith("https"),
+      accessKey: config.s3AccessKeyId,
+      secretKey: config.s3SecretAccessKey,
+    });
+    this.bucket = config.s3Bucket;
+    this.s3Endpoint = config.s3Endpoint;
+
     // else if (this.env === "production") {
     //   this.sftpConfig = config.sftpConfig; // Gardé comme demandé
     // }
@@ -94,25 +93,25 @@ class FileStorageService {
   // Upload générique avec retries
   async upload(localFilePath, remoteFileName, retry = 0) {
     try {
-      if (this.env === "development") {
-        const exists = await this.minioClient.bucketExists(this.bucket);
-        if (!exists) await this.minioClient.makeBucket(this.bucket);
-        await this.minioClient.fPutObject(
-          this.bucket,
-          remoteFileName,
-          localFilePath,
-        );
-      } else if (this.env === "production") {
-        const sftp = new Client();
-        await sftp.connect(this.sftpConfig);
-        await sftp.put(
-          localFilePath,
-          path.posix.join(this.sftpConfig.remotePath, remoteFileName),
-        );
-        await sftp.end();
-      }
+      const exists = await this.minioClient.bucketExists(this.bucket);
+      if (!exists) await this.minioClient.makeBucket(this.bucket);
+      await this.minioClient.fPutObject(
+        this.bucket,
+        remoteFileName,
+        localFilePath,
+      );
+
+      //  if (this.env === "production") {
+      //   const sftp = new Client();
+      //   await sftp.connect(this.sftpConfig);
+      //   await sftp.put(
+      //     localFilePath,
+      //     path.posix.join(this.sftpConfig.remotePath, remoteFileName),
+      //   );
+      //   await sftp.end();
+      // }
       this.metrics.uploads++;
-      return this.env === "development"
+      return this.env === "development" || this.env === "production"
         ? `${this.bucket}/${remoteFileName}`
         : `${this.sftpConfig.remotePath}/${remoteFileName}`;
     } catch (err) {
@@ -127,30 +126,29 @@ class FileStorageService {
   async uploadFromBuffer(buffer, remoteFileName, mimeType) {
     // await this.validateFile(buffer, mimeType);
     buffer = await this.compressBuffer(buffer, mimeType);
-    if (this.encrypt) buffer = this.encryptBuffer(buffer);
 
     try {
-      if (this.env === "development") {
-        const exists = await this.minioClient.bucketExists(this.bucket);
-        if (!exists) await this.minioClient.makeBucket(this.bucket);
-        await this.minioClient.putObject(
-          this.bucket,
-          remoteFileName,
-          buffer,
-          buffer.length,
-          { "Content-Type": mimeType },
-        );
-        return `${this.bucket}/${remoteFileName}`;
-      } else if (this.env === "production") {
-        const sftp = new Client();
-        await sftp.connect(this.sftpConfig);
-        await sftp.put(
-          buffer,
-          path.posix.join(this.sftpConfig.remotePath, remoteFileName),
-        ); // Buffer direct !
-        await sftp.end();
-        return `${this.sftpConfig.remotePath}/${remoteFileName}`;
-      }
+      const exists = await this.minioClient.bucketExists(this.bucket);
+      if (!exists) await this.minioClient.makeBucket(this.bucket);
+      await this.minioClient.putObject(
+        this.bucket,
+        remoteFileName,
+        buffer,
+        buffer.length,
+        { "Content-Type": mimeType },
+      );
+      return `${this.bucket}/${remoteFileName}`;
+
+      //  if (this.env === "production") {
+      //   const sftp = new Client();
+      //   await sftp.connect(this.sftpConfig);
+      //   await sftp.put(
+      //     buffer,
+      //     path.posix.join(this.sftpConfig.remotePath, remoteFileName),
+      //   ); // Buffer direct !
+      //   await sftp.end();
+      //   return `${this.sftpConfig.remotePath}/${remoteFileName}`;
+      // }
     } catch (err) {
       throw err;
     }
@@ -160,24 +158,23 @@ class FileStorageService {
   async download(localFileName, remoteFileName) {
     try {
       let stream;
-      if (this.env === "development") {
-        // ✅ EXTRAIRE LE NOM DU FICHIER SI LE CHEMIN COMPLET EST PASSÉ
-        // Ex: "chat-files/1234_file.png" → "1234_file.png"
-        const fileNameOnly = remoteFileName.includes("/")
-          ? remoteFileName.split("/").pop()
-          : remoteFileName;
 
-        stream = await this.minioClient.getObject(this.bucket, fileNameOnly);
-      } else if (this.env === "production") {
-        const sftp = new Client();
-        await sftp.connect(this.sftpConfig);
-        stream = await sftp.createReadStream(
-          path.posix.join(this.sftpConfig.remotePath, remoteFileName),
-        );
-        await sftp.end();
-      }
-      if (this.encrypt) stream = this.decryptStream(stream);
-      this.metrics.downloads++;
+      // ✅ EXTRAIRE LE NOM DU FICHIER SI LE CHEMIN COMPLET EST PASSÉ
+      // Ex: "chat-files/1234_file.png" → "1234_file.png"
+      const fileNameOnly = remoteFileName.includes("/")
+        ? remoteFileName.split("/").pop()
+        : remoteFileName;
+
+      stream = await this.minioClient.getObject(this.bucket, fileNameOnly);
+      //  if (this.env === "production") {
+      //   const sftp = new Client();
+      //   await sftp.connect(this.sftpConfig);
+      //   stream = await sftp.createReadStream(
+      //     path.posix.join(this.sftpConfig.remotePath, remoteFileName),
+      //   );
+      //   await sftp.end();
+      // }
+
       return stream;
     } catch (err) {
       this.metrics.errors++;
@@ -188,16 +185,16 @@ class FileStorageService {
   // Delete avec retries
   async delete(remoteFileName, retry = 0) {
     try {
-      if (this.env === "development") {
-        await this.minioClient.removeObject(this.bucket, remoteFileName);
-      } else if (this.env === "production") {
-        const sftp = new Client();
-        await sftp.connect(this.sftpConfig);
-        await sftp.delete(
-          path.posix.join(this.sftpConfig.remotePath, remoteFileName),
-        );
-        await sftp.end();
-      }
+      await this.minioClient.removeObject(this.bucket, remoteFileName);
+
+      //   if (this.env === "production") {
+      //   const sftp = new Client();
+      //   await sftp.connect(this.sftpConfig);
+      //   await sftp.delete(
+      //     path.posix.join(this.sftpConfig.remotePath, remoteFileName),
+      //   );
+      //   await sftp.end();
+      // }
       this.metrics.deletes++;
       return true;
     } catch (err) {
