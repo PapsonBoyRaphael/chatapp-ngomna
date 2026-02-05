@@ -36,7 +36,7 @@ class MongoMessageRepository {
         } catch (validationError) {
           console.error(
             `❌ Erreur validation entité message:`,
-            validationError.message
+            validationError.message,
           );
           throw new Error(`Message invalide: ${validationError.message}`);
         }
@@ -50,19 +50,19 @@ class MongoMessageRepository {
           if (validationError) {
             console.error(
               `❌ Erreur validation nouveau message:`,
-              validationError.message
+              validationError.message,
             );
             throw new Error(
-              `Données de message invalides: ${validationError.message}`
+              `Données de message invalides: ${validationError.message}`,
             );
           }
         } catch (modelError) {
           console.error(
             `❌ Erreur création modèle message:`,
-            modelError.message
+            modelError.message,
           );
           throw new Error(
-            `Impossible de créer le modèle message: ${modelError.message}`
+            `Impossible de créer le modèle message: ${modelError.message}`,
           );
         }
       }
@@ -78,7 +78,7 @@ class MongoMessageRepository {
             upsert: true,
             runValidators: true,
             setDefaultsOnInsert: true,
-          }
+          },
         );
 
         if (!savedMessage || !savedMessage._id) {
@@ -105,7 +105,7 @@ class MongoMessageRepository {
 
         if (saveError.message.includes("Cast to ObjectId failed")) {
           throw new Error(
-            `ID de conversation invalide: ${message.conversationId}`
+            `ID de conversation invalide: ${message.conversationId}`,
           );
         }
 
@@ -126,7 +126,7 @@ class MongoMessageRepository {
       }
 
       console.log(
-        `✅ Message complètement sauvegardé: ${savedMessage._id} (${processingTime}ms)`
+        `✅ Message complètement sauvegardé: ${savedMessage._id} (${processingTime}ms)`,
       );
       return savedMessage;
     } catch (error) {
@@ -153,7 +153,7 @@ class MongoMessageRepository {
             {
               error: error.message,
               processingTime,
-            }
+            },
           );
         } catch (kafkaError) {
           console.warn("⚠️ Erreur publication échec:", kafkaError.message);
@@ -286,7 +286,7 @@ class MongoMessageRepository {
     conversationId,
     receiverId,
     status,
-    messageIds = []
+    messageIds = [],
   ) {
     const startTime = Date.now();
 
@@ -306,7 +306,7 @@ class MongoMessageRepository {
       const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED", "DELETED"];
       if (!validStatuses.includes(status)) {
         throw new Error(
-          `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`
+          `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`,
         );
       }
 
@@ -321,12 +321,24 @@ class MongoMessageRepository {
 
       // Pour DELIVERED/READ, on veut les messages reçus par l'utilisateur
       if (status === "DELIVERED" || status === "READ") {
-        filter.senderId = { $ne: receiverId };
+        filter.$or = [
+          { receiverId: receiverId },
+          { receiverId: { $exists: false }, senderId: { $ne: receiverId } },
+        ];
       }
 
       if (messageIds && messageIds.length > 0) {
         filter._id = { $in: messageIds };
       }
+
+      // DEBUG: Compter les messages qui correspondent au filtre (sans status)
+      const debugFilter = { ...filter };
+      delete debugFilter.status;
+      const debugCount = await Message.countDocuments(debugFilter);
+      console.log(
+        `🔍 DEBUG: ${debugCount} messages trouvés avec filtre (sans status)`,
+        debugFilter,
+      );
 
       // ✅ EFFECTUER LA MISE À JOUR EN MASSE
       const updateResult = await Message.updateMany(filter, {
@@ -368,7 +380,7 @@ class MongoMessageRepository {
             processingTime,
           });
           console.log(
-            `📤 Événement Kafka publié: ${updateResult.modifiedCount} messages mis à jour`
+            `📤 Événement Kafka publié: ${updateResult.modifiedCount} messages mis à jour`,
           );
         } catch (kafkaError) {
           console.warn("⚠️ Erreur publication statut:", kafkaError.message);
@@ -399,7 +411,7 @@ class MongoMessageRepository {
           deletedAt: new Date(),
           updatedAt: new Date(),
         },
-        { new: true }
+        { new: true },
       );
 
       const processingTime = Date.now() - startTime;
@@ -413,7 +425,7 @@ class MongoMessageRepository {
         } catch (kafkaError) {
           console.warn(
             "⚠️ Erreur publication suppression:",
-            kafkaError.message
+            kafkaError.message,
           );
         }
       }
@@ -444,7 +456,7 @@ class MongoMessageRepository {
       const processingTime = Date.now() - startTime;
 
       console.log(
-        `🔢 Compteur non-lus: ${userId} = ${count} (${processingTime}ms)`
+        `🔢 Compteur non-lus: ${userId} = ${count} (${processingTime}ms)`,
       );
       return count;
     } catch (error) {
@@ -531,7 +543,7 @@ class MongoMessageRepository {
       };
 
       console.log(
-        `🔍 Recherche: "${query}" = ${messages.length} résultats (${result.searchTime}ms)`
+        `🔍 Recherche: "${query}" = ${messages.length} résultats (${result.searchTime}ms)`,
       );
       return result;
     } catch (error) {
@@ -595,7 +607,7 @@ class MongoMessageRepository {
       result.processingTime = processingTime;
 
       console.log(
-        `📊 Statistiques calculées: ${conversationId} (${processingTime}ms)`
+        `📊 Statistiques calculées: ${conversationId} (${processingTime}ms)`,
       );
       return result;
     } catch (error) {
@@ -689,7 +701,7 @@ class MongoMessageRepository {
       const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED", "DELETED"];
       if (!validStatuses.includes(status)) {
         throw new Error(
-          `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`
+          `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`,
         );
       }
 
@@ -724,7 +736,7 @@ class MongoMessageRepository {
         const statusOrder = { SENT: 1, DELIVERED: 2, READ: 3 };
         if (statusOrder[existingMessage.status] > statusOrder[status]) {
           console.log(
-            `⚠️ Impossible de rétrograder le statut de ${existingMessage.status} à ${status}`
+            `⚠️ Impossible de rétrograder le statut de ${existingMessage.status} à ${status}`,
           );
           return {
             modifiedCount: 0,
@@ -759,7 +771,7 @@ class MongoMessageRepository {
         {
           new: true, // Retourner le document mis à jour
           runValidators: true,
-        }
+        },
       );
 
       const processingTime = Date.now() - startTime;
@@ -767,7 +779,7 @@ class MongoMessageRepository {
       // ✅ VÉRIFIER SI LA MISE À JOUR A RÉUSSI
       if (!updateResult) {
         console.log(
-          `ℹ️ Aucune mise à jour nécessaire pour message ${messageId} (déjà ${status})`
+          `ℹ️ Aucune mise à jour nécessaire pour message ${messageId} (déjà ${status})`,
         );
         return {
           modifiedCount: 0,
@@ -796,7 +808,7 @@ class MongoMessageRepository {
 
           if (conversation) {
             console.log(
-              `🔍 Message supprimé était le lastMessage de ${conversation._id}`
+              `🔍 Message supprimé était le lastMessage de ${conversation._id}`,
             );
 
             // 2. Récupérer le message précédent non supprimé
@@ -815,7 +827,7 @@ class MongoMessageRepository {
                   "lastMessage._id": previousMessage._id,
                   "lastMessage.content": previousMessage.content.substring(
                     0,
-                    200
+                    200,
                   ),
                   "lastMessage.type": previousMessage.type,
                   "lastMessage.senderId": previousMessage.senderId,
@@ -825,7 +837,7 @@ class MongoMessageRepository {
                 },
               });
               console.log(
-                `✅ Conversation mise à jour avec message précédent: ${previousMessage._id}`
+                `✅ Conversation mise à jour avec message précédent: ${previousMessage._id}`,
               );
             } else {
               // Aucun message restant - vider lastMessage
@@ -842,7 +854,7 @@ class MongoMessageRepository {
         } catch (convError) {
           console.warn(
             "⚠️ Erreur mise à jour lastMessage après suppression:",
-            convError.message
+            convError.message,
           );
           // Ne pas faire échouer la suppression du message pour autant
         }
@@ -865,7 +877,7 @@ class MongoMessageRepository {
               previousStatus: existingMessage
                 ? existingMessage.status
                 : "unknown",
-            }
+            },
           );
           console.log(`📤 Événement Kafka publié pour message ${messageId}`);
         } catch (kafkaError) {
@@ -891,7 +903,7 @@ class MongoMessageRepository {
         processingTime: `${processingTime}ms`,
       });
       throw new Error(
-        `Impossible de mettre à jour le statut: ${error.message}`
+        `Impossible de mettre à jour le statut: ${error.message}`,
       );
     }
   }

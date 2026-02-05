@@ -25,21 +25,22 @@ class MarkMessageRead {
     userId,
   }) {
     const start = Date.now();
-    messageId = null; // forcer l'utilisation de conversationId + messageIds pour la mise à jour en masse
+    // messageId = null; // REMOVED: permettre les mises à jour individuelles
     try {
       if (!userId) throw new Error("userId requis");
 
       let result;
-      if (messageId || messageId === "") {
-        // un message spécifique
-        result = await this.messageRepository.markMessagesAsRead(
-          messageId,
+      if (messageId && messageId !== "") {
+        // mise à jour specifique
+        result = await this.messageRepository.updateMessageStatus(
+          conversationId,
           userId,
           "READ",
+          [messageId],
         );
       } else {
         // mise à jour en masse
-        result = await this.messageRepository.markMessagesAsRead(
+        result = await this.messageRepository.updateMessageStatus(
           conversationId,
           userId,
           "READ",

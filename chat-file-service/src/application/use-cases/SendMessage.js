@@ -6,7 +6,7 @@ class SendMessage {
     conversationRepository,
     cacheService = null,
     resilientService = null,
-    userCacheService = null
+    userCacheService = null,
   ) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
@@ -58,9 +58,8 @@ class SendMessage {
 
       try {
         console.log(`🔍 Recherche conversation: ${conversationId}`);
-        conversation = await this.conversationRepository.findById(
-          conversationId
-        );
+        conversation =
+          await this.conversationRepository.findById(conversationId);
 
         if (conversation && conversation._id) {
           console.log(`✅ Conversation trouvée: ${conversationId}`);
@@ -68,7 +67,7 @@ class SendMessage {
           // Vérifier que l'expéditeur est participant
           if (!conversation.participants.includes(senderId)) {
             throw new Error(
-              `L'utilisateur ${senderId} n'est pas participant de cette conversation`
+              `L'utilisateur ${senderId} n'est pas participant de cette conversation`,
             );
           }
         } else {
@@ -78,7 +77,7 @@ class SendMessage {
       } catch (findError) {
         console.log(
           `⚠️ Erreur lors de la recherche conversation ${conversationId}:`,
-          findError.message
+          findError.message,
         );
         conversation = null;
       }
@@ -87,7 +86,7 @@ class SendMessage {
       if (!conversation) {
         if (!receiverId) {
           throw new Error(
-            "receiverId est requis pour créer une nouvelle conversation"
+            "receiverId est requis pour créer une nouvelle conversation",
           );
         }
 
@@ -96,7 +95,7 @@ class SendMessage {
         }
 
         console.log(
-          `🆕 Création automatique conversation privée: ${conversationId}`
+          `🆕 Création automatique conversation privée: ${conversationId}`,
         );
 
         try {
@@ -104,7 +103,7 @@ class SendMessage {
             conversationId,
             senderId,
             receiverId,
-            conversationName
+            conversationName,
           );
 
           if (conversation && conversation._id) {
@@ -112,18 +111,52 @@ class SendMessage {
               participants: conversation.participants,
               participantsCount: conversation.participants?.length,
             });
+
+            // ✅ PUBLIER ÉVÉNEMENT CONVERSATION CRÉÉE
+            if (this.resilientService) {
+              try {
+                await this.resilientService.addToStream(
+                  "stream:conversation:created",
+                  {
+                    event: "conversation.created",
+                    conversationId: conversation._id.toString(),
+                    type: "PRIVATE",
+                    createdBy: senderId,
+                    participants: JSON.stringify(conversation.participants),
+                    name: conversation.name || "Conversation privée",
+                    participantCount:
+                      conversation.participants.length.toString(),
+                    timestamp: Date.now().toString(),
+                  },
+                );
+                console.log(
+                  `📤 Événement conversation créée publiée pour ${conversation._id}`,
+                );
+
+                // ✅ ATTENDRE 100ms pour laisser le temps au consumer de distribuer l'événement
+                await new Promise((resolve) => setTimeout(resolve, 100));
+                console.log(
+                  `⏱️ Délai de 100ms appliqué pour synchronisation conversation/message`,
+                );
+              } catch (streamErr) {
+                console.error(
+                  "❌ Erreur publication conversation créée:",
+                  streamErr.message,
+                );
+              }
+            }
           } else {
             throw new Error(
-              "Échec de la création automatique de la conversation"
+              "Échec de la création automatique de la conversation",
             );
           }
         } catch (createError) {
           console.error(
             `❌ Erreur création conversation ${conversationId}:`,
-            createError.message
+            createError.message,
           );
           throw new Error(
-            `Impossible de créer la conversation: ${createError.message}`
+            `Impossible de créer la conversation: ${createError.message}`,
           );
         }
       }
@@ -131,7 +164,7 @@ class SendMessage {
       // ✅ VÉRIFICATION FINALE
       if (!conversation || !conversation._id) {
         throw new Error(
-          "Conversation finale invalide après vérification/création"
+          "Conversation finale invalide après vérification/création",
         );
       }
 
@@ -146,7 +179,7 @@ class SendMessage {
           count: conversation.participants.length,
         });
         throw new Error(
-          `Conversation privée doit avoir exactement 2 participants (actuel: ${conversation.participants.length})`
+          `Conversation privée doit avoir exactement 2 participants (actuel: ${conversation.participants.length})`,
         );
       }
 
@@ -164,9 +197,9 @@ class SendMessage {
         receiverId: String(
           receiverId ||
             conversation.participants.find(
-              (p) => String(p) !== String(senderId)
+              (p) => String(p) !== String(senderId),
             ) ||
-            null
+            null,
         ),
         content,
         type,
@@ -206,7 +239,7 @@ class SendMessage {
       try {
         if (this.resilientService) {
           savedMessage = await this.resilientService.circuitBreaker.execute(
-            () => this.messageRepository.save(message)
+            () => this.messageRepository.save(message),
           );
 
           // ✅ PUBLIER DANS LE STREAM REDIS AVEC DONNÉES COMPLÈTES
@@ -216,6 +249,13 @@ class SendMessage {
               source: "SendMessage-UseCase",
               conversationParticipants: conversation.participants, // ✅ AJOUTER LES PARTICIPANTS
             });
+
+            // ✅ ATTENDRE 50ms pour donner du temps au consumer de traiter l'événement conversationCreated
+            // avant le message, puisque les deux streams sont maintenant consommés à priorité égale
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            console.log(
+              `⏱️ Délai de 50ms appliqué après publication du message`,
+            );
           }
         } else {
           savedMessage = await this.messageRepository.save(message);
@@ -248,12 +288,12 @@ class SendMessage {
               walId,
             });
             throw new Error(
-              `Impossible de sauvegarder le message: ${saveError.message}`
+              `Impossible de sauvegarder le message: ${saveError.message}`,
             );
           }
         } else {
           throw new Error(
-            `Impossible de sauvegarder le message: ${saveError.message}`
+            `Impossible de sauvegarder le message: ${saveError.message}`,
           );
         }
       }
@@ -275,7 +315,7 @@ class SendMessage {
       } catch (updateError) {
         console.warn(
           "⚠️ Erreur mise à jour conversation:",
-          updateError.message
+          updateError.message,
         );
         // ✅ NE PAS FAIRE ÉCHOUER LE MESSAGE SI LA MISE À JOUR ÉCHOUE
       }
@@ -305,7 +345,7 @@ class SendMessage {
 
       // Après la sauvegarde du message, incrémenter les compteurs non-lus
       const otherParticipants = conversation.participants.filter(
-        (p) => p !== messageData.senderId
+        (p) => p !== messageData.senderId,
       );
 
       // Incrémenter le compteur pour chaque participant sauf l'expéditeur
@@ -313,8 +353,8 @@ class SendMessage {
         this.conversationRepository.incrementUnreadCountInUserMetadata(
           conversation._id || conversation.id,
           participantId,
-          1
-        )
+          1,
+        ),
       );
 
       await Promise.all(updatePromises);
@@ -332,7 +372,7 @@ class SendMessage {
     conversationId,
     senderId,
     receiverId = null,
-    conversationName = null
+    conversationName = null,
   ) {
     try {
       const participants = [senderId, receiverId];
@@ -341,13 +381,13 @@ class SendMessage {
       let usersInfo = [];
       try {
         console.log(
-          `🔍 Récupération infos participants de la conversation privée...`
+          `🔍 Récupération infos participants de la conversation privée...`,
         );
         usersInfo = await this.userCacheService.fetchUsersInfo(participants);
 
         // Vérifier que tous les utilisateurs existent
         const invalidUsers = usersInfo.filter(
-          (u) => u.name === "Utilisateur inconnu"
+          (u) => u.name === "Utilisateur inconnu",
         );
         if (invalidUsers.length > 0) {
           const invalidIds = invalidUsers.map((u) => u.matricule).join(", ");
@@ -360,10 +400,10 @@ class SendMessage {
       } catch (fetchError) {
         console.error(
           `❌ Erreur récupération infos participants:`,
-          fetchError.message
+          fetchError.message,
         );
         throw new Error(
-          `Impossible de récupérer les infos participants: ${fetchError.message}`
+          `Impossible de récupérer les infos participants: ${fetchError.message}`,
         );
       }
 
@@ -426,9 +466,8 @@ class SendMessage {
       this.validateConversationData(conversationData);
 
       // Sauvegarde
-      const savedConversation = await this.conversationRepository.save(
-        conversationData
-      );
+      const savedConversation =
+        await this.conversationRepository.save(conversationData);
 
       // ✅ KAFKA SUPPRIMÉ D'ICI AUSSI
 
@@ -469,7 +508,7 @@ class SendMessage {
           const participantId = metadata.userId || metadata.participantId;
           if (!conversationData.participants.includes(participantId)) {
             errors.push(
-              `Métadonnées pour un participant non-existent: ${participantId}`
+              `Métadonnées pour un participant non-existent: ${participantId}`,
             );
           }
         }
@@ -488,7 +527,7 @@ class SendMessage {
     if (errors.length > 0) {
       console.error("❌ Erreurs validation conversation:", errors);
       throw new Error(
-        `Données de conversation invalides: ${errors.join(", ")}`
+        `Données de conversation invalides: ${errors.join(", ")}`,
       );
     }
 

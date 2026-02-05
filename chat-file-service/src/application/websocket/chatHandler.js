@@ -1553,6 +1553,11 @@ class ChatHandler {
           console.log(
             `✅ [${new Date().toISOString()}] Socket enregistré pour ${userIdString}`,
           );
+
+          await this.messageDeliveryService.deliverPendingMessagesOnConnect(
+            userIdString,
+            socket,
+          );
         } catch (mdsError) {
           console.error(
             `❌ Erreur MessageDeliveryService: ${mdsError.message}`,
@@ -2054,7 +2059,7 @@ class ChatHandler {
 
       console.log("📖 Utilisateur:", userId, "Message ID:", messageId);
 
-      if (!messageId || !userId) return;
+      if (!userId) return;
 
       if (!this.markMessageReadUseCase) {
         console.warn("⚠️ MarkMessageReadUseCase non disponible");

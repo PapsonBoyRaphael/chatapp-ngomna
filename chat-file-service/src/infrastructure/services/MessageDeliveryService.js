@@ -26,7 +26,13 @@ class MessageDeliveryService {
       // CONSUMER 1 : Temps réel critique (3 consumers)
       HIGH_PRIORITY_WORKER: {
         name: "high-priority",
-        streams: ["typing", "private", "statusRead", "statusDelivered"],
+        streams: [
+          "typing",
+          "conversationCreated",
+          "private",
+          "statusRead",
+          "statusDelivered",
+        ],
         workers: 3,
         priority: 0,
       },
@@ -43,7 +49,6 @@ class MessageDeliveryService {
         streams: [
           "notifications",
           "conversations",
-          "conversationCreated",
           "conversationUpdated",
           "participantAdded",
           "participantRemoved",
@@ -108,13 +113,13 @@ class MessageDeliveryService {
         interval: 500,
         workerPartition: "SYSTEM_WORKER",
       },
-      // Priorité 3.5 : Événements conversation spécifiques
+      // Priorité 0.5 : Création conversation (CRITIQUE - doit arriver avant messages)
       conversationCreated: {
         streamKey: "stream:conversation:created",
         groupId: "events-conversation-created",
-        priority: 3,
-        interval: 500,
-        workerPartition: "SYSTEM_WORKER",
+        priority: 0.5,
+        interval: 50,
+        workerPartition: "HIGH_PRIORITY_WORKER",
       },
       conversationUpdated: {
         streamKey: "stream:conversation:updated",
@@ -208,9 +213,22 @@ class MessageDeliveryService {
 
     // ✅ PHASES D'ABONNEMENT PROGRESSIF (LAZY SUBSCRIPTION)
     this.SUBSCRIPTION_PHASES = {
-      PHASE_1: ["typing", "private", "statusRead", "statusDelivered"], // Immédiat
+      PHASE_1: [
+        "typing",
+        "private",
+        "statusRead",
+        "statusDelivered",
+        "conversationCreated",
+      ], // Immédiat
       PHASE_2: ["group", "channel"], // Après 1s
-      PHASE_3: ["notifications", "conversations"], // Après 3s
+      PHASE_3: [
+        "notifications",
+        "conversations",
+        "conversationUpdated",
+        "participantAdded",
+        "participantRemoved",
+        "conversationDeleted",
+      ], // Après 3s
       PHASE_4: ["files", "reactions", "replies"], // Après 10s
       PHASE_5: ["analytics", "statusEdited", "statusDeleted"], // Background
     };
@@ -515,10 +533,28 @@ class MessageDeliveryService {
   async distributeMessageToRecipient(streamType, message, entryId) {
     try {
       console.log(`📬 Distribution message ${streamType}:`, {
-        messageId: message.messageId,
-        senderId: message.senderId,
-        receiverId: message.receiverId,
-        conversationId: message.conversationId,
+        ...(streamType === "conversationCreated" && {
+          event: message.event,
+          conversationId: message.conversationId,
+          createdBy: message.createdBy,
+          participants: message.participants,
+          type: message.type,
+        }),
+        ...((streamType === "private" ||
+          streamType === "group" ||
+          streamType === "channel") && {
+          messageId: message.messageId,
+          senderId: message.senderId,
+          conversationId: message.conversationId,
+        }),
+        ...(!["conversationCreated", "private", "group", "channel"].includes(
+          streamType,
+        ) && {
+          messageId: message.messageId,
+          senderId: message.senderId,
+          receiverId: message.receiverId,
+          conversationId: message.conversationId,
+        }),
       });
 
       switch (streamType) {
@@ -540,11 +576,22 @@ class MessageDeliveryService {
                 console.log(
                   `⏳ Destinataire ${receiverId} déconnecté, message en attente`,
                 );
-                await this.addToPendingQueue(receiverId, message, "message");
+                await this.addToPendingQueue(
+                  receiverId,
+                  message,
+                  "message",
+                  "private",
+                );
               }
             } else {
               console.log(
-                `⏸️ Stream ${streamType} pas encore actif pour ${receiverId}, message ignoré`,
+                `⏸️ Stream ${streamType} pas encore actif pour ${receiverId}, message mis en attente`,
+              );
+              await this.addToPendingQueue(
+                receiverId,
+                message,
+                "message",
+                "private",
               );
             }
           } else {
@@ -609,8 +656,18 @@ class MessageDeliveryService {
               if (this.userSockets.has(targetUser)) {
                 await this.deliverNotification(message, targetUser);
               } else {
-                await this.addToPendingQueue(targetUser, message, "message");
+                await this.addToPendingQueue(
+                  targetUser,
+                  message,
+                  "notifications",
+                );
               }
+            } else {
+              await this.addToPendingQueue(
+                targetUser,
+                message,
+                "notifications",
+              );
             }
           }
           break;
@@ -744,10 +801,21 @@ class MessageDeliveryService {
                 `⏳ Participant ${userIdStr} non connecté - message en attente`,
               );
               // Ajouter en queue pour délivrance ultérieure
-              await this.addToPendingQueue(userIdStr, message, "message");
+              await this.addToPendingQueue(
+                userIdStr,
+                message,
+                "message",
+                "group",
+              );
             } else {
               console.log(
                 `⏸️ Participant ${userIdStr} connecté mais stream 'group' pas actif`,
+              );
+              await this.addToPendingQueue(
+                userIdStr,
+                message,
+                "message",
+                "group",
               );
             }
           }
@@ -770,6 +838,8 @@ class MessageDeliveryService {
             this.isStreamActiveForUser(userId, "group")
           ) {
             targetParticipants.push(userId);
+          } else if (userConversations.includes(conversationId)) {
+            await this.addToPendingQueue(userId, message, "message", "group");
           }
         }
       }
@@ -817,6 +887,8 @@ class MessageDeliveryService {
           this.isStreamActiveForUser(userId, "channel")
         ) {
           targetParticipants.push(userId);
+        } else if (userConversations.includes(conversationId)) {
+          await this.addToPendingQueue(userId, message, "message", "channel");
         }
       }
 
@@ -1214,25 +1286,37 @@ class MessageDeliveryService {
       const conversationId = String(message.conversationId);
 
       // ✅ RÉCUPÉRER TOUS LES PARTICIPANTS DE LA CONVERSATION
-      const allParticipants = message.participants || [];
+      const allParticipants = JSON.parse(message.participants) || [];
 
       console.log(
         `🆕 Livraison événement conversation créée à ${allParticipants.length} participant(s)`,
       );
 
+      // ✅ DEBUG: Afficher les utilisateurs connectés
+      const connectedUsers = Array.from(this.userSockets.keys());
+      console.log(
+        `🔍 DEBUG: Utilisateurs connectés en ce moment: [${connectedUsers.join(", ")}]`,
+      );
+
       for (const participantId of allParticipants) {
         const userId = String(participantId);
+        const isConnected = this.userSockets.has(userId);
+        const isStreamActive = this.isStreamActiveForUser(
+          userId,
+          "conversationCreated",
+        );
 
-        if (
-          this.userSockets.has(userId) &&
-          this.isStreamActiveForUser(userId, "conversationCreated")
-        ) {
+        console.log(
+          `🔍 DEBUG: ${userId} - connecté: ${isConnected}, stream actif: ${isStreamActive}`,
+        );
+
+        if (isConnected && isStreamActive) {
           // ✅ UTILISATEUR CONNECTÉ - LIVRAISON IMMÉDIATE
           await this.deliverConversationCreated(message, userId);
         } else {
-          // ✅ UTILISATEUR DÉCONNECTÉ - STOCKAGE EN ATTENTE
+          // ✅ UTILISATEUR DÉCONNECTÉ OU STREAM PAS ACTIF - STOCKAGE EN ATTENTE
           console.log(
-            `⏳ Participant ${userId} déconnecté, événement conversation créée en attente`,
+            `⏳ Participant ${userId} ${!isConnected ? "déconnecté" : "stream pas actif"}, événement conversation créée en attente`,
           );
           await this.addToPendingQueue(userId, message, "conversationCreated");
         }
@@ -1713,6 +1797,7 @@ class MessageDeliveryService {
           console.log(
             `📡 Phase 2 activée pour ${userIdStr}: ${phases.PHASE_2.join(", ")}`,
           );
+          this.deliverPendingEventsForStreamTypes(userIdStr, phases.PHASE_2);
         }
       }, 1000);
 
@@ -1723,6 +1808,7 @@ class MessageDeliveryService {
           console.log(
             `📡 Phase 3 activée pour ${userIdStr}: ${phases.PHASE_3.join(", ")}`,
           );
+          this.deliverPendingEventsForStreamTypes(userIdStr, phases.PHASE_3);
         }
       }, 3000);
 
@@ -1733,6 +1819,7 @@ class MessageDeliveryService {
           console.log(
             `📡 Phase 4 activée pour ${userIdStr}: ${phases.PHASE_4.join(", ")}`,
           );
+          this.deliverPendingEventsForStreamTypes(userIdStr, phases.PHASE_4);
         }
       }, 10000);
 
@@ -1743,6 +1830,7 @@ class MessageDeliveryService {
           console.log(
             `📡 Phase 5 activée pour ${userIdStr}: ${phases.PHASE_5.join(", ")}`,
           );
+          this.deliverPendingEventsForStreamTypes(userIdStr, phases.PHASE_5);
         }
       }, 30000);
     } catch (error) {
@@ -1861,17 +1949,57 @@ class MessageDeliveryService {
 
       console.log(`📥 Livraison événements en attente pour ${userIdStr}...`);
 
-      let deliveredCount = 0;
+      const activeStreams = Array.from(
+        this.activeUserStreams.get(userIdStr) || [],
+      );
 
-      // ✅ TYPES D'ÉVÉNEMENTS À TRAITER
-      const eventTypes = [
-        "message",
-        "conversationCreated",
-        "conversationUpdated",
-        "participantAdded",
-        "participantRemoved",
-        "conversationDeleted",
-      ];
+      const deliveredCount = await this.deliverPendingEventsForStreamTypes(
+        userIdStr,
+        activeStreams,
+      );
+
+      console.log(
+        `✅ ${deliveredCount} événement(s) livré(s) à ${userIdStr} à la connexion`,
+      );
+
+      return deliveredCount;
+    } catch (error) {
+      console.error("❌ Erreur livraison événements en attente:", error);
+      return 0;
+    }
+  }
+
+  /**
+   * ✅ LIVRER LES ÉVÉNEMENTS EN ATTENTE POUR DES STREAMS DONNÉS
+   */
+  async deliverPendingEventsForStreamTypes(userId, streamTypes = []) {
+    try {
+      const userIdStr = String(userId);
+      const streamTypeSet = new Set(streamTypes.map((s) => String(s)));
+
+      // ✅ MAPPING STREAM → EVENT TYPE EN ATTENTE
+      const streamToEventType = {
+        private: "message",
+        group: "message",
+        channel: "message",
+        notifications: "notifications",
+        files: "files",
+        conversationCreated: "conversationCreated",
+        conversationUpdated: "conversationUpdated",
+        participantAdded: "participantAdded",
+        participantRemoved: "participantRemoved",
+        conversationDeleted: "conversationDeleted",
+      };
+
+      const eventTypes = new Set();
+      for (const streamType of streamTypeSet) {
+        const eventType = streamToEventType[streamType];
+        if (eventType) {
+          eventTypes.add(eventType);
+        }
+      }
+
+      let deliveredCount = 0;
 
       for (const eventType of eventTypes) {
         const pendingKey = `pending:${eventType}:${userIdStr}`;
@@ -1887,8 +2015,17 @@ class MessageDeliveryService {
             try {
               const event = JSON.parse(eventJson);
 
+              if (eventType === "message") {
+                const eventStreamType =
+                  event.streamType || (event.receiverId ? "private" : null);
+
+                if (!eventStreamType || !streamTypeSet.has(eventStreamType)) {
+                  continue;
+                }
+              }
+
               // ✅ TRAITER SELON LE TYPE D'ÉVÉNEMENT
-              await this.deliverPendingEvent(event, userIdStr, socket);
+              await this.deliverPendingEvent(event, userIdStr);
 
               // ✅ SUPPRIMER DE LA LISTE D'ATTENTE
               await this.redis.lRem(pendingKey, 1, eventJson);
@@ -1912,13 +2049,12 @@ class MessageDeliveryService {
         }
       }
 
-      console.log(
-        `✅ ${deliveredCount} événement(s) livré(s) à ${userIdStr} à la connexion`,
-      );
-
       return deliveredCount;
     } catch (error) {
-      console.error("❌ Erreur livraison événements en attente:", error);
+      console.error(
+        "❌ Erreur livraison événements en attente par stream:",
+        error,
+      );
       return 0;
     }
   }
@@ -1926,12 +2062,20 @@ class MessageDeliveryService {
   /**
    * ✅ LIVRER UN ÉVÉNEMENT EN ATTENTE À LA CONNEXION
    */
-  async deliverPendingEvent(event, userId, socket) {
+  async deliverPendingEvent(event, userId) {
     try {
       switch (event.eventType) {
         case "message":
-          // ✅ LIVRER MESSAGE PRIVÉ EN ATTENTE
-          await this.deliverPrivateMessage(event, userId);
+          // ✅ LIVRER MESSAGE EN ATTENTE SELON LE STREAM
+          if (event.streamType) {
+            await this.routeMessageByStreamType(
+              event.streamType,
+              event,
+              userId,
+            );
+          } else {
+            await this.deliverPrivateMessage(event, userId);
+          }
           break;
 
         case "conversationCreated":
@@ -1964,6 +2108,11 @@ class MessageDeliveryService {
           await this.deliverFileEvent(event);
           break;
 
+        case "notifications":
+          // ✅ LIVRER NOTIFICATION EN ATTENTE
+          await this.deliverNotification(event, userId);
+          break;
+
         default:
           console.warn(
             `⚠️ Type d'événement en attente inconnu: ${event.eventType}`,
@@ -1980,7 +2129,12 @@ class MessageDeliveryService {
   /**
    * ✅ AJOUTER UN ÉVÉNEMENT EN ATTENTE (MESSAGES OU ÉVÉNEMENTS CONVERSATION)
    */
-  async addToPendingQueue(userId, eventData, eventType = "message") {
+  async addToPendingQueue(
+    userId,
+    eventData,
+    eventType = "message",
+    streamType = null,
+  ) {
     try {
       const userIdStr = String(userId);
       const pendingKey = `pending:${eventType}:${userIdStr}`;
@@ -1989,9 +2143,13 @@ class MessageDeliveryService {
       let eventJson;
       switch (eventType) {
         case "message":
-          // ✅ STRUCTURE POUR LES MESSAGES PRIVÉS
+          // ✅ STRUCTURE POUR LES MESSAGES (PRIVÉ/GROUPE/CANAL)
           eventJson = JSON.stringify({
             eventType: "message",
+            streamType:
+              streamType ||
+              eventData.streamType ||
+              (eventData.receiverId ? "private" : null),
             messageId: eventData.messageId,
             conversationId: eventData.conversationId,
             senderId: eventData.senderId,
@@ -2001,6 +2159,9 @@ class MessageDeliveryService {
             status: eventData.status || "SENT",
             timestamp: eventData.timestamp,
             metadata: eventData.metadata,
+            participants: eventData.participants,
+            senderName: eventData.senderName,
+            subType: eventData.subType,
           });
           break;
 
@@ -2072,6 +2233,19 @@ class MessageDeliveryService {
             fileName: eventData.fileName,
             fileSize: eventData.fileSize,
             userId: eventData.userId,
+            timestamp: eventData.timestamp,
+          });
+          break;
+
+        case "notifications":
+          // ✅ STRUCTURE POUR ÉVÉNEMENT NOTIFICATION
+          eventJson = JSON.stringify({
+            eventType: "notifications",
+            userId: eventData.userId,
+            title: eventData.title,
+            message: eventData.message,
+            level: eventData.level,
+            payload: eventData.payload,
             timestamp: eventData.timestamp,
           });
           break;
