@@ -79,12 +79,36 @@ class DeleteMessage {
     }
 
     // ✅ PUBLIER DANS REDIS STREAMS - STATUT DELETED
+    // DELETED doit être envoyé à TOUS les participants de la conversation
     if (this.resilientMessageService) {
       try {
-        await this.resilientMessageService.publishMessageStatus(
+        // ✅ RÉCUPÉRER LES PARTICIPANTS DE LA CONVERSATION
+        let conversationParticipants = [];
+        if (conversationId && this.conversationRepository) {
+          try {
+            const conversation =
+              await this.conversationRepository.findById(conversationId);
+            if (conversation) {
+              conversationParticipants = conversation.participants || [];
+              console.log(
+                `👥 [DELETED] Participants trouvés: ${conversationParticipants
+                  .map((p) => p.userId || p)
+                  .join(", ")}`,
+              );
+            }
+          } catch (convError) {
+            console.warn(
+              "⚠️ [DELETED] Erreur récupération participants:",
+              convError.message,
+            );
+          }
+        }
+
+        // ✅ ENVOYER LE DELETED À TOUS LES PARTICIPANTS
+        await this.resilientMessageService.publishDeletedMessageToAllParticipants(
           messageId,
-          userId,
-          "DELETED",
+          conversationId,
+          conversationParticipants,
         );
         console.log(`📤 [DELETED] événement publié pour message ${messageId}`);
       } catch (streamErr) {

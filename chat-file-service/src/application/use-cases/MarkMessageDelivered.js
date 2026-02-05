@@ -90,81 +90,59 @@ class MarkMessageDelivered {
       });
 
       // ✅ PUBLIER DANS REDIS STREAMS - STATUT DELIVERED
+      // L'accusé de réception est envoyé UNIQUEMENT à l'expéditeur du message
       if (this.resilientMessageService && result && result.modifiedCount > 0) {
         try {
-          console.log(
-            `🔍 MarkMessageDelivered - Vérifications avant publication:`,
-            {
-              resilientMessageService: !!this.resilientMessageService,
-              result: !!result,
-              modifiedCount: result?.modifiedCount || 0,
-              messageId,
-              messageIds: messageIds?.length || 0,
-              conversationId,
-              userId,
-            },
-          );
-
           // Pour les messages individuels, publier un événement par message
           if (messageId) {
-            console.log(
-              `📤 MarkMessageDelivered: Publication pour messageId ${messageId}`,
-            );
             await this.resilientMessageService.publishMessageStatus(
               messageId,
-              userId,
+              result.message.senderId, // ✅ À l'EXPÉDITEUR du message
               "DELIVERED",
             );
           } else if (messageIds && messageIds.length > 0) {
             // Pour les messages spécifiques
-            console.log(
-              `📤 MarkMessageDelivered: Publication pour ${messageIds.length} messages spécifiques`,
-            );
             for (const msgId of messageIds) {
-              console.log(`  - Publication pour messageId: ${msgId}`);
               await this.resilientMessageService.publishMessageStatus(
                 msgId,
-                userId,
+                result.senderId, // ✅ À l'EXPÉDITEUR du message
                 "DELIVERED",
               );
             }
           } else {
-            // Pour tous les messages d'une conversation, publier un événement en masse
-            console.log(
-              "ℹ️ DELIVERED en masse - publication d'un événement agrégé",
-            );
-            try {
-              console.log(
-                `📡 Appel publishBulkMessageStatus pour conversation: ${conversationId}, userId: ${userId}, count: ${result?.modifiedCount || 0}`,
-              );
-              await this.resilientMessageService.publishBulkMessageStatus(
-                conversationId,
-                userId,
-                "DELIVERED",
-                result?.modifiedCount || 0,
-              );
-              console.log(`✅ Événement en masse publié avec succès`);
-            } catch (bulkErr) {
-              console.error(
-                `❌ Erreur publication bulk DELIVERED: ${bulkErr.message}`,
-              );
+            // Pour tous les messages d'une conversation, publier un événement bulk à l'expéditeur
+            // Récupérer les participants pour la publication bulk
+            let conversationParticipants = [];
+            if (conversationId && this.conversationRepository) {
+              try {
+                const conversation =
+                  await this.conversationRepository.findById(conversationId);
+                conversationParticipants = conversation.participants || [];
+              } catch (convErr) {
+                console.warn(
+                  "⚠️ Erreur récupération participants:",
+                  convErr.message,
+                );
+              }
             }
+
+            // ✅ PUBLIER UN ÉVÉNEMENT BULK à tous les expéditeurs (pour qu'ils voient que c'est livré)
+            await this.resilientMessageService.publishBulkMessageStatus(
+              conversationId,
+              userId, // ✅ Celui qui marque comme DELIVERED (receiver)
+              "DELIVERED",
+              result?.modifiedCount || 0,
+              conversationParticipants, // ✅ Inclure les participants
+            );
           }
 
-          console.log(`✅ [DELIVERED] événements publiés COMPLÉTÉ`);
+          console.log(`📤 [DELIVERED] événements publiés`);
         } catch (streamErr) {
           console.error(
             "❌ Erreur publication statuts DELIVERED:",
             streamErr.message,
           );
-          console.error("Stack trace:", streamErr.stack);
         }
-      } else {
-        console.log(`⚠️ Pas de publication DELIVERED:`, {
-          hasResilientMessageService: !!this.resilientMessageService,
-          hasResult: !!result,
-          modifiedCount: result?.modifiedCount || 0,
-        });
       }
 
       return result;

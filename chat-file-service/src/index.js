@@ -413,6 +413,7 @@ const startServer = async () => {
 
     const updateMessageContentUseCase = new UpdateMessageContent(
       messageRepository, // Cached
+      conversationRepository, // ✅ AJOUTÉ pour récupérer les participants
       null, // kafkaProducer
       resilientMessageService, // ✅ AJOUTÉ pour publication events:messages
     );

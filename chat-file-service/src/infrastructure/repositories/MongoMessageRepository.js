@@ -369,24 +369,6 @@ class MongoMessageRepository {
         processingTime: `${processingTime}ms`,
       });
 
-      // ✅ PUBLIER ÉVÉNEMENT KAFKA
-      if (this.kafkaProducer && updateResult.modifiedCount > 0) {
-        try {
-          await this._publishMessageEvent("MESSAGE_STATUS_UPDATED", null, {
-            conversationId,
-            receiverId,
-            status,
-            modifiedCount: updateResult.modifiedCount,
-            processingTime,
-          });
-          console.log(
-            `📤 Événement Kafka publié: ${updateResult.modifiedCount} messages mis à jour`,
-          );
-        } catch (kafkaError) {
-          console.warn("⚠️ Erreur publication statut:", kafkaError.message);
-        }
-      }
-
       return updateResult;
     } catch (error) {
       console.error("❌ Erreur mise à jour statut:", error);

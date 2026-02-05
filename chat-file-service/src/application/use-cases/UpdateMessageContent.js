@@ -1,10 +1,12 @@
 class UpdateMessageContent {
   constructor(
     messageRepository,
+    conversationRepository = null,
     kafkaProducer = null,
     resilientMessageService = null,
   ) {
     this.messageRepository = messageRepository;
+    this.conversationRepository = conversationRepository;
     this.kafkaProducer = kafkaProducer;
     this.resilientMessageService = resilientMessageService;
   }
@@ -50,12 +52,38 @@ class UpdateMessageContent {
     const updated = await this.messageRepository.save(message);
 
     // ✅ PUBLIER DANS REDIS STREAMS - STATUT EDITED
+    // EDITED doit être envoyé à TOUS les participants de la conversation
     if (this.resilientMessageService) {
       try {
-        await this.resilientMessageService.publishMessageStatus(
+        // ✅ RÉCUPÉRER LES PARTICIPANTS DE LA CONVERSATION
+        let conversationParticipants = [];
+        if (message.conversationId && this.conversationRepository) {
+          try {
+            const conversation = await this.conversationRepository.findById(
+              message.conversationId,
+            );
+            if (conversation) {
+              conversationParticipants = conversation.participants || [];
+              console.log(
+                `👥 [EDITED] Participants trouvés: ${conversationParticipants
+                  .map((p) => p.userId || p)
+                  .join(", ")}`,
+              );
+            }
+          } catch (convError) {
+            console.warn(
+              "⚠️ [EDITED] Erreur récupération participants:",
+              convError.message,
+            );
+          }
+        }
+
+        // ✅ ENVOYER L'EDITED À TOUS LES PARTICIPANTS AVEC LE NOUVEAU CONTENU
+        await this.resilientMessageService.publishEditedMessageToAllParticipants(
           messageId,
-          userId,
-          "EDITED",
+          message.conversationId,
+          newContent, // ✅ PASSER LE NOUVEAU CONTENU
+          conversationParticipants,
         );
         console.log(`📤 [EDITED] événement publié pour message ${messageId}`);
       } catch (streamErr) {

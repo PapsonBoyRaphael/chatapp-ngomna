@@ -49,24 +49,44 @@ class MarkMessageRead {
       }
 
       // ✅ PUBLIER DANS REDIS STREAMS - STATUT READ
+      // L'accusé de lecture est envoyé UNIQUEMENT à l'expéditeur du message
       if (this.resilientMessageService && result && result.modifiedCount > 0) {
         try {
-          // Pour chaque message marqué comme lu, publier un événement séparé
           const messageIdsToPublish =
             messageIds || (messageId ? [messageId] : []);
 
           if (messageIdsToPublish.length > 0) {
+            // Pour chaque message marqué comme lu, publier un événement séparé à l'expéditeur
             for (const msgId of messageIdsToPublish) {
               await this.resilientMessageService.publishMessageStatus(
                 msgId,
-                userId,
+                result.senderId, // ✅ À l'EXPÉDITEUR du message
                 "READ",
               );
             }
           } else {
-            // Si pas de messageIds spécifiques, on ne peut pas publier d'événement individuel
-            console.log(
-              "ℹ️ Pas de messageIds spécifiques pour publication READ",
+            // Si pas de messageIds spécifiques, publier un événement bulk
+            let conversationParticipants = [];
+            if (conversationId && this.conversationRepository) {
+              try {
+                const conversation =
+                  await this.conversationRepository.findById(conversationId);
+                conversationParticipants = conversation.participants || [];
+              } catch (convErr) {
+                console.warn(
+                  "⚠️ Erreur récupération participants:",
+                  convErr.message,
+                );
+              }
+            }
+
+            // ✅ PUBLIER UN ÉVÉNEMENT BULK à tous les expéditeurs
+            await this.resilientMessageService.publishBulkMessageStatus(
+              conversationId,
+              userId, // ✅ Celui qui marque comme READ (reader)
+              "READ",
+              result?.modifiedCount || 0,
+              conversationParticipants, // ✅ Inclure les participants
             );
           }
 

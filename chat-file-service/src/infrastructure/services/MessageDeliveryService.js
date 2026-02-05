@@ -553,12 +553,29 @@ class MessageDeliveryService {
           fileName: message.fileName,
           fileSize: message.fileSize,
         }),
+        ...([
+          "statusDelivered",
+          "statusRead",
+          "statusEdited",
+          "statusDeleted",
+        ].includes(streamType) && {
+          messageId: message.messageId,
+          userId: message.userId,
+          status: message.status,
+          isBulk: message.isBulk,
+          messageCount: message.messageCount,
+          conversationId: message.conversationId,
+        }),
         ...(![
           "conversationCreated",
           "private",
           "group",
           "channel",
           "files",
+          "statusDelivered",
+          "statusRead",
+          "statusEdited",
+          "statusDeleted",
         ].includes(streamType) && {
           messageId: message.messageId,
           senderId: message.senderId,
@@ -649,12 +666,24 @@ class MessageDeliveryService {
         case "statusRead":
         case "statusEdited":
         case "statusDeleted":
+          // ✅ CAS INDIVIDUEL: messageId présent
           if (message.messageId && message.userId) {
             const targetUser = String(message.userId);
             // Livrer le statut du message à l'expéditeur original
             if (this.isStreamActiveForUser(targetUser, streamType)) {
-              await this.deliverMessageStatus(message);
+              await this.deliverMessageStatus(message, targetUser);
             }
+          }
+          // ✅ CAS BULK: isBulk présent avec participants
+          else if (
+            (message.isBulk === "true" || message.isBulk === true) &&
+            message.conversationId
+          ) {
+            console.log(
+              `📡 [ROUTE] Événement statut bulk détecté pour conversation ${message.conversationId}`,
+            );
+            // Livrer à TOUS les participants
+            await this.deliverMessageStatus(message, message.userId || null);
           }
           break;
 
@@ -1173,11 +1202,26 @@ class MessageDeliveryService {
    */
   async deliverMessageStatus(message, userId) {
     try {
-      const socketIds = this.userSockets.get(userId);
-
-      if (!socketIds || socketIds.length === 0) {
-        return;
+      // ✅ PARSER LES PARTICIPANTS S'ILS SONT EN JSON
+      let participants = [];
+      if (message.participants) {
+        try {
+          participants =
+            typeof message.participants === "string"
+              ? JSON.parse(message.participants)
+              : message.participants;
+        } catch (parseErr) {
+          console.warn("⚠️ Erreur parsing participants:", parseErr.message);
+          participants = [];
+        }
       }
+
+      // ✅ SI PARTICIPANTS EXISTE, ENVOYER À TOUS LES PARTICIPANTS
+      // SINON, ENVOYER À L'UTILISATEUR SPÉCIFIÉ
+      const recipientIds =
+        participants && participants.length > 0
+          ? participants.map((p) => p.userId || p).filter(Boolean)
+          : [userId];
 
       // ✅ GÉRER DEUX TYPES D'ÉVÉNEMENTS: individuels (messageId) ou en masse (isBulk)
       const eventData =
@@ -1189,6 +1233,7 @@ class MessageDeliveryService {
               userId: message.userId,
               status: message.status,
               messageCount: parseInt(message.messageCount) || 0,
+              participants: participants,
               timestamp: message.timestamp,
             }
           : {
@@ -1196,19 +1241,85 @@ class MessageDeliveryService {
               messageId: message.messageId,
               userId: message.userId,
               status: message.status,
+              participants: participants,
               timestamp: message.timestamp,
             };
 
-      for (const socketId of socketIds) {
-        const socket = this.io.sockets.sockets.get(socketId);
-        if (socket) {
-          socket.emit("message:status", eventData);
-          console.log(`✅ Statut livré via Socket.IO:`, {
-            socketId,
-            isBulk: eventData.isBulk || false,
-            messageId: eventData.messageId || "N/A",
-            conversationId: eventData.conversationId || "N/A",
-          });
+      console.log(
+        `📢 [deliverMessageStatus] Envoi à ${recipientIds.length} participant(s):`,
+        {
+          recipientIds,
+          participantsCount: participants.length,
+          isBulk: eventData.isBulk || false,
+        },
+      );
+
+      // ✅ ENVOYER À CHAQUE PARTICIPANT (ONLINE OU EN ATTENTE)
+      for (const recipientId of recipientIds) {
+        const recipientIdStr = String(recipientId);
+        const socketIds = this.userSockets.get(recipientIdStr);
+
+        if (socketIds && socketIds.length > 0) {
+          // ✅ PARTICIPANT ONLINE - LIVRER IMMÉDIATEMENT
+          console.log(
+            `✅ Participant ${recipientIdStr} ONLINE - livraison immédiate`,
+          );
+          for (const socketId of socketIds) {
+            const socket = this.io.sockets.sockets.get(socketId);
+            if (socket) {
+              socket.emit("message:status", eventData);
+              console.log(`✅ Statut livré via Socket.IO:`, {
+                socketId,
+                recipientId: recipientIdStr,
+                isBulk: eventData.isBulk || false,
+                messageId: eventData.messageId || "N/A",
+                conversationId: eventData.conversationId || "N/A",
+              });
+            }
+          }
+        } else {
+          // ✅ PARTICIPANT OFFLINE - METTRE EN ATTENTE POUR LIVRAISON ULTÉRIEURE
+          console.log(
+            `⏳ Participant ${recipientIdStr} OFFLINE - mise en attente`,
+          );
+          try {
+            const statusStreamType =
+              eventData.status === "DELIVERED"
+                ? "statusDelivered"
+                : eventData.status === "READ"
+                  ? "statusRead"
+                  : eventData.status === "EDITED"
+                    ? "statusEdited"
+                    : eventData.status === "DELETED"
+                      ? "statusDeleted"
+                      : "statusDelivered";
+
+            const pendingKey = `pending:messages:${recipientIdStr}:${statusStreamType}`;
+
+            // ✅ AJOUTER EN FILE D'ATTENTE (Redis STREAM)
+            await this.redis.xAdd(
+              pendingKey,
+              "*",
+              "event",
+              JSON.stringify(eventData),
+              "streamType",
+              statusStreamType,
+              "addedAt",
+              new Date().toISOString(),
+            );
+
+            // ✅ DÉFINIR TTL DE 24H
+            await this.redis.expire(pendingKey, 86400);
+
+            console.log(
+              `✅ Statut mis en attente pour ${recipientIdStr}: ${pendingKey}`,
+            );
+          } catch (queueErr) {
+            console.error(
+              `❌ Erreur mise en attente pour ${recipientIdStr}:`,
+              queueErr.message,
+            );
+          }
         }
       }
     } catch (error) {

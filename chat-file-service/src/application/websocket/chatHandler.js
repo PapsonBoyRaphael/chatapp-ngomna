@@ -1395,28 +1395,28 @@ class ChatHandler {
               `👥 Rooms conversations rejointes (${conversationIds.length}) en ${joinDuration}ms`,
             );
 
-            if (this.markMessageDeliveredUseCase) {
-              const updateStartTime = Date.now();
-              await Promise.all(
-                conversationIds.map(async (convId) => {
-                  try {
-                    await this.markMessageDeliveredUseCase.execute({
-                      conversationId: convId,
-                      userId: userIdString,
-                    });
-                  } catch (deliveredError) {
-                    console.warn(
-                      `⚠️ Erreur marquage delivered:`,
-                      deliveredError.message,
-                    );
-                  }
-                }),
-              );
-              const updateDuration = Date.now() - updateStartTime;
-              console.log(
-                `📝 Statuts mis à jour pour ${conversationIds.length} conversation(s) en ${updateDuration}ms`,
-              );
-            }
+            // if (this.markMessageDeliveredUseCase) {
+            //   const updateStartTime = Date.now();
+            //   await Promise.all(
+            //     conversationIds.map(async (convId) => {
+            //       try {
+            //         await this.markMessageDeliveredUseCase.execute({
+            //           conversationId: convId,
+            //           userId: userIdString,
+            //         });
+            //       } catch (deliveredError) {
+            //         console.warn(
+            //           `⚠️ Erreur marquage delivered:`,
+            //           deliveredError.message,
+            //         );
+            //       }
+            //     }),
+            //   );
+            //   const updateDuration = Date.now() - updateStartTime;
+            //   console.log(
+            //     `📝 Statuts mis à jour pour ${conversationIds.length} conversation(s) en ${updateDuration}ms`,
+            //   );
+            // }
           }
         } catch (idsError) {
           console.warn(

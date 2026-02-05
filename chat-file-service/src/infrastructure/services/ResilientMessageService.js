@@ -946,7 +946,14 @@ class ResilientMessageService {
   /**
    * ✅ PUBLIER UN STATUT DE MESSAGE
    */
-  async publishMessageStatus(messageId, userId, status, timestamp = null) {
+  async publishMessageStatus(
+    messageId,
+    userId,
+    status,
+    timestamp = null,
+    conversationParticipants = null,
+    messageContent = null, // ✅ NOUVEAU: contenu du message (pour EDITED)
+  ) {
     if (!this.redis) {
       console.log(`❌ publishMessageStatus: Redis non disponible`);
       return null;
@@ -960,6 +967,8 @@ class ResilientMessageService {
         userId: userIdStr,
         status,
         timestamp: timestamp?.toISOString(),
+        participantsCount: conversationParticipants?.length || 0,
+        hasContent: !!messageContent,
       });
 
       // ✅ VÉRIFIER SI L'UTILISATEUR EST CONNECTÉ
@@ -1018,9 +1027,45 @@ class ResilientMessageService {
         userId: userIdStr,
         status: status,
         timestamp: (timestamp || new Date()).toISOString(),
+        participants: conversationParticipants
+          ? JSON.stringify(conversationParticipants)
+          : "[]",
       };
 
-      console.log(`📊 Event data:`, eventData);
+      // ✅ AJOUTER LE CONTENU SI C'EST UN EDITED
+      if (messageContent) {
+        eventData.messageContent = messageContent.substring(0, 1000);
+      }
+
+      console.log(`📊 Event data:`, {
+        ...eventData,
+        participants: conversationParticipants?.length || 0,
+      });
+
+      const hasParticipants =
+        Array.isArray(conversationParticipants) &&
+        conversationParticipants.length > 0;
+
+      // ✅ SI PARTICIPANTS DISPONIBLES, PUBLIER POUR LIVRAISON À TOUS
+      if (hasParticipants) {
+        console.log(
+          `📡 [STATUS] Participants détectés → publication directe dans ${streamType}`,
+        );
+        try {
+          const streamId = await this.addToStream(streamName, eventData);
+          console.log(
+            `✅ [PUBLISHED] Message status publié: ${streamId} (${status}) dans ${streamName}`,
+            { streamId, status, streamName, eventData },
+          );
+          return streamId;
+        } catch (addErr) {
+          console.error(
+            `❌ [STREAM ERROR] Erreur lors de l'ajout au stream ${streamName}:`,
+            addErr.message,
+          );
+          throw addErr;
+        }
+      }
 
       // ✅ SI L'UTILISATEUR EST ONLINE
       if (isUserOnline) {
@@ -1092,9 +1137,208 @@ class ResilientMessageService {
   }
 
   /**
+   * ✅ PUBLIER UN MESSAGE SUPPRIMÉ À TOUS LES PARTICIPANTS
+   * Contrairement à DELIVERED/READ (juste l'expéditeur),
+   * DELETED doit être envoyé à TOUS les participants de la conversation
+   */
+  async publishDeletedMessageToAllParticipants(
+    messageId,
+    conversationId,
+    conversationParticipants = null,
+  ) {
+    if (!this.redis) {
+      console.log(
+        `❌ publishDeletedMessageToAllParticipants: Redis non disponible`,
+      );
+      return null;
+    }
+
+    try {
+      console.log(`🗑️ [publishDeletedMessageToAllParticipants] DÉBUT:`, {
+        messageId: messageId?.toString(),
+        conversationId: conversationId?.toString(),
+        participantsCount: conversationParticipants?.length || 0,
+      });
+
+      // ✅ RÉCUPÉRER LES PARTICIPANTS SI NON FOURNIS
+      let participants = Array.isArray(conversationParticipants)
+        ? conversationParticipants
+        : [];
+
+      if (participants.length === 0 && conversationId && this.mongoRepository) {
+        try {
+          const conversation =
+            await this.mongoRepository.findById(conversationId);
+          if (conversation) {
+            participants = conversation.participants || [];
+            console.log(
+              `👥 [DELETED] Participants trouvés: ${participants
+                .map((p) => p.userId || p)
+                .join(", ")}`,
+            );
+          }
+        } catch (convError) {
+          console.warn(
+            "⚠️ [DELETED] Erreur récupération participants:",
+            convError.message,
+          );
+        }
+      }
+
+      // ✅ ENVOYER LE DELETED À CHAQUE PARTICIPANT
+      if (participants.length === 0) {
+        console.warn(
+          `⚠️ [DELETED] Aucun participant trouvé pour ${conversationId}`,
+        );
+        return null;
+      }
+
+      const publishPromises = [];
+
+      for (const participant of participants) {
+        const participantId = String(participant.userId || participant);
+
+        console.log(
+          `📤 [DELETED] Envoi du statut DELETED au participant: ${participantId}`,
+        );
+
+        // ✅ APPELER publishMessageStatus POUR CHAQUE PARTICIPANT
+        const promise = this.publishMessageStatus(
+          messageId,
+          participantId, // ✅ Envoyer à chaque participant
+          "DELETED",
+          null,
+          participants, // ✅ Inclure les participants dans les données
+        );
+
+        publishPromises.push(promise);
+      }
+
+      // ✅ ATTENDRE QUE TOUS LES ENVOIS SOIENT TERMINÉS
+      const results = await Promise.all(publishPromises);
+      console.log(
+        `✅ [DELETED] Message supprimé envoyé à ${results.length} participant(s)`,
+      );
+
+      return results;
+    } catch (error) {
+      console.error(
+        "❌ [publishDeletedMessageToAllParticipants] Erreur:",
+        error.message,
+      );
+      console.error("Stack trace:", error.stack);
+      return null;
+    }
+  }
+
+  /**
+   * ✅ PUBLIER UN MESSAGE ÉDITÉ À TOUS LES PARTICIPANTS
+   * EDITED doit être envoyé à TOUS les participants de la conversation
+   * pour qu'ils voient la mise à jour du contenu
+   */
+  async publishEditedMessageToAllParticipants(
+    messageId,
+    conversationId,
+    messageContent,
+    conversationParticipants = null,
+  ) {
+    if (!this.redis) {
+      console.log(
+        `❌ publishEditedMessageToAllParticipants: Redis non disponible`,
+      );
+      return null;
+    }
+
+    try {
+      console.log(`✏️ [publishEditedMessageToAllParticipants] DÉBUT:`, {
+        messageId: messageId?.toString(),
+        conversationId: conversationId?.toString(),
+        contentLength: messageContent?.length || 0,
+        participantsCount: conversationParticipants?.length || 0,
+      });
+
+      // ✅ RÉCUPÉRER LES PARTICIPANTS SI NON FOURNIS
+      let participants = Array.isArray(conversationParticipants)
+        ? conversationParticipants
+        : [];
+
+      if (participants.length === 0 && conversationId && this.mongoRepository) {
+        try {
+          const conversation =
+            await this.mongoRepository.findById(conversationId);
+          if (conversation) {
+            participants = conversation.participants || [];
+            console.log(
+              `👥 [EDITED] Participants trouvés: ${participants
+                .map((p) => p.userId || p)
+                .join(", ")}`,
+            );
+          }
+        } catch (convError) {
+          console.warn(
+            "⚠️ [EDITED] Erreur récupération participants:",
+            convError.message,
+          );
+        }
+      }
+
+      // ✅ ENVOYER L'EDITED À CHAQUE PARTICIPANT
+      if (participants.length === 0) {
+        console.warn(
+          `⚠️ [EDITED] Aucun participant trouvé pour ${conversationId}`,
+        );
+        return null;
+      }
+
+      const publishPromises = [];
+
+      for (const participant of participants) {
+        const participantId = String(participant.userId || participant);
+
+        console.log(
+          `📤 [EDITED] Envoi du statut EDITED au participant: ${participantId}`,
+        );
+
+        // ✅ APPELER publishMessageStatus POUR CHAQUE PARTICIPANT
+        const promise = this.publishMessageStatus(
+          messageId,
+          participantId, // ✅ Envoyer à chaque participant
+          "EDITED",
+          null,
+          participants, // ✅ Inclure les participants dans les données
+          messageContent, // ✅ INCLURE LE NOUVEAU CONTENU
+        );
+
+        publishPromises.push(promise);
+      }
+
+      // ✅ ATTENDRE QUE TOUS LES ENVOIS SOIENT TERMINÉS
+      const results = await Promise.all(publishPromises);
+      console.log(
+        `✅ [EDITED] Message édité envoyé à ${results.length} participant(s)`,
+      );
+
+      return results;
+    } catch (error) {
+      console.error(
+        "❌ [publishEditedMessageToAllParticipants] Erreur:",
+        error.message,
+      );
+      console.error("Stack trace:", error.stack);
+      return null;
+    }
+  }
+
+  /**
    * ✅ PUBLIER UN STATUT BULK (plusieurs messages)
    */
-  async publishBulkMessageStatus(conversationId, userId, status, messageCount) {
+  async publishBulkMessageStatus(
+    conversationId,
+    userId,
+    status,
+    messageCount,
+    conversationParticipants = null,
+  ) {
     if (!this.redis) {
       console.log(`❌ publishBulkMessageStatus: Redis non disponible`);
       return null;
@@ -1109,6 +1353,31 @@ class ResilientMessageService {
         status,
         messageCount,
       });
+
+      // ✅ RÉCUPÉRER LES PARTICIPANTS DE LA CONVERSATION (si non fournis)
+      let participants = Array.isArray(conversationParticipants)
+        ? conversationParticipants
+        : [];
+
+      if (participants.length === 0 && conversationId && this.mongoRepository) {
+        try {
+          const conversation =
+            await this.mongoRepository.findById(conversationId);
+          if (conversation) {
+            participants = conversation.participants || [];
+            console.log(
+              `👥 [BULK] Participants trouvés: ${participants
+                .map((p) => p.userId || p)
+                .join(", ")}`,
+            );
+          }
+        } catch (convError) {
+          console.warn(
+            "⚠️ [BULK] Erreur récupération participants:",
+            convError.message,
+          );
+        }
+      }
 
       // ✅ VÉRIFIER SI L'UTILISATEUR EST CONNECTÉ
       const isUserOnline =
@@ -1145,9 +1414,27 @@ class ResilientMessageService {
         status: status.toUpperCase(),
         messageCount: messageCount.toString(),
         isBulk: "true",
+        participants: JSON.stringify(participants),
         timestamp: new Date().toISOString(),
         publishedAt: Date.now().toString(),
       };
+
+      const hasParticipants = participants.length > 0;
+
+      // ✅ SI PARTICIPANTS DISPONIBLES, PUBLIER POUR LIVRAISON À TOUS
+      if (hasParticipants) {
+        console.log(
+          `📡 [BULK] Participants détectés → publication directe vers ${streamName}`,
+        );
+        try {
+          const streamId = await this.addToStream(streamName, data);
+          console.log(`✅ [BULK] Événement bulk publié: ${streamId}`);
+          return streamId;
+        } catch (addErr) {
+          console.error(`❌ [BULK] Erreur addToStream: ${addErr.message}`);
+          throw addErr;
+        }
+      }
 
       // ✅ SI L'UTILISATEUR EST ONLINE
       if (isUserOnline) {
