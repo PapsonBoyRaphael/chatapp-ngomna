@@ -303,7 +303,14 @@ class MongoMessageRepository {
         throw new Error("receiverId et status sont requis");
       }
 
-      const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED", "DELETED"];
+      const validStatuses = [
+        "SENT",
+        "DELIVERED",
+        "READ",
+        "FAILED",
+        "DELETED",
+        "EDITED",
+      ];
       if (!validStatuses.includes(status)) {
         throw new Error(
           `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`,
@@ -680,7 +687,14 @@ class MongoMessageRepository {
       }
 
       // ✅ VALIDATION DU STATUT
-      const validStatuses = ["SENT", "DELIVERED", "READ", "FAILED", "DELETED"];
+      const validStatuses = [
+        "SENT",
+        "DELIVERED",
+        "READ",
+        "EDITED",
+        "FAILED",
+        "DELETED",
+      ];
       if (!validStatuses.includes(status)) {
         throw new Error(
           `Status invalide. Valeurs acceptées: ${validStatuses.join(", ")}`,
@@ -715,7 +729,7 @@ class MongoMessageRepository {
 
       // ✅ EMPÊCHER LA RÉGRESSION DE STATUT
       if (existingMessage) {
-        const statusOrder = { SENT: 1, DELIVERED: 2, READ: 3 };
+        const statusOrder = { SENT: 1, DELIVERED: 2, READ: 3, EDITED: 4 };
         if (statusOrder[existingMessage.status] > statusOrder[status]) {
           console.log(
             `⚠️ Impossible de rétrograder le statut de ${existingMessage.status} à ${status}`,
@@ -839,31 +853,6 @@ class MongoMessageRepository {
             convError.message,
           );
           // Ne pas faire échouer la suppression du message pour autant
-        }
-      }
-
-      // ✅ PUBLIER ÉVÉNEMENT KAFKA
-      if (
-        this.kafkaProducer &&
-        typeof this.kafkaProducer.publishMessage === "function"
-      ) {
-        try {
-          await this._publishMessageEvent(
-            "SINGLE_MESSAGE_STATUS_UPDATED",
-            updateResult,
-            {
-              messageId,
-              receiverId,
-              status,
-              processingTime,
-              previousStatus: existingMessage
-                ? existingMessage.status
-                : "unknown",
-            },
-          );
-          console.log(`📤 Événement Kafka publié pour message ${messageId}`);
-        } catch (kafkaError) {
-          console.warn("⚠️ Erreur publication Kafka:", kafkaError.message);
         }
       }
 

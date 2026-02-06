@@ -39,7 +39,6 @@ class MarkMessageDelivered {
       });
 
       let result;
-      messageId = null; // forcer l'utilisation de conversationId + messageIds
 
       // ✅ CAS 1 : UN SEUL MESSAGE
       if (messageId) {
@@ -53,17 +52,17 @@ class MarkMessageDelivered {
         );
       }
       // ✅ CAS 2 : TOUS LES MESSAGES D'UNE CONVERSATION
-      else if (conversationId && !messageIds) {
-        console.log(
-          `📬 Marquage TOUS messages conversation ${conversationId} comme DELIVERED`,
-        );
-        result = await this.messageRepository.updateMessageStatus(
-          conversationId,
-          userId,
-          "DELIVERED",
-          [], // messageIds vide = tous les messages
-        );
-      }
+      // else if (conversationId && !messageIds) {
+      //   console.log(
+      //     `📬 Marquage TOUS messages conversation ${conversationId} comme DELIVERED`,
+      //   );
+      //   result = await this.messageRepository.updateMessageStatus(
+      //     conversationId,
+      //     userId,
+      //     "DELIVERED",
+      //     [], // messageIds vide = tous les messages
+      //   );
+      // }
       // ✅ CAS 3 : MESSAGES SPÉCIFIQUES
       else if (conversationId && messageIds) {
         console.log(
@@ -99,7 +98,10 @@ class MarkMessageDelivered {
               messageId,
               result.message.senderId, // ✅ À l'EXPÉDITEUR du message
               "DELIVERED",
+              result.message.receiveAt,
+              result.message.messageContent,
             );
+            console.log("Message unique livré !!!!!!!");
           } else if (messageIds && messageIds.length > 0) {
             // Pour les messages spécifiques
             for (const msgId of messageIds) {
@@ -107,35 +109,12 @@ class MarkMessageDelivered {
                 msgId,
                 result.senderId, // ✅ À l'EXPÉDITEUR du message
                 "DELIVERED",
+                null,
+                null,
+                null,
               );
             }
-          } else {
-            // Pour tous les messages d'une conversation, publier un événement bulk à l'expéditeur
-            // Récupérer les participants pour la publication bulk
-            let conversationParticipants = [];
-            if (conversationId && this.conversationRepository) {
-              try {
-                const conversation =
-                  await this.conversationRepository.findById(conversationId);
-                conversationParticipants = conversation.participants || [];
-              } catch (convErr) {
-                console.warn(
-                  "⚠️ Erreur récupération participants:",
-                  convErr.message,
-                );
-              }
-            }
-
-            // ✅ PUBLIER UN ÉVÉNEMENT BULK à tous les expéditeurs (pour qu'ils voient que c'est livré)
-            await this.resilientMessageService.publishBulkMessageStatus(
-              conversationId,
-              userId, // ✅ Celui qui marque comme DELIVERED (receiver)
-              "DELIVERED",
-              result?.modifiedCount || 0,
-              conversationParticipants, // ✅ Inclure les participants
-            );
           }
-
           console.log(`📤 [DELIVERED] événements publiés`);
         } catch (streamErr) {
           console.error(

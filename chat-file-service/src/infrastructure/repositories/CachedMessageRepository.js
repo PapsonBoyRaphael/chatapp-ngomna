@@ -55,7 +55,7 @@ class CachedMessageRepository {
         const cached = await this.cache.get(cacheKey);
         if (cached) {
           console.log(
-            `📦 Messages depuis cache: ${conversationId} (${cacheKey})`
+            `📦 Messages depuis cache: ${conversationId} (${cacheKey})`,
           );
 
           // ✅ RENOUVELER TTL SUR HIT
@@ -74,7 +74,7 @@ class CachedMessageRepository {
       console.log(
         `🔍 Messages depuis MongoDB: ${conversationId} ${
           cursor ? `(cursor: ${cursor})` : `(page: ${page})`
-        }`
+        }`,
       );
 
       let result;
@@ -82,13 +82,13 @@ class CachedMessageRepository {
         // ✅ PAGINATION CURSOR-BASED
         result = await this.primaryStore.findByConversationWithCursor(
           conversationId,
-          { cursor, limit, direction, userId }
+          { cursor, limit, direction, userId },
         );
       } else {
         // ✅ PAGINATION PAGE-BASED (fallback)
         const messages = await this.primaryStore.findByConversation(
           conversationId,
-          { page, limit, userId }
+          { page, limit, userId },
         );
 
         result = {
@@ -102,7 +102,7 @@ class CachedMessageRepository {
       if (useCache && this.cache && cacheKey && result.messages?.length > 0) {
         await this.cache.set(cacheKey, result, ttl);
         console.log(
-          `💾 Messages mis en cache: ${result.messages.length} (TTL: ${ttl}s)`
+          `💾 Messages mis en cache: ${result.messages.length} (TTL: ${ttl}s)`,
         );
       }
 
@@ -116,7 +116,7 @@ class CachedMessageRepository {
       // ✅ FALLBACK SANS CACHE
       const messages = await this.primaryStore.findByConversation(
         conversationId,
-        { page: 1, limit: 20 }
+        { page: 1, limit: 20 },
       );
 
       return {
@@ -150,7 +150,7 @@ class CachedMessageRepository {
 
       const result = await this.primaryStore.findByConversation(
         conversationId,
-        { page: 1, limit, useCache: false }
+        { page: 1, limit, useCache: false },
       );
 
       const messages = result.messages || result;
@@ -159,7 +159,7 @@ class CachedMessageRepository {
       if (this.cache && messages.length > 0) {
         await this.cache.set(quickCacheKey, { messages }, this.quickTTL);
         console.log(
-          `⚡ Quick messages mis en cache: ${messages.length} (${this.quickTTL}s)`
+          `⚡ Quick messages mis en cache: ${messages.length} (${this.quickTTL}s)`,
         );
       }
 
@@ -174,7 +174,7 @@ class CachedMessageRepository {
       // Fallback
       const result = await this.primaryStore.findByConversation(
         conversationId,
-        { page: 1, limit: 20 }
+        { page: 1, limit: 20 },
       );
 
       return {
@@ -201,7 +201,7 @@ class CachedMessageRepository {
       if (savedMessage.receiverId) {
         await this.incrementUnreadCount(
           savedMessage.conversationId,
-          savedMessage.receiverId
+          savedMessage.receiverId,
         );
       }
 
@@ -213,7 +213,7 @@ class CachedMessageRepository {
 
       const processingTime = Date.now() - startTime;
       console.log(
-        `✅ Message sauvegardé avec cache: ${savedMessage._id} (${processingTime}ms)`
+        `✅ Message sauvegardé avec cache: ${savedMessage._id} (${processingTime}ms)`,
       );
 
       return savedMessage;
@@ -252,7 +252,7 @@ class CachedMessageRepository {
           if (deleted > 0) {
             invalidated += deleted;
             console.log(
-              `🗑️ Cache invalidé (messages): ${pattern} (${deleted} clés)`
+              `🗑️ Cache invalidé (messages): ${pattern} (${deleted} clés)`,
             );
           }
         } catch (error) {
@@ -262,7 +262,7 @@ class CachedMessageRepository {
 
       if (invalidated > 0) {
         console.log(
-          `🗑️ Total cache invalidé: ${invalidated} clé(s) pour ${conversationId}`
+          `🗑️ Total cache invalidé: ${invalidated} clé(s) pour ${conversationId}`,
         );
       }
 
@@ -303,7 +303,7 @@ class CachedMessageRepository {
       ]);
 
       console.log(
-        `📈 Unread incrémenté: ${userId} dans ${conversationId} = ${userCount}`
+        `📈 Unread incrémenté: ${userId} dans ${conversationId} = ${userCount}`,
       );
       return userCount;
     } catch (error) {
@@ -332,7 +332,7 @@ class CachedMessageRepository {
     if (!this.redis) {
       return await this.primaryStore.countUnreadMessages(
         conversationId,
-        userId
+        userId,
       );
     }
 
@@ -350,7 +350,7 @@ class CachedMessageRepository {
       console.log(`🔍 Unread miss → recalcul MongoDB`);
       const realCount = await this.primaryStore.countUnreadMessages(
         conversationId,
-        userId
+        userId,
       );
 
       if (realCount > 0) {
@@ -362,7 +362,7 @@ class CachedMessageRepository {
       console.warn("⚠️ Erreur getUnreadCount:", error.message);
       return await this.primaryStore.countUnreadMessages(
         conversationId,
-        userId
+        userId,
       );
     }
   }
@@ -383,7 +383,7 @@ class CachedMessageRepository {
         conversationId,
         userId,
         "READ",
-        messageIds
+        messageIds,
       );
 
       if (result.modifiedCount > 0) {
@@ -404,7 +404,7 @@ class CachedMessageRepository {
         conversationId,
         userId,
         status,
-        messageIds
+        messageIds,
       );
 
       await this.invalidateConversationCaches(conversationId);
@@ -416,6 +416,36 @@ class CachedMessageRepository {
       return result;
     } catch (error) {
       console.error("❌ Erreur updateMessageStatus:", error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ Mettre à jour le statut d'un message unique
+   */
+  async updateSingleMessageStatus(messageId, receiverId, status) {
+    try {
+      const result = await this.primaryStore.updateSingleMessageStatus(
+        messageId,
+        receiverId,
+        status,
+      );
+
+      // Invalider le cache de la conversation si le message existe
+      if (result && result.message && result.message.conversationId) {
+        await this.invalidateConversationCaches(result.message.conversationId);
+
+        if (status === "READ") {
+          await this.resetUnreadCount(
+            result.message.conversationId,
+            receiverId,
+          );
+        }
+      }
+
+      return result;
+    } catch (error) {
+      console.error("❌ Erreur updateSingleMessageStatus:", error.message);
       throw error;
     }
   }
