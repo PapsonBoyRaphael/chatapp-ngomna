@@ -98,16 +98,18 @@ class MarkMessageDelivered {
               messageId,
               result.message.senderId, // ✅ À l'EXPÉDITEUR du message
               "DELIVERED",
-              result.message.receiveAt,
-              result.message.messageContent,
+              result.message.receivedAt || result.message.receiveAt || null,
+              null,
+              null,
             );
-            console.log("Message unique livré !!!!!!!");
           } else if (messageIds && messageIds.length > 0) {
             // Pour les messages spécifiques
             for (const msgId of messageIds) {
+              const message = await this.messageRepository.findById(msgId);
+              if (!message) continue;
               await this.resilientMessageService.publishMessageStatus(
                 msgId,
-                result.senderId, // ✅ À l'EXPÉDITEUR du message
+                message.senderId, // ✅ À l'EXPÉDITEUR du message
                 "DELIVERED",
                 null,
                 null,

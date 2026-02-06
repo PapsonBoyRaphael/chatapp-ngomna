@@ -369,6 +369,10 @@ class CachedMessageRepository {
 
   // ===== AUTRES MÉTHODES (déléguées au primaryStore) =====
 
+  async findById(messageId) {
+    return await this.primaryStore.findById(messageId);
+  }
+
   async getLastMessage(conversationId) {
     return await this.primaryStore.getLastMessage(conversationId);
   }
