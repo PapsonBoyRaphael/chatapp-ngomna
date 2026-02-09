@@ -444,6 +444,7 @@ const startServer = async () => {
       conversationRepository, // Cached
       messageRepository, // Cached
       cacheServiceInstance,
+      onlineUserManager, // ✅ AJOUTÉ pour statuts de présence
     );
 
     const updateMessageStatusUseCase = new UpdateMessageStatus(

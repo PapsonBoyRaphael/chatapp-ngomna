@@ -1581,13 +1581,42 @@ class ChatHandler {
   // ✅ DÉCONNEXION
   async handleDisconnection(socket, reason = "unknown") {
     const userId = socket.userId;
+    const socketId = socket.id;
     const matricule = socket.matricule;
 
     try {
-      if (userId && this.onlineUserManager) {
-        await this.onlineUserManager.setUserOffline(userId);
+      if (userId) {
+        // ✅ DÉSENREGISTRER DU MessageDeliveryService
+        if (this.messageDeliveryService) {
+          this.messageDeliveryService.unregisterUserSocket(userId, socketId);
+        }
 
-        console.log(`👋 Utilisateur ${matricule} (${userId}) déconnecté`);
+        // ✅ MARQUER OFFLINE DANS Redis (avec socketId pour multi-connexions)
+        if (this.onlineUserManager) {
+          await this.onlineUserManager.setUserOffline(userId, socketId);
+
+          // ✅ VÉRIFIER SI L'UTILISATEUR EST RÉELLEMENT OFFLINE APRÈS LA DÉCONNEXION
+          const isStillOnline =
+            await this.onlineUserManager.isUserOnline(userId);
+
+          if (!isStillOnline) {
+            // L'utilisateur n'a plus de connexions actives, broadcaster la déconnexion
+            socket.broadcast.emit("user_disconnected", {
+              userId,
+              matricule,
+              timestamp: new Date().toISOString(),
+              reason,
+            });
+
+            console.log(
+              `👋 Utilisateur ${matricule} (${userId}) complètement déconnecté`,
+            );
+          } else {
+            console.log(
+              `📱 Socket ${socketId} déconnecté mais ${matricule} (${userId}) reste en ligne`,
+            );
+          }
+        }
       }
     } catch (error) {
       console.error("❌ Erreur déconnexion:", error);

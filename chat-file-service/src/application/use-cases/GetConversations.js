@@ -1,7 +1,14 @@
 class GetConversations {
-  constructor(conversationRepository, messageRepository) {
+  constructor(
+    conversationRepository,
+    messageRepository,
+    cacheService = null,
+    onlineUserManager = null,
+  ) {
     this.conversationRepository = conversationRepository;
     this.messageRepository = messageRepository;
+    this.cacheService = cacheService;
+    this.onlineUserManager = onlineUserManager;
   }
 
   // ✅ HELPER: Extract unread count from userMetadata (authoritative source)
@@ -71,24 +78,30 @@ class GetConversations {
           new Date(a.lastMessageAt || a.updatedAt),
       );
 
+      // ✅ ENRICHIR LES CONVERSATIONS AVEC LE STATUT DE PRÉSENCE DES PARTICIPANTS
+      const enrichedConversations = await this._enrichConversationsWithPresence(
+        sortedConversations,
+        userId,
+      );
+
       // ✅ SÉPARER LES CONVERSATIONS PAR CATÉGORIE
       // Conversations non lues
-      const unreadConversations = sortedConversations.filter(
+      const unreadConversations = enrichedConversations.filter(
         (c) => this._getUnreadCountFromUserMetadata(c, userId) > 0,
       );
 
       // Conversations de groupe
-      const groupConversations = sortedConversations.filter(
+      const groupConversations = enrichedConversations.filter(
         (c) => c.type === "GROUP",
       );
 
       // Conversations de diffusion
-      const broadcastConversations = sortedConversations.filter(
+      const broadcastConversations = enrichedConversations.filter(
         (c) => c.type === "BROADCAST",
       );
 
       // Conversations du département (PRIVATE où tous les participants ont le même département)
-      const departementConversations = sortedConversations.filter((c) => {
+      const departementConversations = enrichedConversations.filter((c) => {
         if (c.type !== "PRIVATE") return false;
         if (!userDepartement) return false;
 
@@ -106,7 +119,7 @@ class GetConversations {
       });
 
       // Conversations privées (autres)
-      const privateConversations = sortedConversations.filter(
+      const privateConversations = enrichedConversations.filter(
         (c) =>
           c.type === "PRIVATE" &&
           !departementConversations.some((dc) => dc._id === c._id),
@@ -118,7 +131,7 @@ class GetConversations {
       const hasPrevious = page > 1;
 
       const finalResult = {
-        conversations: sortedConversations,
+        conversations: enrichedConversations,
 
         // ✅ CONVERSATIONS PAR CATÉGORIE
         categorized: {
@@ -131,7 +144,7 @@ class GetConversations {
 
         // ✅ STATISTIQUES PAR CATÉGORIE
         stats: {
-          total: sortedConversations.length,
+          total: enrichedConversations.length,
           unread: unreadConversations.length,
           groups: groupConversations.length,
           broadcasts: broadcastConversations.length,
@@ -175,7 +188,7 @@ class GetConversations {
         },
         totalCount: totalCount,
         unreadConversations: unreadConversations.length,
-        totalUnreadMessages: sortedConversations.reduce(
+        totalUnreadMessages: enrichedConversations.reduce(
           (sum, c) => sum + this._getUnreadCountFromUserMetadata(c, userId),
           0,
         ),
@@ -203,6 +216,132 @@ class GetConversations {
         `❌ Erreur GetConversations: ${error.message} (${processingTime}ms)`,
       );
       throw error;
+    }
+  }
+
+  /**
+   * ✅ ENRICHIR LES CONVERSATIONS AVEC LE STATUT DE PRÉSENCE DES PARTICIPANTS
+   */
+  async _enrichConversationsWithPresence(conversations, currentUserId) {
+    if (
+      !this.onlineUserManager ||
+      !conversations ||
+      conversations.length === 0
+    ) {
+      return conversations;
+    }
+
+    try {
+      // Collecter tous les participants uniques de toutes les conversations
+      const allParticipantIds = new Set();
+
+      for (const conv of conversations) {
+        if (Array.isArray(conv.participants)) {
+          conv.participants.forEach((p) => allParticipantIds.add(String(p)));
+        }
+      }
+
+      // Récupérer le statut de présence de tous les participants en batch
+      const presenceMap = new Map();
+
+      for (const participantId of allParticipantIds) {
+        try {
+          const isOnline =
+            await this.onlineUserManager.isUserOnline(participantId);
+
+          let presenceData = null;
+
+          if (isOnline) {
+            // Utilisateur en ligne : récupérer depuis user_data
+            const userData =
+              await this.onlineUserManager.getUserData(participantId);
+
+            presenceData = {
+              isOnline: true,
+              status: userData?.status || "online",
+              lastActivity: userData?.lastActivity || null,
+            };
+          } else {
+            // Utilisateur offline : récupérer depuis last_seen
+            const lastSeenData =
+              await this.onlineUserManager.getLastSeen(participantId);
+
+            presenceData = {
+              isOnline: false,
+              status: "offline",
+              lastActivity: lastSeenData?.lastActivity || null,
+              disconnectedAt: lastSeenData?.disconnectedAt || null,
+            };
+          }
+
+          presenceMap.set(String(participantId), presenceData);
+        } catch (err) {
+          // En cas d'erreur pour un participant, on met offline par défaut
+          presenceMap.set(String(participantId), {
+            isOnline: false,
+            status: "offline",
+            lastActivity: null,
+          });
+        }
+      }
+
+      // Enrichir chaque conversation avec les infos de présence
+      return conversations.map((conv) => {
+        // Enrichir userMetadata avec le statut de présence
+        if (Array.isArray(conv.userMetadata)) {
+          conv.userMetadata = conv.userMetadata.map((meta) => {
+            const participantPresence = presenceMap.get(String(meta.userId));
+
+            return {
+              ...meta,
+              presence: participantPresence || {
+                isOnline: false,
+                status: "offline",
+                lastActivity: null,
+              },
+            };
+          });
+        }
+
+        // Ajouter des statistiques de présence au niveau de la conversation
+        const onlineParticipants =
+          conv.participants?.filter(
+            (p) => presenceMap.get(String(p))?.isOnline,
+          ) || [];
+
+        conv.presenceStats = {
+          totalParticipants: conv.participants?.length || 0,
+          onlineCount: onlineParticipants.length,
+          offlineCount:
+            (conv.participants?.length || 0) - onlineParticipants.length,
+          onlineParticipants: onlineParticipants,
+        };
+
+        // Pour les conversations privées (1-à-1), déterminer si l'autre utilisateur est en ligne
+        if (
+          conv.type === "PRIVATE" &&
+          Array.isArray(conv.participants) &&
+          conv.participants.length === 2
+        ) {
+          const otherUserId = conv.participants.find(
+            (p) => String(p) !== String(currentUserId),
+          );
+          if (otherUserId) {
+            const otherUserPresence = presenceMap.get(String(otherUserId));
+            conv.otherUserPresence = otherUserPresence || {
+              isOnline: false,
+              status: "offline",
+              lastActivity: null,
+            };
+          }
+        }
+
+        return conv;
+      });
+    } catch (error) {
+      console.error("❌ Erreur enrichissement présence:", error.message);
+      // En cas d'erreur, retourner les conversations sans enrichissement
+      return conversations;
     }
   }
 }

@@ -224,7 +224,7 @@ class OnlineUserManager {
   }
 
   /**
-   * ✅ DIFFUSER LA PRÉSENCE UNIQUEMENT AUX CONTACTS (user_rooms)
+   * ✅ DIFFUSER LA PRÉSENCE AUX CONTACTS (user_rooms) ET AUX CONVERSATIONS
    */
   async emitPresenceToContacts(userId, event, payload) {
     if (!this.redis || !this.io) return;
@@ -237,24 +237,32 @@ class OnlineUserManager {
 
       if (!userRooms || userRooms.length === 0) return;
 
+      // ✅ ÉTAPE 1: RÉCUPÉRER TOUS LES UTILISATEURS DANS CHAQUE CONVERSATION
       const contactIds = new Set();
-
       for (const roomName of userRooms) {
         const roomUsers = await this.redis.sMembers(
           `${this.roomUsersPrefix}:${roomName}`,
         );
-        for (const contactId of roomUsers) {
-          if (contactId && contactId !== userIdString) {
-            contactIds.add(contactId);
+        roomUsers.forEach((id) => {
+          if (String(id) !== userIdString) {
+            contactIds.add(id);
           }
-        }
+        });
       }
 
-      if (contactIds.size === 0) return;
-
+      // ✅ ÉTAPE 2: ÉMETTRE À CHAQUE CONTACT INDIVIDUELLEMENT
       for (const contactId of contactIds) {
         this.io.to(`user_${contactId}`).emit(event, payload);
       }
+
+      // ✅ ÉTAPE 3: ÉMETTRE AUSSI AUX CONVERSATIONS OÙ L'UTILISATEUR EST PRÉSENT
+      for (const roomName of userRooms) {
+        this.io.to(roomName).emit(event, payload);
+      }
+
+      console.log(
+        `📢 Présence "${event}" diffusée à ${contactIds.size} contact(s) et ${userRooms.length} conversation(s)`,
+      );
     } catch (err) {
       console.error("❌ Erreur emitPresenceToContacts:", err.message);
     }
