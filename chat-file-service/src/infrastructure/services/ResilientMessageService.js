@@ -2177,19 +2177,18 @@ class ResilientMessageService {
       // ✅ PATTERNS DE SUPPRESSION COMPLETS
       const patterns = [
         // 1. Streams principaux
-        "stream:*",
-        "*:stream",
+        "chat:stream:*",
 
         // 2. Données de synchronisation
         "*sync*",
         "message-sync:*",
 
         // 3. Présence et utilisateurs en ligne
-        "presence:*",
-        "online:*",
-        "user:*",
-        "userData:*",
-        "userSocket:*",
+        "chat:cache:presence:*",
+        "chat:cache:online:*",
+        "chat:cache:user:*",
+        "chat:cache:user_data:*",
+        "chat:cache:user_sockets:*",
 
         // 4. Messages en attente et delivery
         "pending:messages:*",
@@ -2207,7 +2206,7 @@ class ResilientMessageService {
         "consumer:*",
 
         // 7. Cache applicatif
-        "chat:*",
+        "chat:cache:*",
         "conversation:*",
         "conversations:*",
         "unread:*",
@@ -2215,10 +2214,12 @@ class ResilientMessageService {
         "messages:*",
 
         // 8. Rooms et gestion temps-réel
-        "room:*",
-        "rooms:*",
-        "roomUsers:*",
-        "userRooms:*",
+        "chat:cache:rooms:*",
+        "chat:cache:room_users:*",
+        "chat:cache:room_data:*",
+        "chat:cache:user_rooms:*",
+        "chat:cache:room_state:*",
+        "chat:cache:last_seen:*",
 
         // 9. Autres patterns possibles
         "file:*",
@@ -2306,11 +2307,11 @@ class ResilientMessageService {
         "wal:stream",
         "fallback:stream",
         "dlq:stream",
-        "stream:messages:private",
-        "stream:messages:group",
-        "stream:events:typing",
-        "stream:message_status",
-        "stream:messages:system",
+        "chat:stream:messages:private",
+        "chat:stream:messages:group",
+        "chat:stream:events:typing",
+        "chat:stream:message_status",
+        "chat:stream:messages:system",
         "active:conversations",
         "global:stats",
       ];
@@ -2438,11 +2439,25 @@ class ResilientMessageService {
     }
 
     const categories = {
-      streams: ["stream:*", "*:stream"],
-      users: ["presence:*", "online:*", "user:*", "userData:*"],
+      streams: ["chat:stream:*"],
+      users: [
+        "chat:cache:presence:*",
+        "chat:cache:online:*",
+        "chat:cache:user:*",
+        "chat:cache:user_data:*",
+        "chat:cache:last_seen:*",
+        "chat:cache:user_sockets:*",
+        "chat:cache:user_sockets_set:*",
+      ],
       messages: ["pending:messages:*", "messages:*", "last_messages:*"],
-      cache: ["cache:*", "conversation:*", "conversations:*"],
-      rooms: ["room:*", "rooms:*", "roomUsers:*", "userRooms:*"],
+      cache: ["chat:cache:*", "conversation:*", "conversations:*"],
+      rooms: [
+        "chat:cache:rooms:*",
+        "chat:cache:room_users:*",
+        "chat:cache:room_data:*",
+        "chat:cache:user_rooms:*",
+        "chat:cache:room_state:*",
+      ],
       resilience: ["fallback:*", "retry:*", "wal:*", "dlq:*"],
     };
 

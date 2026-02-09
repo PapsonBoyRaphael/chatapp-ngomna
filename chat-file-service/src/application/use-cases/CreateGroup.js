@@ -138,21 +138,24 @@ class CreateGroup {
     const savedConversation =
       await this.conversationRepository.save(conversationData);
 
-    // ✅ PUBLIER DANS REDIS STREAMS events:conversations
+    // ✅ PUBLIER DANS REDIS STREAMS chat:stream:events:conversations
     if (this.resilientMessageService) {
       try {
-        await this.resilientMessageService.addToStream("events:conversations", {
-          event: "conversation.created",
-          conversationId: savedConversation._id.toString(),
-          type: "GROUP",
-          createdBy: adminId,
-          participants: JSON.stringify(participants),
-          name: name,
-          participantCount: participants.length.toString(),
-          timestamp: Date.now().toString(),
-        });
+        await this.resilientMessageService.addToStream(
+          "chat:stream:events:conversations",
+          {
+            event: "conversation.created",
+            conversationId: savedConversation._id.toString(),
+            type: "GROUP",
+            createdBy: adminId,
+            participants: JSON.stringify(participants),
+            name: name,
+            participantCount: participants.length.toString(),
+            timestamp: Date.now().toString(),
+          },
+        );
         console.log(
-          `📤 [conversation.created] publié dans events:conversations`,
+          `📤 [conversation.created] publié dans chat:stream:events:conversations`,
         );
       } catch (streamErr) {
         console.error(
@@ -189,7 +192,7 @@ class CreateGroup {
           },
           {
             eventType: "GROUP_CREATED",
-            stream: "stream:messages:group",
+            stream: "chat:stream:messages:group",
           },
         );
         console.log(

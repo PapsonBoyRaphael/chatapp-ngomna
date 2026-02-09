@@ -81,23 +81,26 @@ class DeleteFile {
       result = await this.fileRepository.save(file);
     }
 
-    // ✅ PUBLIER DANS REDIS STREAMS events:files
+    // ✅ PUBLIER DANS REDIS STREAMS chat:stream:events:files
     if (this.resilientMessageService) {
       try {
-        await this.resilientMessageService.addToStream("events:files", {
-          event: "file.deleted",
-          userId: userId, // ✅ REQUIS : l'utilisateur qui a supprimé le fichier
-          fileId: fileInfo.fileId,
-          fileName: fileInfo.fileName,
-          fileSize: fileInfo.size.toString(),
-          conversationId: fileInfo.conversationId || "unknown",
-          originalName: fileInfo.originalName,
-          mimeType: fileInfo.mimeType,
-          deletedAt: new Date().toISOString(),
-          physicalDelete: physicalDelete.toString(),
-          timestamp: Date.now().toString(),
-        });
-        console.log(`📤 [file.deleted] publié dans events:files`);
+        await this.resilientMessageService.addToStream(
+          "chat:stream:events:files",
+          {
+            event: "file.deleted",
+            userId: userId, // ✅ REQUIS : l'utilisateur qui a supprimé le fichier
+            fileId: fileInfo.fileId,
+            fileName: fileInfo.fileName,
+            fileSize: fileInfo.size.toString(),
+            conversationId: fileInfo.conversationId || "unknown",
+            originalName: fileInfo.originalName,
+            mimeType: fileInfo.mimeType,
+            deletedAt: new Date().toISOString(),
+            physicalDelete: physicalDelete.toString(),
+            timestamp: Date.now().toString(),
+          },
+        );
+        console.log(`📤 [file.deleted] publié dans chat:stream:events:files`);
       } catch (streamErr) {
         console.error(
           "❌ Erreur publication stream file.deleted:",

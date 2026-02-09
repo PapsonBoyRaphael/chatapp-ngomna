@@ -40,17 +40,17 @@ class DeleteUser {
           timestamp: Date.now(),
         };
 
-        await this.redisClient.xAdd("events:users", "*", {
+        await this.redisClient.xAdd("chat:stream:events:users", "*", {
           payload: JSON.stringify(event),
         });
 
         console.log(
-          `📤 [DeleteUser] Événement user.profile.deleted publié pour user ${userId}`
+          `📤 [DeleteUser] Événement user.profile.deleted publié pour user ${userId}`,
         );
       } catch (error) {
         console.error(
           "❌ [DeleteUser] Erreur publication event:",
-          error.message
+          error.message,
         );
         // Non-bloquant
       }

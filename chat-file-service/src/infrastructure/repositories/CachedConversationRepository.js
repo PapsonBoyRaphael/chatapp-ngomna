@@ -27,7 +27,7 @@ class CachedConversationRepository {
     this.quickTTL = 60; // 1 minute pour quick load
     this.listTTL = 600; // 10 minutes pour listes
 
-    this.cacheKeyPrefix = "chat:convs";
+    this.cacheKeyPrefix = "cache:convs";
   }
 
   // ===== LIRE LES CONVERSATIONS D'UN UTILISATEUR (CACHE INTELLIGENT) =====
@@ -479,6 +479,30 @@ class CachedConversationRepository {
       console.error("❌ Erreur resetUnreadCountInUserMetadata:", error.message);
       throw error;
     }
+  }
+
+  /**
+   * ✅ METTRE À JOUR LE lastSeen POUR UN UTILISATEUR (DÉCONNEXION)
+   */
+  async updateLastSeenForUser(userId) {
+    try {
+      const result = await this.primaryStore.updateLastSeenForUser(userId);
+
+      // Pas d'invalidation massive du cache, juste log
+      console.log(`📝 [Cache] lastSeen mis à jour pour ${userId}`);
+
+      return result;
+    } catch (error) {
+      console.error("❌ Erreur updateLastSeenForUser:", error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * ✅ OBTENIR LE lastSeen D'UN UTILISATEUR
+   */
+  async getLastSeenForUser(conversationId, userId) {
+    return await this.primaryStore.getLastSeenForUser(conversationId, userId);
   }
 
   // ===== RECHERCHE =====

@@ -35,19 +35,22 @@ class DownloadFile {
     // Incrémenter le compteur de téléchargements
     await this.fileRepository.incrementDownloadCount(fileId, userId);
 
-    // ✅ PUBLIER ÉVÉNEMENT DE TÉLÉCHARGEMENT DANS REDIS STREAMS events:files
+    // ✅ PUBLIER ÉVÉNEMENT DE TÉLÉCHARGEMENT DANS REDIS STREAMS chat:stream:events:files
     if (this.resilientMessageService) {
       try {
-        await this.resilientMessageService.addToStream("events:files", {
-          event: "file.downloaded",
-          fileId: fileId,
-          fileName: file.fileName,
-          fileSize: file.fileSize,
-          userId: userId,
-          timestamp: Date.now(),
-        });
+        await this.resilientMessageService.addToStream(
+          "chat:stream:events:files",
+          {
+            event: "file.downloaded",
+            fileId: fileId,
+            fileName: file.fileName,
+            fileSize: file.fileSize,
+            userId: userId,
+            timestamp: Date.now(),
+          },
+        );
         console.log(
-          `📥 [file.downloaded] publié dans events:files pour ${fileId}`,
+          `📥 [file.downloaded] publié dans chat:stream:events:files pour ${fileId}`,
         );
       } catch (error) {
         console.warn("⚠️ Échec publication événement download:", error.message);
@@ -109,19 +112,22 @@ class DownloadFile {
       });
       await this.fileRepository.incrementDownloadCount(file._id, userId);
 
-      // ✅ PUBLIER ÉVÉNEMENT DE TÉLÉCHARGEMENT DANS REDIS STREAMS events:files
+      // ✅ PUBLIER ÉVÉNEMENT DE TÉLÉCHARGEMENT DANS REDIS STREAMS chat:stream:events:files
       if (this.resilientMessageService) {
         try {
-          await this.resilientMessageService.addToStream("events:files", {
-            event: "file.downloaded",
-            fileId: file._id,
-            fileName: file.fileName,
-            fileSize: file.fileSize,
-            userId: userId,
-            timestamp: Date.now(),
-          });
+          await this.resilientMessageService.addToStream(
+            "chat:stream:events:files",
+            {
+              event: "file.downloaded",
+              fileId: file._id,
+              fileName: file.fileName,
+              fileSize: file.fileSize,
+              userId: userId,
+              timestamp: Date.now(),
+            },
+          );
           console.log(
-            `📥 [file.downloaded] publié dans events:files pour ${file._id}`,
+            `📥 [file.downloaded] publié dans chat:stream:events:files pour ${file._id}`,
           );
         } catch (error) {
           console.warn(

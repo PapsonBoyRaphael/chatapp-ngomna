@@ -17,7 +17,7 @@ const RedisManager = require("../redis/RedisManager");
  */
 class UserCache {
   constructor(options = {}) {
-    this.prefix = options.prefix || "user:profile:";
+    this.prefix = options.prefix || "users-service:datastore:users:";
     this.defaultTTL = options.defaultTTL || 7 * 24 * 3600; // 7 jours
     this.redis = null;
   }
@@ -60,8 +60,8 @@ class UserCache {
       const fullName = user.fullName
         ? user.fullName
         : user.nom
-        ? `${user.prenom || ""} ${user.nom}`.trim()
-        : user.name || "Utilisateur inconnu";
+          ? `${user.prenom || ""} ${user.nom}`.trim()
+          : user.name || "Utilisateur inconnu";
 
       const data = {
         id: userId,
@@ -83,7 +83,7 @@ class UserCache {
     } catch (error) {
       console.error(
         `❌ [UserCache] Erreur sauvegarde ${user.id}:`,
-        error.message
+        error.message,
       );
     }
   }
@@ -217,7 +217,7 @@ class UserCache {
     } catch (error) {
       console.error(
         `❌ [UserCache] Erreur invalidation ${userId}:`,
-        error.message
+        error.message,
       );
     }
   }

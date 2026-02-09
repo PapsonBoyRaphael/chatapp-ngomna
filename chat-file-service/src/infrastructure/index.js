@@ -23,6 +23,9 @@ const ConversationModel = require("./mongodb/models/ConversationModel");
 const FileModel = require("./mongodb/models/FileModel");
 const UserPresenceManager = require("./redis/UserPresenceManager");
 
+// Services
+const TypingIndicatorService = require("./services/TypingIndicatorService");
+
 module.exports = {
   // Connexions
   connectDB,
@@ -46,4 +49,7 @@ module.exports = {
   MessageModel,
   ConversationModel,
   FileModel,
+
+  // Services
+  TypingIndicatorService,
 };

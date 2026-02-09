@@ -11,9 +11,12 @@ class OnlineUserManager {
     this.io = io;
 
     // Préfixes des clés
-    this.presencePrefix = options.presencePrefix || "presence";
-    this.userDataPrefix = options.userDataPrefix || "user_data";
-    this.userSocketPrefix = options.userSocketPrefix || "user_sockets";
+    this.presencePrefix = options.presencePrefix || "chat:cache:presence";
+    this.userDataPrefix = options.userDataPrefix || "chat:cache:user_data";
+    this.userSocketPrefix =
+      options.userSocketPrefix || "chat:cache:user_sockets";
+    this.userRoomsPrefix = options.userRoomsPrefix || "chat:cache:user_rooms"; // ✅ Contacts via rooms
+    this.roomUsersPrefix = options.roomUsersPrefix || "chat:cache:room_users"; // ✅ Contacts via rooms
 
     // TTL
     this.defaultTTL = options.defaultTTL || 300; // 5 minutes
@@ -80,47 +83,80 @@ class OnlineUserManager {
                   console.log(`🧹 Nettoyage utilisateur inactif: ${userId}`);
                   await this.setUserOffline(userId);
 
-                  if (this.io) {
-                    this.io.emit("user_offline", {
-                      userId,
-                      matricule: userData.matricule,
-                      reason: "idle_timeout",
-                      timestamp: new Date().toISOString(),
-                    });
-                  }
+                  await this.emitPresenceToContacts(userId, "user_offline", {
+                    userId,
+                    matricule: userData.matricule,
+                    reason: "idle_timeout",
+                    timestamp: new Date().toISOString(),
+                  });
                 } else if (currentStatus === "online") {
                   console.log(`💤 Passage en idle: ${userId}`);
                   await this.redis.set(
                     `${this.presencePrefix}:${userId}`,
                     "idle",
-                    { EX: this.idleTTL }
+                    { EX: this.idleTTL },
                   );
 
                   await this.redis.hSet(
                     `${this.userDataPrefix}:${userId}`,
                     "status",
-                    "idle"
+                    "idle",
                   );
 
-                  if (this.io) {
-                    this.io.emit("user_idle", {
-                      userId,
-                      matricule: userData.matricule,
-                      timestamp: new Date().toISOString(),
-                    });
-                  }
+                  await this.emitPresenceToContacts(userId, "user_idle", {
+                    userId,
+                    matricule: userData.matricule,
+                    timestamp: new Date().toISOString(),
+                  });
                 }
               }
             }
           } catch (err) {
             console.error("❌ Erreur traitement expiration:", err);
           }
-        }
+        },
       );
 
       console.log("✅ Listener d'expiration configuré");
     } catch (error) {
       console.error("❌ Erreur setup listener:", error);
+    }
+  }
+
+  /**
+   * ✅ DIFFUSER LA PRÉSENCE UNIQUEMENT AUX CONTACTS (user_rooms)
+   */
+  async emitPresenceToContacts(userId, event, payload) {
+    if (!this.redis || !this.io) return;
+
+    try {
+      const userIdString = String(userId);
+      const userRooms = await this.redis.sMembers(
+        `${this.userRoomsPrefix}:${userIdString}`,
+      );
+
+      if (!userRooms || userRooms.length === 0) return;
+
+      const contactIds = new Set();
+
+      for (const roomName of userRooms) {
+        const roomUsers = await this.redis.sMembers(
+          `${this.roomUsersPrefix}:${roomName}`,
+        );
+        for (const contactId of roomUsers) {
+          if (contactId && contactId !== userIdString) {
+            contactIds.add(contactId);
+          }
+        }
+      }
+
+      if (contactIds.size === 0) return;
+
+      for (const contactId of contactIds) {
+        this.io.to(`user_${contactId}`).emit(event, payload);
+      }
+    } catch (err) {
+      console.error("❌ Erreur emitPresenceToContacts:", err.message);
     }
   }
 
@@ -146,11 +182,11 @@ class OnlineUserManager {
 
       await this.redis.hSet(
         `${this.userDataPrefix}:${userIdString}`,
-        this._sanitizeData(userInfo)
+        this._sanitizeData(userInfo),
       );
 
       const currentStatus = await this.redis.get(
-        `${this.presencePrefix}:${userIdString}`
+        `${this.presencePrefix}:${userIdString}`,
       );
       if (currentStatus === "idle") {
         console.log(`🔄 Passage de idle à online pour ${userIdString}`);
@@ -164,7 +200,7 @@ class OnlineUserManager {
         await this.redis.set(
           `${this.userSocketPrefix}:${userInfo.socketId}`,
           userIdString,
-          { EX: this.defaultTTL }
+          { EX: this.defaultTTL },
         );
       }
 
@@ -208,7 +244,7 @@ class OnlineUserManager {
     try {
       const userIdString = String(userId);
       const status = await this.redis.get(
-        `${this.presencePrefix}:${userIdString}`
+        `${this.presencePrefix}:${userIdString}`,
       );
       return status === "online";
     } catch (error) {
@@ -239,20 +275,20 @@ class OnlineUserManager {
 
         await this.redis.hSet(
           `${this.userDataPrefix}:${userIdString}`,
-          this._sanitizeData(userData)
+          this._sanitizeData(userData),
         );
 
         await this.redis.set(
           `${this.presencePrefix}:${userIdString}`,
           "online",
-          { EX: this.defaultTTL }
+          { EX: this.defaultTTL },
         );
 
         if (userData.socketId) {
           await this.redis.set(
             `${this.userSocketPrefix}:${userData.socketId}`,
             userIdString,
-            { EX: this.defaultTTL }
+            { EX: this.defaultTTL },
           );
         }
       }
@@ -263,29 +299,29 @@ class OnlineUserManager {
         await this.redis.set(
           `${this.presencePrefix}:${userIdString}`,
           "online",
-          { EX: this.defaultTTL }
+          { EX: this.defaultTTL },
         );
         await this.redis.hSet(
           `${this.userDataPrefix}:${userIdString}`,
           "status",
-          "online"
+          "online",
         );
         console.log(`✅ Upgraded to online: ${userIdString}`);
       } else {
         await this.redis.expire(
           `${this.presencePrefix}:${userIdString}`,
-          this.defaultTTL
+          this.defaultTTL,
         );
       }
 
       await this.redis.hSet(
         `${this.userDataPrefix}:${userIdString}`,
         "lastActivity",
-        new Date().toISOString()
+        new Date().toISOString(),
       );
 
-      if (this.io && currentStatus !== "online") {
-        this.io.emit("user_online", {
+      if (currentStatus !== "online") {
+        await this.emitPresenceToContacts(userIdString, "user_online", {
           userId: userIdString,
           matricule: userData.matricule,
         });

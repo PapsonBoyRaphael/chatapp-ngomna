@@ -4,7 +4,7 @@ const UserCache = require("./UserCache");
 /**
  * UserStreamConsumer - Écoute les événements utilisateur via Redis Streams
  *
- * Stream: events:users
+ * Stream: chat:stream:events:users
  * Événements écoutés:
  * - user.profile.updated : Mise à jour d'un profil
  * - user.profile.created : Création d'un profil
@@ -16,7 +16,7 @@ const UserCache = require("./UserCache");
  */
 class UserStreamConsumer {
   constructor(options = {}) {
-    this.streamName = options.streamName || "events:users";
+    this.streamName = options.streamName || "chat:stream:events:users";
     this.consumerGroup = options.consumerGroup || "chat-service-group";
     this.consumerName = options.consumerName || `consumer-${process.pid}`;
     this.pollInterval = options.pollInterval || 1000; // 1 seconde
@@ -46,15 +46,15 @@ class UserStreamConsumer {
           "0",
           {
             MKSTREAM: true,
-          }
+          },
         );
         console.log(
-          `✅ [UserStreamConsumer] Consumer group créé: ${this.consumerGroup}`
+          `✅ [UserStreamConsumer] Consumer group créé: ${this.consumerGroup}`,
         );
       } catch (error) {
         if (error.message.includes("BUSYGROUP")) {
           console.log(
-            `✅ [UserStreamConsumer] Consumer group existe déjà: ${this.consumerGroup}`
+            `✅ [UserStreamConsumer] Consumer group existe déjà: ${this.consumerGroup}`,
           );
         } else {
           throw error;
@@ -66,7 +66,7 @@ class UserStreamConsumer {
     } catch (error) {
       console.error(
         "❌ [UserStreamConsumer] Erreur initialisation:",
-        error.message
+        error.message,
       );
       return false;
     }
@@ -88,7 +88,7 @@ class UserStreamConsumer {
 
     this.isRunning = true;
     console.log(
-      `🚀 [UserStreamConsumer] Démarrage de l'écoute sur ${this.streamName}`
+      `🚀 [UserStreamConsumer] Démarrage de l'écoute sur ${this.streamName}`,
     );
 
     // Boucle de polling
@@ -143,7 +143,7 @@ class UserStreamConsumer {
         {
           COUNT: this.batchSize,
           BLOCK: 100, // ✅ 100ms max (évite le blocage indéfini)
-        }
+        },
       );
 
       if (!messages || messages.length === 0) {
@@ -175,7 +175,7 @@ class UserStreamConsumer {
       if (!payloadStr) {
         console.warn(
           "⚠️ [UserStreamConsumer] Message sans payload:",
-          messageId
+          messageId,
         );
         await this._ack(messageId);
         return;
@@ -184,7 +184,7 @@ class UserStreamConsumer {
       const event = JSON.parse(payloadStr);
 
       console.log(
-        `📨 [UserStreamConsumer] Event reçu: ${event.event} pour user ${event.userId}`
+        `📨 [UserStreamConsumer] Event reçu: ${event.event} pour user ${event.userId}`,
       );
 
       // Dispatcher selon le type d'événement
@@ -200,7 +200,7 @@ class UserStreamConsumer {
 
         default:
           console.warn(
-            `⚠️ [UserStreamConsumer] Événement non géré: ${event.event}`
+            `⚠️ [UserStreamConsumer] Événement non géré: ${event.event}`,
           );
       }
 
@@ -209,7 +209,7 @@ class UserStreamConsumer {
     } catch (error) {
       console.error(
         `❌ [UserStreamConsumer] Erreur traitement ${messageId}:`,
-        error.message
+        error.message,
       );
       // Le message ne sera pas acquitté et pourra être retraité
     }
@@ -247,7 +247,7 @@ class UserStreamConsumer {
     });
 
     console.log(
-      `✅ [UserStreamConsumer] Profil mis à jour en cache: ${event.userId}`
+      `✅ [UserStreamConsumer] Profil mis à jour en cache: ${event.userId}`,
     );
   }
 
@@ -258,7 +258,7 @@ class UserStreamConsumer {
   async _handleProfileDelete(event) {
     await UserCache.invalidate(event.userId);
     console.log(
-      `🗑️ [UserStreamConsumer] Profil supprimé du cache: ${event.userId}`
+      `🗑️ [UserStreamConsumer] Profil supprimé du cache: ${event.userId}`,
     );
   }
 
@@ -272,7 +272,7 @@ class UserStreamConsumer {
     } catch (error) {
       console.error(
         `❌ [UserStreamConsumer] Erreur ACK ${messageId}:`,
-        error.message
+        error.message,
       );
     }
   }

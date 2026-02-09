@@ -17,7 +17,7 @@ class CachedMessageRepository {
 
     this.userUnreadPrefix = "unread:user";
     this.conversationUnreadPrefix = "unread:conv";
-    this.cacheKeyPrefix = "chat:msgs";
+    this.cacheKeyPrefix = "msgs";
   }
 
   // ===== LIRE LES MESSAGES D'UNE CONVERSATION (CACHE INTELLIGENT) =====
@@ -231,7 +231,7 @@ class CachedMessageRepository {
 
     try {
       // ✅ PATTERNS D'INVALIDATION CIBLÉS
-      // NOTE: On N'invalide PAS la clé `chat:convs:id:${conversationId}`
+      // NOTE: On N'invalide PAS la clé `chat:cache:convs:id:${conversationId}`
       // car elle est gérée par CachedConversationRepository
       const patterns = [
         // Messages paginés UNIQUEMENT
@@ -241,7 +241,7 @@ class CachedMessageRepository {
         // Derniers messages classiques UNIQUEMENT
         `chat:last_messages:${conversationId}`,
         // ❌ SUPPRIMÉ: `chat:conversation:${conversationId}*`
-        // Raison: Cela invalide aussi `chat:convs:id:${conversationId}` de CachedConversationRepository
+        // Raison: Cela invalide aussi `chat:cache:convs:id:${conversationId}` de CachedConversationRepository
         // Les conversations doivent rester en cache après la sauvegarde d'un message
       ];
 

@@ -1043,6 +1043,7 @@ class MongoConversationRepository {
                 unreadCount: amount,
                 lastReadAt: null,
                 lastActivity: new Date(),
+                lastSeen: null,
                 isMuted: false,
                 isPinned: false,
                 notificationSettings: {
@@ -1118,6 +1119,74 @@ class MongoConversationRepository {
         userId,
       });
       throw error;
+    }
+  }
+
+  /**
+   * ✅ METTRE À JOUR LE lastSeen POUR UN UTILISATEUR DANS TOUTES SES CONVERSATIONS
+   * Appelé lors de la déconnexion
+   */
+  async updateLastSeenForUser(userId) {
+    try {
+      const timestamp = new Date();
+      console.log(`📝 Mise à jour lastSeen pour utilisateur ${userId}`);
+
+      const result = await Conversation.updateMany(
+        {
+          "userMetadata.userId": String(userId),
+          isActive: true,
+        },
+        {
+          $set: {
+            "userMetadata.$[elem].lastSeen": timestamp,
+          },
+        },
+        {
+          arrayFilters: [{ "elem.userId": String(userId) }],
+        },
+      );
+
+      console.log(`✅ lastSeen mis à jour:`, {
+        userId,
+        matchedCount: result.matchedCount,
+        modifiedCount: result.modifiedCount,
+        timestamp: timestamp.toISOString(),
+      });
+
+      return {
+        success: true,
+        modifiedCount: result.modifiedCount,
+        timestamp,
+      };
+    } catch (error) {
+      console.error(`❌ Erreur updateLastSeenForUser:`, {
+        error: error.message,
+        userId,
+      });
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * ✅ OBTENIR LE lastSeen D'UN UTILISATEUR DANS UNE CONVERSATION
+   */
+  async getLastSeenForUser(conversationId, userId) {
+    try {
+      const conversation = await Conversation.findOne(
+        {
+          _id: conversationId,
+          "userMetadata.userId": String(userId),
+        },
+        { "userMetadata.$": 1 },
+      );
+
+      if (conversation?.userMetadata?.[0]) {
+        return conversation.userMetadata[0].lastSeen;
+      }
+      return null;
+    } catch (error) {
+      console.error(`❌ Erreur getLastSeenForUser:`, error.message);
+      return null;
     }
   }
 }

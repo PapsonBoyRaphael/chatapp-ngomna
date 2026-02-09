@@ -61,22 +61,27 @@ class UploadFile {
 
       console.log(`✅ Fichier sauvé avec ID custom: ${fileId}`);
 
-      // ✅ PUBLIER DANS REDIS STREAMS events:files
+      // ✅ PUBLIER DANS REDIS STREAMS chat:stream:events:files
       if (this.resilientMessageService) {
         try {
-          await this.resilientMessageService.addToStream("events:files", {
-            event: "file.uploaded",
-            userId: savedFile.uploadedBy, // ✅ REQUIS : l'utilisateur qui a uploadé le fichier
-            fileId: savedFile._id,
-            fileName: savedFile.fileName,
-            fileSize: savedFile.size.toString(),
-            conversationId: savedFile.conversationId?.toString() || "unknown",
-            originalName: savedFile.originalName,
-            mimeType: savedFile.mimeType,
-            url: savedFile.url,
-            timestamp: Date.now().toString(),
-          });
-          console.log(`📤 [file.uploaded] publié dans events:files`);
+          await this.resilientMessageService.addToStream(
+            "chat:stream:events:files",
+            {
+              event: "file.uploaded",
+              userId: savedFile.uploadedBy, // ✅ REQUIS : l'utilisateur qui a uploadé le fichier
+              fileId: savedFile._id,
+              fileName: savedFile.fileName,
+              fileSize: savedFile.size.toString(),
+              conversationId: savedFile.conversationId?.toString() || "unknown",
+              originalName: savedFile.originalName,
+              mimeType: savedFile.mimeType,
+              url: savedFile.url,
+              timestamp: Date.now().toString(),
+            },
+          );
+          console.log(
+            `📤 [file.uploaded] publié dans chat:stream:events:files`,
+          );
         } catch (streamErr) {
           console.error(
             "❌ Erreur publication stream file.uploaded:",

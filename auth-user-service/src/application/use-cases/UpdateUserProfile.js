@@ -55,17 +55,17 @@ class UpdateUserProfile {
           timestamp: Date.now(),
         };
 
-        await this.redisClient.xAdd("events:users", "*", {
+        await this.redisClient.xAdd("chat:stream:events:users", "*", {
           payload: JSON.stringify(event),
         });
 
         console.log(
-          `📤 [UpdateUserProfile] Événement publié pour user ${user.id}`
+          `📤 [UpdateUserProfile] Événement publié pour user ${user.id}`,
         );
       } catch (error) {
         console.error(
           "❌ [UpdateUserProfile] Erreur publication event:",
-          error.message
+          error.message,
         );
         // Non-bloquant : on continue même si la publication échoue
       }

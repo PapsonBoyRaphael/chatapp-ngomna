@@ -13,13 +13,13 @@ class RoomManager {
     this.onlineUserManager = onlineUserManager;
 
     // Préfixes des clés Redis
-    this.roomPrefix = options.roomPrefix || "rooms";
-    this.roomUsersPrefix = options.roomUsersPrefix || "room_users";
-    this.userRoomsPrefix = options.userRoomsPrefix || "user_rooms";
-    this.roomDataPrefix = options.roomDataPrefix || "room_data";
-    this.roomStatePrefix = options.roomStatePrefix || "room_state";
-    this.roomRolesPrefix = options.roomRolesPrefix || "room_roles";
-    this.roomPeakPrefix = options.roomPeakPrefix || "room_peak";
+    this.roomPrefix = options.roomPrefix || "chat:cache:rooms";
+    this.roomUsersPrefix = options.roomUsersPrefix || "chat:cache:room_users"; // Set de userIds par room
+    this.userRoomsPrefix = options.userRoomsPrefix || "chat:cache:user_rooms"; // Set de roomNames par userId
+    this.roomDataPrefix = options.roomDataPrefix || "chat:cache:room_data"; // Hash de données utilisateur par room (room_data:{roomName}:{userId})
+    this.roomStatePrefix = options.roomStatePrefix || "chat:cache:room_state"; // Clé de statut de la room (active, idle, archived)
+    this.roomRolesPrefix = options.roomRolesPrefix || "room_roles"; // Hash des rôles des utilisateurs dans la room (room_roles:{roomName}:{userId} => role)
+    this.roomPeakPrefix = options.roomPeakPrefix || "room_peak"; // Clé du nombre maximum d'utilisateurs simultanés dans la room (room_peak:{roomName} => peakCount)
 
     // TTL
     this.defaultRoomTTL = options.defaultRoomTTL || 3600;
@@ -83,7 +83,7 @@ class RoomManager {
       await this.redis.set(
         `${this.roomStatePrefix}:${roomNameString}`,
         "active",
-        { EX: this.defaultRoomTTL }
+        { EX: this.defaultRoomTTL },
       );
 
       await this.redis.hSet(`${this.roomPrefix}:${roomNameString}`, {
@@ -92,7 +92,7 @@ class RoomManager {
       });
 
       console.log(
-        `Room ${roomNameString} → active (TTL ${this.defaultRoomTTL}s)`
+        `Room ${roomNameString} → active (TTL ${this.defaultRoomTTL}s)`,
       );
       return true;
     } catch (error) {
@@ -128,7 +128,7 @@ class RoomManager {
           console.log(`Expiration room détectée: ${roomName}`);
 
           const currentState = await this.redis.get(
-            `${this.roomStatePrefix}:${roomName}`
+            `${this.roomStatePrefix}:${roomName}`,
           );
 
           if (currentState === "active") {
@@ -136,30 +136,30 @@ class RoomManager {
             await this.redis.set(
               `${this.roomStatePrefix}:${roomName}`,
               "idle",
-              { EX: this.idleRoomTTL }
+              { EX: this.idleRoomTTL },
             );
             await this.redis.hSet(
               `${this.roomPrefix}:${roomName}`,
               "status",
-              "idle"
+              "idle",
             );
           } else if (currentState === "idle") {
             console.log(`Room ${roomName} → archived`);
             await this.redis.set(
               `${this.roomStatePrefix}:${roomName}`,
               "archived",
-              { EX: this.archivedRoomTTL }
+              { EX: this.archivedRoomTTL },
             );
             await this.redis.hSet(
               `${this.roomPrefix}:${roomName}`,
               "status",
-              "archived"
+              "archived",
             );
           } else if (currentState === "archived") {
             console.log(`SUPPRESSION DÉFINITIVE room: ${roomName}`);
             await this.cleanupRoomCompletely(roomName);
           }
-        }
+        },
       );
 
       console.log("✅ Listener expiration rooms configuré");
@@ -179,17 +179,17 @@ class RoomManager {
       await this.redis.del(`${this.roomStatePrefix}:${roomNameString}`);
 
       const userDataKeys = await this.redis.keys(
-        `${this.roomDataPrefix}:${roomNameString}:*`
+        `${this.roomDataPrefix}:${roomNameString}:*`,
       );
       if (userDataKeys.length > 0) await this.redis.del(userDataKeys);
 
       const userIds = await this.redis.sMembers(
-        `${this.roomUsersPrefix}:${roomNameString}`
+        `${this.roomUsersPrefix}:${roomNameString}`,
       );
       for (const userId of userIds) {
         await this.redis.sRem(
           `${this.userRoomsPrefix}:${userId}`,
-          roomNameString
+          roomNameString,
         );
       }
 
@@ -224,7 +224,7 @@ class RoomManager {
         userIdString === "null"
       ) {
         throw new Error(
-          `Paramètres invalides: roomName=${roomName}, userId=${userId}`
+          `Paramètres invalides: roomName=${roomName}, userId=${userId}`,
         );
       }
 
@@ -240,12 +240,12 @@ class RoomManager {
 
       await this.redis.sAdd(
         `${this.roomUsersPrefix}:${roomNameString}`,
-        userIdString
+        userIdString,
       );
 
       await this.redis.sAdd(
         `${this.userRoomsPrefix}:${userIdString}`,
-        roomNameString
+        roomNameString,
       );
 
       const redisData = {};
@@ -257,7 +257,7 @@ class RoomManager {
 
       await this.redis.hSet(
         `${this.roomDataPrefix}:${roomNameString}:${userIdString}`,
-        redisData
+        redisData,
       );
 
       await this.redis.hSet(`${this.roomPrefix}:${roomNameString}`, {
@@ -267,14 +267,14 @@ class RoomManager {
 
       await this.redis.expire(
         `${this.roomDataPrefix}:${roomNameString}:${userIdString}`,
-        7200
+        7200,
       );
       await this.redis.expire(`${this.roomPrefix}:${roomNameString}`, 7200);
 
       await this.setRoomActive(roomNameString);
 
       console.log(
-        `🏠 Utilisateur ${userIdString} (${userInfo.matricule}) ajouté à la room ${roomNameString}`
+        `🏠 Utilisateur ${userIdString} (${userInfo.matricule}) ajouté à la room ${roomNameString}`,
       );
       return true;
     } catch (error) {
@@ -300,38 +300,38 @@ class RoomManager {
 
       await this.redis.sRem(
         `${this.roomUsersPrefix}:${roomNameString}`,
-        userIdString
+        userIdString,
       );
 
       await this.redis.sRem(
         `${this.userRoomsPrefix}:${userIdString}`,
-        roomNameString
+        roomNameString,
       );
 
       await this.redis.del(
-        `${this.roomDataPrefix}:${roomNameString}:${userIdString}`
+        `${this.roomDataPrefix}:${roomNameString}:${userIdString}`,
       );
 
       const usersCount = await this.redis.sCard(
-        `${this.roomUsersPrefix}:${roomNameString}`
+        `${this.roomUsersPrefix}:${roomNameString}`,
       );
 
       if (usersCount === 0) {
         await this.redis.set(
           `${this.roomStatePrefix}:${roomNameString}`,
           "archived",
-          { EX: this.archivedRoomTTL }
+          { EX: this.archivedRoomTTL },
         );
         await this.redis.hSet(
           `${this.roomPrefix}:${roomNameString}`,
           "status",
-          "archived"
+          "archived",
         );
         console.log(`Room ${roomNameString} vide → archived`);
       }
 
       console.log(
-        `👋 Utilisateur ${userIdString} retiré de la room ${roomNameString}`
+        `👋 Utilisateur ${userIdString} retiré de la room ${roomNameString}`,
       );
 
       return true;
@@ -357,7 +357,7 @@ class RoomManager {
       }
 
       const userRooms = await this.redis.sMembers(
-        `${this.userRoomsPrefix}:${userIdString}`
+        `${this.userRoomsPrefix}:${userIdString}`,
       );
 
       if (!userRooms || userRooms.length === 0) {
@@ -366,7 +366,7 @@ class RoomManager {
       }
 
       console.log(
-        `🏠 Suppression utilisateur ${userIdString} de ${userRooms.length} room(s)`
+        `🏠 Suppression utilisateur ${userIdString} de ${userRooms.length} room(s)`,
       );
 
       const removePromises = userRooms.map(async (roomName) => {
@@ -376,7 +376,7 @@ class RoomManager {
         } catch (error) {
           console.warn(
             `⚠️ Erreur suppression room ${roomName} pour ${userIdString}:`,
-            error.message
+            error.message,
           );
           return { roomName, success: false, error: error.message };
         }
@@ -385,13 +385,13 @@ class RoomManager {
       const results = await Promise.allSettled(removePromises);
 
       const successful = results.filter(
-        (r) => r.status === "fulfilled" && r.value.success
+        (r) => r.status === "fulfilled" && r.value.success,
       ).length;
 
       await this.redis.del(`${this.userRoomsPrefix}:${userIdString}`);
 
       console.log(
-        `✅ Utilisateur ${userIdString} supprimé de toutes ses rooms (${successful}/${results.length} succès)`
+        `✅ Utilisateur ${userIdString} supprimé de toutes ses rooms (${successful}/${results.length} succès)`,
       );
       return true;
     } catch (error) {
@@ -437,13 +437,13 @@ class RoomManager {
     try {
       const roomNameString = String(roomName);
       const userIds = await this.redis.sMembers(
-        `${this.roomUsersPrefix}:${roomNameString}`
+        `${this.roomUsersPrefix}:${roomNameString}`,
       );
       const users = [];
 
       for (const userId of userIds) {
         const userData = await this.redis.hGetAll(
-          `${this.roomDataPrefix}:${roomNameString}:${userId}`
+          `${this.roomDataPrefix}:${roomNameString}:${userId}`,
         );
         if (Object.keys(userData).length > 0) {
           users.push(userData);
@@ -463,7 +463,7 @@ class RoomManager {
     try {
       const userIdString = String(userId);
       const rooms = await this.redis.sMembers(
-        `${this.userRoomsPrefix}:${userIdString}`
+        `${this.userRoomsPrefix}:${userIdString}`,
       );
       return rooms || [];
     } catch (error) {
@@ -482,7 +482,7 @@ class RoomManager {
       for (const roomKey of allRoomKeys) {
         const roomName = roomKey.replace(`${this.roomPrefix}:`, "");
         const usersCount = await this.redis.sCard(
-          `${this.roomUsersPrefix}:${roomName}`
+          `${this.roomUsersPrefix}:${roomName}`,
         );
 
         if (usersCount === 0) {
@@ -522,7 +522,7 @@ class RoomManager {
       for (const roomKey of roomKeys) {
         const roomName = roomKey.replace(`${this.roomPrefix}:`, "");
         const usersCount = await this.redis.sCard(
-          `${this.roomUsersPrefix}:${roomName}`
+          `${this.roomUsersPrefix}:${roomName}`,
         );
 
         rooms.push({
@@ -547,7 +547,7 @@ class RoomManager {
       await this.redis.hSet(
         `${this.roomPrefix}:${roomNameString}`,
         "lastActivity",
-        new Date().toISOString()
+        new Date().toISOString(),
       );
       await this.setRoomActive(roomNameString);
       return true;
@@ -587,7 +587,7 @@ class RoomManager {
 
     try {
       const conversationIdString = String(
-        conversationData._id || conversationData.id
+        conversationData._id || conversationData.id,
       );
       const roomName = `conv_${conversationIdString}`;
 
@@ -626,7 +626,7 @@ class RoomManager {
       await this.redis.expire(`room_metadata:${roomName}`, 86400 * 7);
 
       console.log(
-        `✅ Room de conversation ${roomName} initialisée avec ${participants.length} participant(s)`
+        `✅ Room de conversation ${roomName} initialisée avec ${participants.length} participant(s)`,
       );
       return true;
     } catch (error) {
@@ -651,7 +651,7 @@ class RoomManager {
 
       const users = await this.getRoomUsers(roomName);
       const roomState = await this.redis.get(
-        `${this.roomStatePrefix}:${roomName}`
+        `${this.roomStatePrefix}:${roomName}`,
       );
 
       const unifiedData = {
@@ -693,11 +693,11 @@ class RoomManager {
       const roomName = `conv_${conversationIdString}`;
 
       const existingMetadata = await this.redis.hGetAll(
-        `room_metadata:${roomName}`
+        `room_metadata:${roomName}`,
       );
       if (!existingMetadata || Object.keys(existingMetadata).length === 0) {
         console.warn(
-          `⚠️ Room ${roomName} inexistante, initialisation nécessaire`
+          `⚠️ Room ${roomName} inexistante, initialisation nécessaire`,
         );
         return false;
       }
@@ -741,7 +741,7 @@ class RoomManager {
       const roomNameString = String(roomName);
 
       const userIds = await this.redis.sMembers(
-        `${this.roomUsersPrefix}:${roomNameString}`
+        `${this.roomUsersPrefix}:${roomNameString}`,
       );
 
       if (!userIds || userIds.length === 0) {
@@ -759,7 +759,7 @@ class RoomManager {
 
       if (!this.onlineUserManager) {
         console.warn(
-          "⚠️ OnlineUserManager non disponible pour getRoomPresenceStats"
+          "⚠️ OnlineUserManager non disponible pour getRoomPresenceStats",
         );
         return this.getFallbackStats(roomNameString, userIds);
       }
@@ -772,7 +772,7 @@ class RoomManager {
       for (const userId of userIds) {
         try {
           const userRoomData = await this.redis.hGetAll(
-            `${this.roomDataPrefix}:${roomNameString}:${userId}`
+            `${this.roomDataPrefix}:${roomNameString}:${userId}`,
           );
 
           const isOnline = await this.onlineUserManager.isUserOnline(userId);
@@ -820,7 +820,7 @@ class RoomManager {
         } catch (userError) {
           console.warn(
             `⚠️ Erreur analyse utilisateur ${userId}:`,
-            userError.message
+            userError.message,
           );
           users.push({
             userId,
@@ -836,7 +836,7 @@ class RoomManager {
       }
 
       const roomMetadata = await this.redis.hGetAll(
-        `${this.roomPrefix}:${roomNameString}`
+        `${this.roomPrefix}:${roomNameString}`,
       );
 
       const roomState =
@@ -894,7 +894,7 @@ class RoomManager {
         totalUsers > 0
           ? Math.round(
               (users.filter((u) => u.status === "idle").length / totalUsers) *
-                100
+                100,
             )
           : 0;
 
@@ -953,7 +953,7 @@ class RoomManager {
         roomHealth: this.calculateRoomHealth(
           onlineUsers.length,
           totalUsers,
-          recentActivityCount
+          recentActivityCount,
         ),
       };
     } catch (error) {
@@ -980,7 +980,7 @@ class RoomManager {
       if (diffMinutes < 1440)
         return `${Math.floor(diffMinutes / 60)}h ${diffMinutes % 60}m`;
       return `${Math.floor(diffMinutes / 1440)}j ${Math.floor(
-        (diffMinutes % 1440) / 60
+        (diffMinutes % 1440) / 60,
       )}h`;
     } catch (error) {
       return null;
@@ -1012,7 +1012,7 @@ class RoomManager {
       if (avgMinutes < 1440)
         return `${Math.floor(avgMinutes / 60)}h ${avgMinutes % 60}m`;
       return `${Math.floor(avgMinutes / 1440)}j ${Math.floor(
-        (avgMinutes % 1440) / 60
+        (avgMinutes % 1440) / 60,
       )}h`;
     } catch (error) {
       return "N/A";
@@ -1074,7 +1074,7 @@ class RoomManager {
     try {
       const role = await this.redis.hGet(
         `${this.roomRolesPrefix}:${roomName}`,
-        String(userId)
+        String(userId),
       );
       return role || "member";
     } catch (error) {
@@ -1089,7 +1089,7 @@ class RoomManager {
       await this.redis.hSet(
         `${this.roomRolesPrefix}:${roomName}`,
         String(userId),
-        String(role)
+        String(role),
       );
 
       await this.redis.expire(`${this.roomRolesPrefix}:${roomName}`, 86400 * 7);
@@ -1138,7 +1138,7 @@ class RoomManager {
         await this.redis.expire(peakKey, 86400 * 30);
 
         console.log(
-          `🏔️ Nouveau pic pour ${roomName}: ${currentCount} utilisateurs`
+          `🏔️ Nouveau pic pour ${roomName}: ${currentCount} utilisateurs`,
         );
         return currentCount;
       }
@@ -1170,11 +1170,11 @@ class RoomManager {
         try {
           const presenceStats = await this.getRoomPresenceStats(roomName);
           const metadata = await this.redis.hGetAll(
-            `room_metadata:${roomName}`
+            `room_metadata:${roomName}`,
           );
 
           const userStatus = presenceStats.users.find(
-            (u) => u.userId === userIdString
+            (u) => u.userId === userIdString,
           );
 
           conversations.push({
@@ -1215,7 +1215,7 @@ class RoomManager {
         } catch (convError) {
           console.warn(
             `⚠️ Erreur traitement conversation ${conversationId}:`,
-            convError.message
+            convError.message,
           );
 
           conversations.push({
@@ -1271,7 +1271,7 @@ class RoomManager {
       });
 
       console.log(
-        `📡 Présence diffusée: ${roomName} (${presenceStats.onlineUsers}/${presenceStats.totalUsers})`
+        `📡 Présence diffusée: ${roomName} (${presenceStats.onlineUsers}/${presenceStats.totalUsers})`,
       );
       return true;
     } catch (error) {
@@ -1333,7 +1333,7 @@ class RoomManager {
           healthDistribution,
         },
         conversations: conversations.sort(
-          (a, b) => b.onlineUsers - a.onlineUsers
+          (a, b) => b.onlineUsers - a.onlineUsers,
         ),
         generatedAt: new Date().toISOString(),
       };

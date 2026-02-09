@@ -59,17 +59,17 @@ class CreateUser {
           timestamp: Date.now(),
         };
 
-        await this.redisClient.xAdd("events:users", "*", {
+        await this.redisClient.xAdd("chat:stream:events:users", "*", {
           payload: JSON.stringify(event),
         });
 
         console.log(
-          `📤 [CreateUser] Événement user.profile.created publié pour user ${user.id}`
+          `📤 [CreateUser] Événement user.profile.created publié pour user ${user.id}`,
         );
       } catch (error) {
         console.error(
           "❌ [CreateUser] Erreur publication event:",
-          error.message
+          error.message,
         );
         // Non-bloquant
       }

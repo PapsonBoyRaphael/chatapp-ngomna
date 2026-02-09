@@ -393,24 +393,24 @@ class RedisManager {
         METRICS: "metrics:stream",
       },
       MESSAGE_STREAMS: {
-        PRIVATE: "stream:messages:private",
-        GROUP: "stream:messages:group",
-        CHANNEL: "stream:messages:channel",
+        PRIVATE: "chat:stream:messages:private",
+        GROUP: "chat:stream:messages:group",
+        CHANNEL: "chat:stream:messages:channel",
         STATUS: {
-          DELIVERED: "stream:status:delivered",
-          READ: "stream:status:read",
-          EDITED: "stream:status:edited",
-          DELETED: "stream:status:deleted",
+          DELIVERED: "chat:stream:status:delivered",
+          READ: "chat:stream:status:read",
+          EDITED: "chat:stream:status:edited",
+          DELETED: "chat:stream:status:deleted",
         },
-        TYPING: "stream:events:typing",
-        REACTIONS: "stream:events:reactions",
-        REPLIES: "stream:events:replies",
+        TYPING: "chat:stream:events:typing",
+        REACTIONS: "chat:stream:events:reactions",
+        REPLIES: "chat:stream:events:replies",
       },
       EVENT_STREAMS: {
-        CONVERSATIONS: "events:conversations",
-        FILES: "events:files",
-        NOTIFICATIONS: "events:notifications",
-        ANALYTICS: "events:analytics",
+        CONVERSATIONS: "chat:stream:events:conversations",
+        FILES: "chat:stream:events:files",
+        NOTIFICATIONS: "chat:stream:events:notifications",
+        ANALYTICS: "chat:stream:events:analytics",
       },
       STREAM_MAXLEN: {
         // Streams techniques
@@ -421,29 +421,30 @@ class RedisManager {
         "metrics:stream": 10000,
 
         // Streams fonctionnels - contenu messages
-        "stream:messages:private": 10000,
-        "stream:messages:group": 20000,
-        "stream:messages:channel": 20000,
+        "chat:stream:messages:private": 10000,
+        "chat:stream:messages:group": 20000,
+        "chat:stream:messages:channel": 20000,
 
         // Streams fonctionnels - métadonnées messages
-        "stream:status:delivered": 5000,
-        "stream:status:read": 5000,
-        "stream:status:edited": 2000,
-        "stream:status:deleted": 2000,
+        "chat:stream:status:delivered": 5000,
+        "chat:stream:status:read": 5000,
+        "chat:stream:status:edited": 2000,
+        "chat:stream:status:deleted": 2000,
 
         // Streams fonctionnels - interactions
-        "stream:events:typing": 2000,
-        "stream:events:reactions": 5000,
-        "stream:events:replies": 5000,
+        "chat:stream:events:typing": 2000,
+        "chat:stream:events:reactions": 5000,
+        "chat:stream:events:replies": 5000,
 
         // Streams événementiels
-        "events:conversations": 5000,
+        "chat:stream:events:conversations": 5000,
         "events:users:presence": 10000,
         "events:users:profile": 2000,
         "events:users:settings": 1000,
-        "events:files": 5000,
-        "events:notifications": 2000,
-        "events:analytics": 10000,
+        "chat:stream:events:files": 5000,
+        "chat:stream:events:notifications": 2000,
+        "chat:stream:events:analytics": 10000,
+        "chat:stream:events:users": 10000,
       },
     };
   }

@@ -52,6 +52,7 @@ const CachedFileRepository = require("./infrastructure/repositories/CachedFileRe
 
 // Redis Services (locaux uniquement)
 const MessageDeliveryService = require("./infrastructure/services/MessageDeliveryService");
+const TypingIndicatorService = require("./infrastructure/services/TypingIndicatorService");
 
 // Use Cases
 const SendMessage = require("./application/use-cases/SendMessage");
@@ -227,9 +228,8 @@ const startServer = async () => {
       console.log("   ✅ OnlineUserManager (shared)");
 
       // ✅ INITIALISER RoomManager depuis shared
-      roomManager = new RoomManager(io, {
-        keyPrefix: "chat:rooms",
-        defaultTTL: 86400,
+      roomManager = new RoomManager(io, onlineUserManager, {
+        defaultRoomTTL: 86400,
       });
       await roomManager.initializeWithClient(redisClient);
       app.locals.roomManager = roomManager;
@@ -241,7 +241,7 @@ const startServer = async () => {
 
       // ✅ INITIALISER ET DÉMARRER UserStreamConsumer
       const userStreamConsumer = new UserStreamConsumer({
-        streamName: "events:users",
+        streamName: "chat:stream:events:users",
         consumerGroup: "chat-file-service-group",
         consumerName: `chat-consumer-${process.pid}`,
       });
@@ -253,6 +253,7 @@ const startServer = async () => {
 
     // ✅ INITIALISER MessageDeliveryService MAINTENANT QUE IO EST CRÉÉ
     let messageDeliveryService = null;
+    let typingIndicatorService = null;
     if (redisClient) {
       try {
         console.log("🚀 Initialisation MessageDeliveryService...");
@@ -261,14 +262,17 @@ const startServer = async () => {
         await messageDeliveryService.initialize();
         app.locals.messageDeliveryService = messageDeliveryService;
         console.log("   ✅ MessageDeliveryService initialisé");
+        // ⏳ TypingIndicatorService sera initialisé après conversationRepository
       } catch (error) {
         console.error(
-          "❌ Erreur initialisation MessageDeliveryService:",
+          "❌ Erreur initialisation MessageDeliveryService/TypingIndicatorService:",
           error.message,
         );
       }
     } else {
-      console.log("⚠️ Redis non disponible, MessageDeliveryService non créé");
+      console.log(
+        "⚠️ Redis non disponible, MessageDeliveryService et TypingIndicatorService non créés",
+      );
     }
 
     // ===============================
@@ -326,6 +330,43 @@ const startServer = async () => {
       mongoConversationRepository,
       cacheServiceInstance,
     );
+
+    // ✅ CONFIGURER LE CALLBACK DE DÉCONNEXION POUR METTRE À JOUR lastSeen
+    if (onlineUserManager && conversationRepository) {
+      onlineUserManager.setOnUserDisconnectCallback(
+        async (userId, timestamp) => {
+          try {
+            await conversationRepository.updateLastSeenForUser(userId);
+            console.log(`📝 lastSeen mis à jour pour ${userId} dans MongoDB`);
+          } catch (err) {
+            console.warn(
+              `⚠️ Erreur mise à jour lastSeen MongoDB:`,
+              err.message,
+            );
+          }
+        },
+      );
+    }
+
+    // ✅ INITIALISER TypingIndicatorService (après conversationRepository)
+    if (redisClient && conversationRepository) {
+      try {
+        console.log("🚀 Initialisation TypingIndicatorService...");
+        typingIndicatorService = new TypingIndicatorService(
+          redisClient,
+          io,
+          conversationRepository,
+        );
+        await typingIndicatorService.startConsumer();
+        app.locals.typingIndicatorService = typingIndicatorService;
+        console.log("   ✅ TypingIndicatorService initialisé");
+      } catch (error) {
+        console.error(
+          "❌ Erreur initialisation TypingIndicatorService:",
+          error.message,
+        );
+      }
+    }
 
     const fileRepository = new CachedFileRepository(
       mongoFileRepository,

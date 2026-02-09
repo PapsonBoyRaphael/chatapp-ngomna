@@ -65,7 +65,7 @@ const auditLogEntrySchema = new Schema(
   {
     _id: true,
     timestamps: false,
-  }
+  },
 );
 
 // ✅ SCHÉMA USER METADATA
@@ -100,6 +100,11 @@ const userMetadataSchema = new Schema(
       sound: { type: Boolean, default: true },
       vibration: { type: Boolean, default: true },
     },
+    // ✅ LAST SEEN - Mise à jour lors de la déconnexion
+    lastSeen: {
+      type: Date,
+      default: null,
+    },
     // ✅ AJOUT DES INFOS UTILISATEUR
     nom: {
       type: String,
@@ -130,7 +135,7 @@ const userMetadataSchema = new Schema(
   {
     _id: false,
     timestamps: false,
-  }
+  },
 );
 
 // ✅ SCHÉMA LAST MESSAGE
@@ -166,7 +171,7 @@ const lastMessageSchema = new Schema(
   {
     _id: false,
     timestamps: false,
-  }
+  },
 );
 
 // ✅ SCHÉMA PRINCIPAL CONVERSATION
@@ -279,7 +284,7 @@ const conversationSchema = new Schema(
     // ✅ OPTIONS POUR GÉRER LES OBJETS MIXTES
     minimize: false, // ✅ NE PAS SUPPRIMER LES OBJETS VIDES
     strict: false, // ✅ PERMETTRE LES CHAMPS NON DÉFINIS DANS LE SCHÉMA
-  }
+  },
 );
 
 // ✅ INDEX COMPOSITES
@@ -334,7 +339,7 @@ conversationSchema.methods.addParticipant = function (userId, addedBy = null) {
 
 conversationSchema.methods.removeParticipant = function (
   userId,
-  removedBy = null
+  removedBy = null,
 ) {
   const index = this.participants.indexOf(userId);
   if (index > -1) {
@@ -342,7 +347,7 @@ conversationSchema.methods.removeParticipant = function (
 
     // Supprimer métadonnées utilisateur
     this.userMetadata = this.userMetadata.filter(
-      (meta) => meta.userId !== userId
+      (meta) => meta.userId !== userId,
     );
 
     // ✅ AUDIT LOG AVEC ACTION VALIDE
@@ -446,7 +451,7 @@ conversationSchema.statics.findByParticipant = function (userId, options = {}) {
 
 conversationSchema.statics.findPrivateConversation = function (
   participant1,
-  participant2
+  participant2,
 ) {
   return this.findOne({
     type: "PRIVATE",
@@ -514,8 +519,8 @@ conversationSchema.pre("save", function (next) {
     if (this.type === "PRIVATE" && this.participants.length > 2) {
       return next(
         new Error(
-          "Une conversation privée ne peut avoir que 2 participants maximum"
-        )
+          "Une conversation privée ne peut avoir que 2 participants maximum",
+        ),
       );
     }
 
@@ -537,7 +542,7 @@ conversationSchema.pre("save", function (next) {
     }
 
     console.log(
-      `📝 Validation pre-save réussie pour conversation: ${this._id}`
+      `📝 Validation pre-save réussie pour conversation: ${this._id}`,
     );
     next();
   } catch (error) {

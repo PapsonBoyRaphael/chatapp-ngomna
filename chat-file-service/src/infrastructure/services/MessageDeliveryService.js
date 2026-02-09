@@ -67,7 +67,7 @@ class MessageDeliveryService {
     this.STREAM_CONFIGS = {
       // Priorité 0 : Ultra-temps réel (typing, présence)
       typing: {
-        streamKey: "stream:events:typing",
+        streamKey: "chat:stream:events:typing",
         groupId: "delivery-typing",
         priority: 0,
         interval: 50, // Consommer TRÈS souvent
@@ -75,7 +75,7 @@ class MessageDeliveryService {
       },
       // Priorité 1 : Temps réel (messages privés)
       private: {
-        streamKey: "stream:messages:private",
+        streamKey: "chat:stream:messages:private",
         groupId: "delivery-private",
         priority: 1,
         interval: 100,
@@ -83,7 +83,7 @@ class MessageDeliveryService {
       },
       // Priorité 2 : Normal (messages groupe)
       group: {
-        streamKey: "stream:messages:group",
+        streamKey: "chat:stream:messages:group",
         groupId: "delivery-group",
         priority: 2,
         interval: 200,
@@ -91,7 +91,7 @@ class MessageDeliveryService {
       },
       // Priorité 2.5 : Messages canal
       channel: {
-        streamKey: "stream:messages:channel",
+        streamKey: "chat:stream:messages:channel",
         groupId: "delivery-channel",
         priority: 2,
         interval: 200,
@@ -99,7 +99,7 @@ class MessageDeliveryService {
       },
       // Priorité 3 : Notifications
       notifications: {
-        streamKey: "events:notifications",
+        streamKey: "chat:stream:events:notifications",
         groupId: "events-notifications",
         priority: 3,
         interval: 500,
@@ -107,7 +107,7 @@ class MessageDeliveryService {
       },
       // Priorité 3.5 : Événements conversations
       conversations: {
-        streamKey: "events:conversations",
+        streamKey: "chat:stream:events:conversations",
         groupId: "events-conversations",
         priority: 3,
         interval: 500,
@@ -115,35 +115,35 @@ class MessageDeliveryService {
       },
       // Priorité 0.5 : Création conversation (CRITIQUE - doit arriver avant messages)
       conversationCreated: {
-        streamKey: "stream:conversation:created",
+        streamKey: "chat:stream:events:conversation:created",
         groupId: "events-conversation-created",
         priority: 0.5,
         interval: 50,
         workerPartition: "HIGH_PRIORITY_WORKER",
       },
       conversationUpdated: {
-        streamKey: "stream:conversation:updated",
+        streamKey: "chat:stream:events:conversation:updated",
         groupId: "events-conversation-updated",
         priority: 3,
         interval: 500,
         workerPartition: "SYSTEM_WORKER",
       },
       participantAdded: {
-        streamKey: "stream:conversation:participants:added",
+        streamKey: "chat:stream:events:conversation:participants:added",
         groupId: "events-participant-added",
         priority: 3,
         interval: 500,
         workerPartition: "SYSTEM_WORKER",
       },
       participantRemoved: {
-        streamKey: "stream:conversation:participants:removed",
+        streamKey: "chat:stream:events:conversation:participants:removed",
         groupId: "events-participant-removed",
         priority: 3,
         interval: 500,
         workerPartition: "SYSTEM_WORKER",
       },
       conversationDeleted: {
-        streamKey: "stream:conversation:deleted",
+        streamKey: "chat:stream:events:conversation:deleted",
         groupId: "events-conversation-deleted",
         priority: 3,
         interval: 500,
@@ -151,7 +151,7 @@ class MessageDeliveryService {
       },
       // Priorité 3.5 : Événements fichiers
       files: {
-        streamKey: "events:files",
+        streamKey: "chat:stream:events:files",
         groupId: "events-files",
         priority: 3,
         interval: 500,
@@ -159,28 +159,28 @@ class MessageDeliveryService {
       },
       // Priorité 4 : Message status (faible priorité)
       statusDelivered: {
-        streamKey: "stream:status:delivered",
+        streamKey: "chat:stream:status:delivered",
         groupId: "delivery-delivered",
         priority: 4,
         interval: 1000,
         workerPartition: "HIGH_PRIORITY_WORKER",
       },
       statusRead: {
-        streamKey: "stream:status:read",
+        streamKey: "chat:stream:status:read",
         groupId: "delivery-read",
         priority: 4,
         interval: 1000,
         workerPartition: "HIGH_PRIORITY_WORKER",
       },
       statusEdited: {
-        streamKey: "stream:status:edited",
+        streamKey: "chat:stream:status:edited",
         groupId: "delivery-edited",
         priority: 5,
         interval: 1500,
         workerPartition: "SYSTEM_WORKER",
       },
       statusDeleted: {
-        streamKey: "stream:status:deleted",
+        streamKey: "chat:stream:status:deleted",
         groupId: "delivery-deleted",
         priority: 5,
         interval: 1500,
@@ -188,14 +188,14 @@ class MessageDeliveryService {
       },
       // Priorité 6 : Interactions (réactions, réponses)
       reactions: {
-        streamKey: "stream:events:reactions",
+        streamKey: "chat:stream:events:reactions",
         groupId: "delivery-reactions",
         priority: 6,
         interval: 2000,
         workerPartition: "GROUP_WORKER",
       },
       replies: {
-        streamKey: "stream:events:replies",
+        streamKey: "chat:stream:events:replies",
         groupId: "delivery-replies",
         priority: 6,
         interval: 2000,
@@ -203,7 +203,7 @@ class MessageDeliveryService {
       },
       // Priorité 7 : Analytics (faible priorité)
       analytics: {
-        streamKey: "events:analytics",
+        streamKey: "chat:stream:events:analytics",
         groupId: "events-analytics",
         priority: 7,
         interval: 3000,

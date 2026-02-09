@@ -12,56 +12,60 @@ class StreamManager {
 
     // ✅ STREAMS TECHNIQUES (infrastructure)
     this.STREAMS = {
-      WAL: options.walStream || "wal:stream",
-      RETRY: options.retryStream || "retry:stream",
-      DLQ: options.dlqStream || "dlq:stream",
-      FALLBACK: options.fallbackStream || "fallback:stream",
-      METRICS: options.metricsStream || "metrics:stream", // Nouveau
+      WAL: options.walStream || "chat:stream:wal",
+      RETRY: options.retryStream || "chat:stream:retry",
+      DLQ: options.dlqStream || "chat:stream:dlq",
+      FALLBACK: options.fallbackStream || "chat:stream:fallback",
+      METRICS: options.metricsStream || "chat:stream:metrics",
     };
 
     // ✅ STREAMS FONCTIONNELS (domaine message)
     this.MESSAGE_STREAMS = {
       // Contenu des messages
-      PRIVATE: options.privateStream || "stream:messages:private",
-      GROUP: options.groupStream || "stream:messages:group",
-      CHANNEL: options.channelStream || "stream:messages:channel", // Si besoin
+      PRIVATE: options.privateStream || "chat:stream:messages:private",
+      GROUP: options.groupStream || "chat:stream:messages:group",
+      CHANNEL: options.channelStream || "chat:stream:messages:channel", // Si besoin
 
       // Métadonnées des messages
       STATUS: {
-        DELIVERED: "stream:status:delivered",
-        READ: "stream:status:read",
-        EDITED: "stream:status:edited",
-        DELETED: "stream:status:deleted",
+        DELIVERED: "chat:stream:status:delivered",
+        READ: "chat:stream:status:read",
+        EDITED: "chat:stream:status:edited",
+        DELETED: "chat:stream:status:deleted",
       },
 
       // Interactions
-      TYPING: "stream:events:typing",
-      REACTIONS: "stream:events:reactions",
-      REPLIES: "stream:events:replies",
+      TYPING: "chat:stream:events:typing",
+      REACTIONS: "chat:stream:events:reactions",
+      REPLIES: "chat:stream:events:replies",
     };
 
     // ✅ STREAMS ÉVÉNEMENTIELS (domaine métier)
     this.EVENT_STREAMS = {
       // Événements de création/suppression
-      CONVERSATIONS: "events:conversations",
+      CONVERSATIONS: "chat:stream:events:conversations",
 
       // Événements spécifiques aux conversations
       CONVERSATION_EVENTS: {
-        CREATED: "stream:conversation:created",
-        UPDATED: "stream:conversation:updated",
-        PARTICIPANT_ADDED: "stream:conversation:participants:added",
-        PARTICIPANT_REMOVED: "stream:conversation:participants:removed",
-        DELETED: "stream:conversation:deleted",
+        CREATED: "chat:stream:events:conversation:created",
+        UPDATED: "chat:stream:events:conversation:updated",
+        PARTICIPANT_ADDED: "chat:stream:events:conversation:participants:added",
+        PARTICIPANT_REMOVED:
+          "chat:stream:events:conversation:participants:removed",
+        DELETED: "chat:stream:events:conversation:deleted",
       },
 
       // Événements fichiers
-      FILES: "events:files",
+      FILES: "chat:stream:events:files",
 
       // Événements système/notifications
-      NOTIFICATIONS: "events:notifications",
+      NOTIFICATIONS: "chat:stream:events:notifications",
 
       // Événements analytiques
-      ANALYTICS: "events:analytics",
+      ANALYTICS: "chat:stream:events:analytics",
+
+      // Événements utilisateurs (profil, présence, paramètres)
+      USERS: "chat:stream:events:users",
     };
 
     // ✅ CONFIGURATION DES TAILLES MAXIMALES
@@ -109,6 +113,11 @@ class StreamManager {
       [this.EVENT_STREAMS.ANALYTICS]: options.analyticsMaxLen || 10000,
     };
 
+    // ✅ CONFIGURATION DES TTL (en secondes)
+    this.STREAM_TTL = {
+      [this.MESSAGE_STREAMS.TYPING]: options.typingTtl || 60,
+    };
+
     this.consumerGroupsInitialized = false;
 
     console.log("✅ StreamManager initialisé");
@@ -154,6 +163,14 @@ class StreamManager {
 
       // ✅ ÉCRIRE DANS LE STREAM
       const streamId = await this.redis.xAdd(streamName, "*", normalizedFields);
+
+      // ✅ APPLIQUER TTL SI CONFIGURÉ
+      const ttlSeconds = this.STREAM_TTL?.[streamName];
+      if (typeof ttlSeconds === "number" && ttlSeconds > 0) {
+        this.redis.expire(streamName, ttlSeconds).catch(() => {
+          // Ignorer les erreurs d'expiration
+        });
+      }
 
       // ✅ TRIMMER LE STREAM APRÈS (ne pas ralentir la rédaction)
       const maxLen = this.STREAM_MAXLEN[streamName];

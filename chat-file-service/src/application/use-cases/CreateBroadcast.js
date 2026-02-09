@@ -4,7 +4,7 @@ class CreateBroadcast {
   constructor(
     conversationRepository,
     resilientMessageService = null,
-    userCacheService = null
+    userCacheService = null,
   ) {
     this.conversationRepository = conversationRepository;
     this.resilientMessageService = resilientMessageService;
@@ -31,13 +31,13 @@ class CreateBroadcast {
     let usersInfo = [];
     try {
       console.log(
-        `🔍 Validation des ${participants.length} participants du broadcast...`
+        `🔍 Validation des ${participants.length} participants du broadcast...`,
       );
       usersInfo = await this.userCacheService.fetchUsersInfo(participants);
 
       // Vérifier que tous les utilisateurs existent
       const invalidUsers = usersInfo.filter(
-        (u) => u.name === "Utilisateur inconnu"
+        (u) => u.name === "Utilisateur inconnu",
       );
       if (invalidUsers.length > 0) {
         const invalidIds = invalidUsers.map((u) => u.matricule).join(", ");
@@ -52,10 +52,10 @@ class CreateBroadcast {
     } catch (validationError) {
       console.error(
         `❌ Erreur validation participants:`,
-        validationError.message
+        validationError.message,
       );
       throw new Error(
-        `Impossible de valider les participants: ${validationError.message}`
+        `Impossible de valider les participants: ${validationError.message}`,
       );
     }
 
@@ -137,15 +137,14 @@ class CreateBroadcast {
       },
     };
 
-    const savedConversation = await this.conversationRepository.save(
-      conversationData
-    );
+    const savedConversation =
+      await this.conversationRepository.save(conversationData);
 
     // ✅ PUBLIER NOTIFICATION SYSTÈME VIA RESILIENT MESSAGE SERVICE
     if (this.resilientMessageService) {
       try {
         console.log(
-          `📢 Publication notification système BROADCAST_CREATED pour: ${savedConversation._id}`
+          `📢 Publication notification système BROADCAST_CREATED pour: ${savedConversation._id}`,
         );
 
         await this.resilientMessageService.publishSystemMessage(
@@ -170,16 +169,16 @@ class CreateBroadcast {
           },
           {
             eventType: "BROADCAST_CREATED",
-            stream: "stream:messages:group", // Utilise le même stream que groupe
-          }
+            stream: "chat:stream:messages:group", // Utilise le même stream que groupe
+          },
         );
         console.log(
-          `✅ Notification système BROADCAST_CREATED publiée pour: ${savedConversation._id}`
+          `✅ Notification système BROADCAST_CREATED publiée pour: ${savedConversation._id}`,
         );
       } catch (notifError) {
         console.warn(
           "⚠️ Erreur publication notification BROADCAST_CREATED:",
-          notifError.message
+          notifError.message,
         );
         // Ne pas bloquer la création si la notification échoue
       }

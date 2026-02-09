@@ -95,20 +95,23 @@ class LeaveConversation {
     // Sauvegarder
     const updated = await this.conversationRepository.save(conversation);
 
-    // ✅ PUBLIER DANS REDIS STREAMS events:conversations
+    // ✅ PUBLIER DANS REDIS STREAMS chat:stream:events:conversations
     if (this.resilientMessageService) {
       try {
-        await this.resilientMessageService.addToStream("events:conversations", {
-          event: "conversation.participant.left",
-          conversationId: conversationId.toString(),
-          participantId: userId,
-          participantName: participantInfo?.name || "Utilisateur inconnu",
-          leftAt: new Date().toISOString(),
-          totalParticipants: conversation.participants.length.toString(),
-          timestamp: Date.now().toString(),
-        });
+        await this.resilientMessageService.addToStream(
+          "chat:stream:events:conversations",
+          {
+            event: "conversation.participant.left",
+            conversationId: conversationId.toString(),
+            participantId: userId,
+            participantName: participantInfo?.name || "Utilisateur inconnu",
+            leftAt: new Date().toISOString(),
+            totalParticipants: conversation.participants.length.toString(),
+            timestamp: Date.now().toString(),
+          },
+        );
         console.log(
-          `📤 [conversation.participant.left] publié dans events:conversations`,
+          `📤 [conversation.participant.left] publié dans chat:stream:events:conversations`,
         );
       } catch (streamErr) {
         console.error(

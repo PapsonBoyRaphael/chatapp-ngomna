@@ -1602,11 +1602,11 @@ class ResilientMessageService {
         "message-sync:*",
 
         // 3. Présence et utilisateurs en ligne
-        "presence:*",
-        "online:*",
-        "user:*",
-        "userData:*",
-        "userSocket:*",
+        "chat:cache:presence:*",
+        "chat:cache:online:*",
+        "chat:cache:user:*",
+        "chat:cache:user_data:*",
+        "chat:cache:user_sockets:*",
 
         // 4. Messages en attente et delivery
         "pending:messages:*",
@@ -1632,10 +1632,12 @@ class ResilientMessageService {
         "messages:*",
 
         // 8. Rooms et gestion temps-réel
-        "room:*",
-        "rooms:*",
-        "roomUsers:*",
-        "userRooms:*",
+        "chat:cache:rooms:*",
+        "chat:cache:room_users:*",
+        "chat:cache:room_data:*",
+        "chat:cache:user_rooms:*",
+        "chat:cache:room_state:*",
+        "chat:cache:last_seen:*",
 
         // 9. Autres patterns possibles
         "file:*",
@@ -1853,11 +1855,11 @@ class ResilientMessageService {
       console.error("❌ Redis non disponible");
       return { success: false, error: "Redis non disponible" };
     }
-
-    const categories = {
-      streams: ["stream:*", "*:stream"],
-      users: ["presence:*", "online:*", "user:*", "userData:*"],
+chat:stream:*"],
+      users: ["chat:cache:presence:*", "chat:cache:online:*", "chat:cache:user:*", "chat:cache:user_data:*"],
       messages: ["pending:messages:*", "messages:*", "last_messages:*"],
+      cache: ["chat:cache:*", "conversation:*", "conversations:*"],
+      rooms: ["chat:cache:rooms:*", "chat:cache:room_users:*", "chat:cache:room_data:*", "chat:cache:user_rst_messages:*"],
       cache: ["cache:*", "conversation:*", "conversations:*"],
       rooms: ["room:*", "rooms:*", "roomUsers:*", "userRooms:*"],
       resilience: ["fallback:*", "retry:*", "wal:*", "dlq:*"],

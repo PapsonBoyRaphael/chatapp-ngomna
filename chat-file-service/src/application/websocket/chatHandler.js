@@ -148,6 +148,9 @@ class ChatHandler {
 
         socket.on("ping", () => {
           socket.emit("pong");
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
         });
 
         socket.on("disconnect", (reason) => {
@@ -1395,28 +1398,16 @@ class ChatHandler {
               `👥 Rooms conversations rejointes (${conversationIds.length}) en ${joinDuration}ms`,
             );
 
-            // if (this.markMessageDeliveredUseCase) {
-            //   const updateStartTime = Date.now();
-            //   await Promise.all(
-            //     conversationIds.map(async (convId) => {
-            //       try {
-            //         await this.markMessageDeliveredUseCase.execute({
-            //           conversationId: convId,
-            //           userId: userIdString,
-            //         });
-            //       } catch (deliveredError) {
-            //         console.warn(
-            //           `⚠️ Erreur marquage delivered:`,
-            //           deliveredError.message,
-            //         );
-            //       }
-            //     }),
-            //   );
-            //   const updateDuration = Date.now() - updateStartTime;
-            //   console.log(
-            //     `📝 Statuts mis à jour pour ${conversationIds.length} conversation(s) en ${updateDuration}ms`,
-            //   );
-            // }
+            // ✅ INITIALISER LES ROOMS DANS REDIS (présence)
+            if (this.roomManager) {
+              for (const convId of conversationIds) {
+                const roomName = `conv_${convId}`;
+                await this.roomManager.addUserToRoom(roomName, userIdString, {
+                  matricule: matriculeString,
+                  conversationId: convId,
+                });
+              }
+            }
           }
         } catch (idsError) {
           console.warn(
@@ -1572,12 +1563,6 @@ class ChatHandler {
       // ✅ SYNCHRONISATION REDIS EN ARRIÈRE-PLAN (non-bloquante)
       setImmediate(() => this.syncUserWithRedis(userIdString, userData));
 
-      socket.broadcast.emit("user_connected", {
-        userId: userIdString,
-        matricule: matriculeString,
-        timestamp: new Date().toISOString(),
-      });
-
       const totalDuration = Date.now() - authStartTime;
       console.log(
         `\n✅ [${new Date().toISOString()}] ⏱️ AUTHENTIFICATION COMPLÈTE (⏱️ TOTAL: ${totalDuration}ms)\n`,
@@ -1601,13 +1586,6 @@ class ChatHandler {
     try {
       if (userId && this.onlineUserManager) {
         await this.onlineUserManager.setUserOffline(userId);
-
-        socket.broadcast.emit("user_disconnected", {
-          userId,
-          matricule,
-          timestamp: new Date().toISOString(),
-          reason,
-        });
 
         console.log(`👋 Utilisateur ${matricule} (${userId}) déconnecté`);
       }
@@ -1929,6 +1907,18 @@ class ChatHandler {
         }
       }
 
+      if (this.roomManager) {
+        try {
+          const roomName = `conv_${conversationId}`;
+          await this.roomManager.addUserToRoom(roomName, userId, {
+            matricule: socket.matricule,
+            conversationId: conversationId,
+          });
+        } catch (err) {
+          console.warn("⚠️ Erreur ajout room Redis:", err.message);
+        }
+      }
+
       socket.emit("conversation_joined", {
         conversationId,
         timestamp: new Date().toISOString(),
@@ -1964,6 +1954,15 @@ class ChatHandler {
           timestamp: new Date().toISOString(),
         });
 
+      if (this.roomManager) {
+        try {
+          const roomName = `conv_${conversationId}`;
+          await this.roomManager.removeUserFromRoom(roomName, userId);
+        } catch (err) {
+          console.warn("⚠️ Erreur retrait room Redis:", err.message);
+        }
+      }
+
       console.log(
         `👋 ${socket.matricule} a quitté conversation ${conversationId}`,
       );
@@ -1974,15 +1973,47 @@ class ChatHandler {
 
   handleTyping(socket, data) {
     try {
-      const { conversationId } = data;
+      const { conversationId, event } = data;
       const userId = socket.userId;
 
       if (!conversationId || !userId) return;
 
+      // ✅ DÉTERMINER L'ÉVÉNEMENT: start, refresh ou auto-détection
+      const typingEvent = event || "typing:start";
+
+      // ✅ VALIDATION: événements autorisés
+      const allowedEvents = ["typing:start", "typing:refresh"];
+      const finalEvent = allowedEvents.includes(typingEvent)
+        ? typingEvent
+        : "typing:start";
+
+      // ✅ PUBLIER DANS REDIS STREAM
+      const resilientService = this.resilientService;
+
+      if (resilientService && resilientService.redis) {
+        resilientService.redis
+          .xAdd("chat:stream:events:typing", "*", {
+            conversationId: String(conversationId),
+            userId: String(userId),
+            event: finalEvent,
+            timestamp: String(Date.now()),
+          })
+          .catch((err) => {
+            console.error(`❌ Erreur publication ${finalEvent}:`, err.message);
+          });
+
+        console.log(`📝 Événement ${finalEvent} publié:`, {
+          conversationId,
+          userId,
+        });
+      }
+
+      // ✅ FALLBACK: Broadcast immédiat (pour clients Socket.IO classiques)
       socket.to(`conversation_${conversationId}`).emit("userTyping", {
         userId,
         matricule: socket.matricule,
         conversationId,
+        event: finalEvent,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
@@ -1997,6 +2028,28 @@ class ChatHandler {
 
       if (!conversationId || !userId) return;
 
+      // ✅ PUBLIER DANS REDIS STREAM: "typing:stop"
+      const resilientService = this.resilientService;
+
+      if (resilientService && resilientService.redis) {
+        resilientService.redis
+          .xAdd("chat:stream:events:typing", "*", {
+            conversationId: String(conversationId),
+            userId: String(userId),
+            event: "typing:stop",
+            timestamp: String(Date.now()),
+          })
+          .catch((err) => {
+            console.error("❌ Erreur publication typing:stop:", err.message);
+          });
+
+        console.log(`🛑 Événement typing:stop publié:`, {
+          conversationId,
+          userId,
+        });
+      }
+
+      // ✅ FALLBACK: Broadcast immédiat
       socket.to(`conversation_${conversationId}`).emit("userStoppedTyping", {
         userId,
         matricule: socket.matricule,
@@ -2268,7 +2321,7 @@ class ChatHandler {
 
         // ✅ MARQUER OFFLINE DANS Redis
         if (this.onlineUserManager) {
-          await this.onlineUserManager.setUserOffline(userId);
+          await this.onlineUserManager.setUserOffline(userId, socketId);
         }
 
         // Notifier les autres utilisateurs
