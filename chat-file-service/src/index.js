@@ -235,15 +235,17 @@ const startServer = async () => {
       app.locals.roomManager = roomManager;
       console.log("   ✅ RoomManager (shared)");
 
-      // ✅ INITIALISER UserCache depuis shared
+      // ✅ INITIALISER UserCache depuis shared (préfixe chat)
+      UserCache.prefix = "chat:cache:datastore:users:";
       await UserCache.initialize();
       console.log("   ✅ UserCache (shared) - Cache utilisateur centralisé");
 
       // ✅ INITIALISER ET DÉMARRER UserStreamConsumer
       const userStreamConsumer = new UserStreamConsumer({
-        streamName: "chat:stream:events:users",
+        streamName: "user-service:stream:events:users",
         consumerGroup: "chat-file-service-group",
         consumerName: `chat-consumer-${process.pid}`,
+        cachePrefix: "chat:cache:datastore:users:",
       });
       await userStreamConsumer.initialize();
       await userStreamConsumer.start();
@@ -919,28 +921,30 @@ const startServer = async () => {
       console.log("=".repeat(70) + "\n");
 
       // ✅ DÉMARRER LE PRÉ-CHAUFFAGE INTELLIGENT DU CACHE (en arrière-plan)
-      // if (redisClient) {
-      //   console.log("🔥 Démarrage du pré-chauffage intelligent du cache...");
+      if (redisClient) {
+        console.log("🔥 Démarrage du pré-chauffage intelligent du cache...");
 
-      //   const smartPrewarmer = new SmartCachePrewarmer({
-      //     authServiceUrl:
-      //       process.env.AUTH_USER_SERVICE_URL || "http://localhost:8001",
-      //     batchSize: 500,
-      //     delayBetweenBatches: 1500,
-      //     maxUsers: 10000,
-      //   });
+        const smartPrewarmer = new SmartCachePrewarmer({
+          authServiceUrl:
+            process.env.AUTH_USER_SERVICE_URL || "http://localhost:8001",
+          batchSize: 500,
+          delayBetweenBatches: 1500,
+          maxUsers: 10000,
+          streamName: "user-service:stream:events:users",
+          cachePrefix: "chat:cache:datastore:users:",
+        });
 
-      //   // Lancer en arrière-plan (non-bloquant)
-      //   smartPrewarmer
-      //     .start()
-      //     .then((stats) => {
-      //       console.log("✅ Pré-chauffage terminé avec succès");
-      //       console.log(`   📊 Statistiques:`, stats);
-      //     })
-      //     .catch((error) => {
-      //       console.error("❌ Erreur pré-chauffage:", error.message);
-      //     });
-      // }
+        // Lancer en arrière-plan (non-bloquant)
+        smartPrewarmer
+          .start()
+          .then((stats) => {
+            console.log("✅ Pré-chauffage terminé avec succès");
+            console.log("   📊 Statistiques:", stats);
+          })
+          .catch((error) => {
+            console.error("❌ Erreur pré-chauffage:", error.message);
+          });
+      }
     });
   } catch (error) {
     console.error("❌ Erreur au démarrage:", error);

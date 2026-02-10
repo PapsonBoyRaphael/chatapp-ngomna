@@ -1,17 +1,18 @@
 const axios = require("axios");
-const { UserCache } = require("../../../shared");
+const { UserCache, RedisManager } = require("../../../shared");
 
 /**
  * SmartCachePrewarmer - Système de pré-chauffage intelligent du cache utilisateur
  *
  * Stratégie:
- * - Charge TOUS les utilisateurs depuis auth-user-service/all
+ * - Consomme TOUS les utilisateurs depuis le stream user-service:stream:events:users
+ * - Fallback HTTP vers auth-user-service/all si le stream est vide/indisponible
  * - Traitement par batch pour éviter la surcharge
  * - Non-bloquant : s'exécute en arrière-plan
  *
  * Avantages:
  * - Pas de blocage au démarrage
- * - Cache hit rate élevé (80-95%)comment decompiler une apk sur linux
+ * - Cache hit rate élevé (80-95%)
  * - Réduction des appels HTTP au runtime
  * - Couverture complète de tous les utilisateurs
  */
@@ -25,6 +26,15 @@ class SmartCachePrewarmer {
     this.delayBetweenBatches = options.delayBetweenBatches || 1500; // 1.5s
     this.maxUsers = options.maxUsers || 10000;
     this.daysBack = options.daysBack || 7;
+    this.streamName =
+      options.streamName ||
+      process.env.USER_SERVICE_STREAM_USERS ||
+      "user-service:stream:events:users";
+    this.cachePrefix =
+      options.cachePrefix ||
+      process.env.CHAT_USERS_CACHE_PREFIX ||
+      "chat:cache:datastore:users:";
+    this.redisManager = RedisManager;
     this.isRunning = false;
     this.stats = {
       totalProcessed: 0,
@@ -52,8 +62,20 @@ class SmartCachePrewarmer {
     );
 
     try {
-      // Étape 1: Récupérer TOUS les utilisateurs depuis auth-user-service
-      const allUsers = await this._getAllUsersFromAuthService();
+      // Étape 0: Initialiser le cache avec le préfixe attendu
+      UserCache.prefix = this.cachePrefix;
+      await UserCache.initialize();
+
+      // Étape 1: Récupérer TOUS les utilisateurs depuis le stream
+      let allUsers = await this._getAllUsersFromStream();
+
+      // Fallback HTTP si le stream est vide/indisponible
+      if (allUsers.length === 0) {
+        console.warn(
+          "⚠️ [SmartCachePrewarmer] Stream vide/indisponible, fallback HTTP",
+        );
+        allUsers = await this._getAllUsersFromAuthService();
+      }
 
       if (allUsers.length === 0) {
         console.log("⚠️ [SmartCachePrewarmer] Aucun utilisateur trouvé");
@@ -86,6 +108,63 @@ class SmartCachePrewarmer {
       return this.stats;
     } finally {
       this.isRunning = false;
+    }
+  }
+
+  /**
+   * Récupère TOUS les utilisateurs depuis user-service:stream:events:users
+   * @private
+   */
+  async _getAllUsersFromStream() {
+    try {
+      if (!this.redisManager || !this.redisManager.clients?.main) {
+        console.warn(
+          "⚠️ [SmartCachePrewarmer] Redis non disponible pour lecture stream",
+        );
+        return [];
+      }
+
+      const streamClient = this.redisManager.clients.main;
+      const entries = await streamClient.xRange(this.streamName, "-", "+");
+
+      if (!entries || entries.length === 0) {
+        return [];
+      }
+
+      const users = [];
+
+      for (const entry of entries) {
+        const fields = entry?.message || entry?.fields || entry?.[1];
+        const dataRaw = fields?.data;
+        if (!dataRaw) {
+          continue;
+        }
+
+        try {
+          const userData =
+            typeof dataRaw === "string" ? JSON.parse(dataRaw) : dataRaw;
+          if (userData && (userData.id || userData.matricule)) {
+            users.push(userData);
+          }
+        } catch (parseError) {
+          console.warn(
+            "⚠️ [SmartCachePrewarmer] Erreur parsing data stream:",
+            parseError.message,
+          );
+        }
+      }
+
+      console.log(
+        `✅ [SmartCachePrewarmer] ${users.length} utilisateurs récupérés depuis le stream`,
+      );
+
+      return users;
+    } catch (error) {
+      console.error(
+        "❌ [SmartCachePrewarmer] Erreur récupération stream:",
+        error.message,
+      );
+      return [];
     }
   }
 

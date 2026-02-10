@@ -1,121 +1,59 @@
 /**
  * StreamManager - Gestionnaire centralisé des Redis Streams
- * ✅ Configuration des streams
+ * ✅ Configuration des streams TECHNIQUES et UTILISATEURS
  * ✅ Ajout avec MAXLEN automatique
  * ✅ Consumer groups
  * ✅ Statistiques
+ *
+ * ⚠️ MODIFIÉ: Suppression complète des événements de chat
+ * - Pas de MESSAGE_STREAMS (messages privés, groupes, réactions, etc.)
+ * - Pas de CONVERSATION_EVENTS
+ * - Garde seulement: Streams techniques + Événements utilisateurs
  */
 
 class StreamManager {
   constructor(redisClient, options = {}) {
     this.redis = redisClient;
 
-    // ✅ STREAMS TECHNIQUES (infrastructure)
+    // ✅ STREAMS TECHNIQUES (infrastructure & résilience)
     this.STREAMS = {
-      WAL: options.walStream || "chat:stream:wal",
-      RETRY: options.retryStream || "chat:stream:retry",
-      DLQ: options.dlqStream || "chat:stream:dlq",
-      FALLBACK: options.fallbackStream || "chat:stream:fallback",
-      METRICS: options.metricsStream || "chat:stream:metrics",
+      WAL: options.walStream || "app:stream:wal",
+      RETRY: options.retryStream || "app:stream:retry",
+      DLQ: options.dlqStream || "app:stream:dlq",
+      FALLBACK: options.fallbackStream || "app:stream:fallback",
+      METRICS: options.metricsStream || "app:stream:metrics",
     };
 
-    // ✅ STREAMS FONCTIONNELS (domaine message)
-    this.MESSAGE_STREAMS = {
-      // Contenu des messages
-      PRIVATE: options.privateStream || "chat:stream:messages:private",
-      GROUP: options.groupStream || "chat:stream:messages:group",
-      CHANNEL: options.channelStream || "chat:stream:messages:channel", // Si besoin
-
-      // Métadonnées des messages
-      STATUS: {
-        DELIVERED: "chat:stream:status:delivered",
-        READ: "chat:stream:status:read",
-        EDITED: "chat:stream:status:edited",
-        DELETED: "chat:stream:status:deleted",
-      },
-
-      // Interactions
-      TYPING: "chat:stream:events:typing",
-      REACTIONS: "chat:stream:events:reactions",
-      REPLIES: "chat:stream:events:replies",
-    };
-
-    // ✅ STREAMS ÉVÉNEMENTIELS (domaine métier)
+    // ✅ STREAMS ÉVÉNEMENTIELS (événements métier non-chat)
     this.EVENT_STREAMS = {
-      // Événements de création/suppression
-      CONVERSATIONS: "chat:stream:events:conversations",
-
-      // Événements spécifiques aux conversations
-      CONVERSATION_EVENTS: {
-        CREATED: "chat:stream:events:conversation:created",
-        UPDATED: "chat:stream:events:conversation:updated",
-        PARTICIPANT_ADDED: "chat:stream:events:conversation:participants:added",
-        PARTICIPANT_REMOVED:
-          "chat:stream:events:conversation:participants:removed",
-        DELETED: "chat:stream:events:conversation:deleted",
-      },
-
-      // Événements fichiers
-      FILES: "chat:stream:events:files",
-
-      // Événements système/notifications
-      NOTIFICATIONS: "chat:stream:events:notifications",
-
-      // Événements analytiques
-      ANALYTICS: "chat:stream:events:analytics",
-
       // Événements utilisateurs (profil, présence, paramètres)
-      USERS: "chat:stream:events:users",
+      USERS: "user-service:stream:events:users",
+
+      // Événements authentification
+      AUTH: "user-service:stream:events:auth",
+
+      // Événements système
+      SYSTEM: "user-service:stream:events:system",
     };
 
     // ✅ CONFIGURATION DES TAILLES MAXIMALES
     this.STREAM_MAXLEN = {
-      // Streams techniques
+      // Streams techniques - résilience
       [this.STREAMS.WAL]: options.walMaxLen || 10000,
       [this.STREAMS.RETRY]: options.retryMaxLen || 5000,
       [this.STREAMS.DLQ]: options.dlqMaxLen || 1000,
       [this.STREAMS.FALLBACK]: options.fallbackMaxLen || 5000,
       [this.STREAMS.METRICS]: options.metricsMaxLen || 10000,
 
-      // Streams fonctionnels - contenu messages
-      [this.MESSAGE_STREAMS.PRIVATE]: options.privateMaxLen || 10000,
-      [this.MESSAGE_STREAMS.GROUP]: options.groupMaxLen || 20000,
-      [this.MESSAGE_STREAMS.CHANNEL]: options.channelMaxLen || 20000,
-
-      // Streams fonctionnels - métadonnées messages
-      [this.MESSAGE_STREAMS.STATUS.DELIVERED]: options.deliveredMaxLen || 5000,
-      [this.MESSAGE_STREAMS.STATUS.READ]: options.readMaxLen || 5000,
-      [this.MESSAGE_STREAMS.STATUS.EDITED]: options.editedMaxLen || 2000,
-      [this.MESSAGE_STREAMS.STATUS.DELETED]: options.deletedMaxLen || 2000,
-
-      // Streams fonctionnels - interactions
-      [this.MESSAGE_STREAMS.TYPING]: options.typingMaxLen || 2000,
-      [this.MESSAGE_STREAMS.REACTIONS]: options.reactionsMaxLen || 5000,
-      [this.MESSAGE_STREAMS.REPLIES]: options.repliesMaxLen || 5000,
-
       // Streams événementiels
-      [this.EVENT_STREAMS.CONVERSATIONS]: options.conversationsMaxLen || 5000,
-
-      // Streams événements conversation spécifiques
-      [this.EVENT_STREAMS.CONVERSATION_EVENTS.CREATED]:
-        options.conversationCreatedMaxLen || 2000,
-      [this.EVENT_STREAMS.CONVERSATION_EVENTS.UPDATED]:
-        options.conversationUpdatedMaxLen || 2000,
-      [this.EVENT_STREAMS.CONVERSATION_EVENTS.PARTICIPANT_ADDED]:
-        options.participantAddedMaxLen || 2000,
-      [this.EVENT_STREAMS.CONVERSATION_EVENTS.PARTICIPANT_REMOVED]:
-        options.participantRemovedMaxLen || 2000,
-      [this.EVENT_STREAMS.CONVERSATION_EVENTS.DELETED]:
-        options.conversationDeletedMaxLen || 1000,
-
-      [this.EVENT_STREAMS.FILES]: options.filesMaxLen || 5000,
-      [this.EVENT_STREAMS.NOTIFICATIONS]: options.notificationsMaxLen || 2000,
-      [this.EVENT_STREAMS.ANALYTICS]: options.analyticsMaxLen || 10000,
+      [this.EVENT_STREAMS.USERS]: options.usersMaxLen || 10000,
+      [this.EVENT_STREAMS.AUTH]: options.authMaxLen || 5000,
+      [this.EVENT_STREAMS.SYSTEM]: options.systemMaxLen || 5000,
     };
 
     // ✅ CONFIGURATION DES TTL (en secondes)
     this.STREAM_TTL = {
-      [this.MESSAGE_STREAMS.TYPING]: options.typingTtl || 60,
+      // Pas de TTL configuré par défaut pour ces streams
     };
 
     this.consumerGroupsInitialized = false;
@@ -240,6 +178,7 @@ class StreamManager {
     }
 
     try {
+      // ✅ CONSUMER GROUPS TECHNIQUES
       const groupConfigs = {
         // Streams techniques
         [this.STREAMS.RETRY]: "retry-workers",
@@ -247,30 +186,10 @@ class StreamManager {
         [this.STREAMS.FALLBACK]: "fallback-workers",
         [this.STREAMS.METRICS]: "metrics-processors",
 
-        // Streams fonctionnels - contenu messages
-        [this.MESSAGE_STREAMS.PRIVATE]: "delivery-private",
-        [this.MESSAGE_STREAMS.GROUP]: "delivery-group",
-        [this.MESSAGE_STREAMS.CHANNEL]: "delivery-channel",
-
-        // Streams fonctionnels - métadonnées messages
-        [this.MESSAGE_STREAMS.STATUS.DELIVERED]: "delivery-delivered",
-        [this.MESSAGE_STREAMS.STATUS.READ]: "delivery-read",
-        [this.MESSAGE_STREAMS.STATUS.EDITED]: "delivery-edited",
-        [this.MESSAGE_STREAMS.STATUS.DELETED]: "delivery-deleted",
-
-        // Streams fonctionnels - interactions
-        [this.MESSAGE_STREAMS.TYPING]: "delivery-typing",
-        [this.MESSAGE_STREAMS.REACTIONS]: "delivery-reactions",
-        [this.MESSAGE_STREAMS.REPLIES]: "delivery-replies",
-
         // Streams événementiels
-        [this.EVENT_STREAMS.CONVERSATIONS]: "events-conversations",
-        [this.EVENT_STREAMS.USERS.PRESENCE]: "events-presence",
-        [this.EVENT_STREAMS.USERS.PROFILE]: "events-profile",
-        [this.EVENT_STREAMS.USERS.SETTINGS]: "events-settings",
-        [this.EVENT_STREAMS.FILES]: "events-files",
-        [this.EVENT_STREAMS.NOTIFICATIONS]: "events-notifications",
-        [this.EVENT_STREAMS.ANALYTICS]: "events-analytics",
+        [this.EVENT_STREAMS.USERS]: "events-users",
+        [this.EVENT_STREAMS.AUTH]: "events-auth",
+        [this.EVENT_STREAMS.SYSTEM]: "events-system",
       };
 
       for (const [stream, group] of Object.entries(groupConfigs)) {

@@ -36,12 +36,12 @@ function createFileRoutes(fileController) {
   // **VALIDATION DES MÉTHODES DU CONTRÔLEUR**
   const requiredMethods = ["uploadFile", "getFile", "deleteFile", "getFiles"];
   const missingMethods = requiredMethods.filter(
-    (method) => typeof fileController[method] !== "function"
+    (method) => typeof fileController[method] !== "function",
   );
 
   if (missingMethods.length > 0) {
     console.error(
-      `❌ Méthodes manquantes dans FileController: ${missingMethods.join(", ")}`
+      `❌ Méthodes manquantes dans FileController: ${missingMethods.join(", ")}`,
     );
     router.all("*", (req, res) => {
       res.status(503).json({
@@ -101,7 +101,7 @@ function createFileRoutes(fileController) {
             error: error.message,
           });
         }
-      }
+      },
     );
 
     // DELETE /files/:fileId - Supprimer un fichier
@@ -119,7 +119,7 @@ function createFileRoutes(fileController) {
             error: error.message,
           });
         }
-      }
+      },
     );
 
     // GET /files/conversation/:conversationId - Fichiers d'une conversation
@@ -132,7 +132,7 @@ function createFileRoutes(fileController) {
         } catch (error) {
           console.error(
             "❌ Erreur route GET /files/conversation/:conversationId:",
-            error
+            error,
           );
           res.status(500).json({
             success: false,
@@ -141,7 +141,7 @@ function createFileRoutes(fileController) {
             error: error.message,
           });
         }
-      }
+      },
     );
 
     // ✅ AJOUTER CETTE ROUTE POUR LES THUMBNAILS
@@ -159,7 +159,7 @@ function createFileRoutes(fileController) {
             error: error.message,
           });
         }
-      }
+      },
     );
 
     // GET /files/:fileId/download - Télécharger un fichier
@@ -177,7 +177,7 @@ function createFileRoutes(fileController) {
             error: error.message,
           });
         }
-      }
+      },
     );
 
     /**
@@ -200,7 +200,7 @@ function createFileRoutes(fileController) {
             error: error.message,
           });
         }
-      }
+      },
     );
 
     // (Optionnel) POST /files/download-multiple - Télécharger plusieurs fichiers en ZIP

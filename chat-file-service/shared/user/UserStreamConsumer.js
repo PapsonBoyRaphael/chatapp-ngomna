@@ -4,7 +4,7 @@ const UserCache = require("./UserCache");
 /**
  * UserStreamConsumer - Écoute les événements utilisateur via Redis Streams
  *
- * Stream: chat:stream:events:users
+ * Stream: user-service:stream:events:users
  * Événements écoutés:
  * - user.profile.updated : Mise à jour d'un profil
  * - user.profile.created : Création d'un profil
@@ -16,11 +16,12 @@ const UserCache = require("./UserCache");
  */
 class UserStreamConsumer {
   constructor(options = {}) {
-    this.streamName = options.streamName || "chat:stream:events:users";
-    this.consumerGroup = options.consumerGroup || "chat-service-group";
+    this.streamName = options.streamName || "user-service:stream:events:users";
+    this.consumerGroup = options.consumerGroup || "chat-file-service-group";
     this.consumerName = options.consumerName || `consumer-${process.pid}`;
     this.pollInterval = options.pollInterval || 1000; // 1 seconde
     this.batchSize = options.batchSize || 10;
+    this.cachePrefix = options.cachePrefix || "chat:cache:datastore:users:";
     this.redis = null;
     this.isRunning = false;
     this.pollTimer = null;
@@ -38,6 +39,8 @@ class UserStreamConsumer {
     }
 
     try {
+      // ✅ Appliquer le préfixe cache attendu pour chat-file-service
+      UserCache.prefix = this.cachePrefix;
       // Créer le consumer group si inexistant
       try {
         await this.redis.xGroupCreate(
@@ -169,7 +172,27 @@ class UserStreamConsumer {
    */
   async _handleMessage(messageId, data) {
     try {
-      // Récupérer le payload
+      // ✅ Nouveau format: { event, userId, data }
+      if (data && (data.event || data.data)) {
+        const eventType = data.event || "";
+        const userDataRaw = data.data || null;
+        let userData = null;
+
+        if (userDataRaw) {
+          userData =
+            typeof userDataRaw === "string"
+              ? JSON.parse(userDataRaw)
+              : userDataRaw;
+        }
+
+        if (eventType === "user:profile:synced" && userData) {
+          await this._handleProfileSync(userData);
+          await this._ack(messageId);
+          return;
+        }
+      }
+
+      // Récupérer le payload (ancien format)
       const payloadStr = data.payload || data.event;
 
       if (!payloadStr) {
@@ -212,6 +235,39 @@ class UserStreamConsumer {
         error.message,
       );
       // Le message ne sera pas acquitté et pourra être retraité
+    }
+  }
+
+  /**
+   * Gère la mise à jour d'un profil
+   * @private
+   */
+  async _handleProfileSync(userData) {
+    try {
+      const userId = userData.matricule || userData.id;
+
+      if (!userId) {
+        console.warn("⚠️ [UserStreamConsumer] userId manquant dans data");
+        return;
+      }
+
+      await UserCache.set({
+        id: userId,
+        nom: userData.nom || "",
+        prenom: userData.prenom || "",
+        fullName:
+          userData.fullName ||
+          `${userData.prenom || ""} ${userData.nom || ""}`.trim(),
+        avatar: userData.avatar || "",
+        matricule: userData.matricule || userId,
+        ministere: userData.ministere || "",
+        sexe: userData.sexe || "",
+      });
+    } catch (error) {
+      console.error(
+        "❌ [UserStreamConsumer] Erreur sync profil:",
+        error.message,
+      );
     }
   }
 
