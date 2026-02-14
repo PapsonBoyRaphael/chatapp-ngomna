@@ -5,19 +5,19 @@ const RedisManager = require("../redis/RedisManager");
  *
  * Stratégie :
  * - Stockage dans des Redis Hashes (HSET/HGETALL)
- * - Clé: user:profile:{userId} (ex: user:profile:570479H)
+ * - Clé: chat:cache:users:{userId} (ex: chat:cache:users:570479H)
  * - TTL par défaut: 7 jours
  * - Champs: id, nom, prenom, fullName, avatar, matricule, ministere, sexe, updatedAt
  *
  * Avantages :
  * - Latence < 1ms pour les lectures
  * - Réduction des appels HTTP entre services
- * - Cache partagé entre tous les services
+ * - Cache spécifique au service chat
  * - Stockage des nom/prenom séparés pour éviter les incohérences
  */
 class UserCache {
   constructor(options = {}) {
-    this.prefix = options.prefix || "users-service:datastore:users:";
+    this.prefix = options.prefix || "chat:cache:users:";
     this.defaultTTL = options.defaultTTL || 7 * 24 * 3600; // 7 jours
     this.redis = null;
   }
@@ -26,7 +26,7 @@ class UserCache {
    * Initialise le cache avec le client Redis
    */
   async initialize() {
-    this.redis = RedisManager?.clients?.main;
+    this.redis = RedisManager?.clients?.cache;
 
     if (!this.redis) {
       console.warn("⚠️ [UserCache] Redis non disponible");

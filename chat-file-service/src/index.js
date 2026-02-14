@@ -235,15 +235,17 @@ const startServer = async () => {
       app.locals.roomManager = roomManager;
       console.log("   ✅ RoomManager (shared)");
 
-      // ✅ INITIALISER UserCache depuis shared
+      // ✅ INITIALISER UserCache depuis shared (préfixe chat)
+      UserCache.prefix = "chat:cache:users:";
       await UserCache.initialize();
       console.log("   ✅ UserCache (shared) - Cache utilisateur centralisé");
 
       // ✅ INITIALISER ET DÉMARRER UserStreamConsumer
       const userStreamConsumer = new UserStreamConsumer({
-        streamName: "chat:stream:events:users",
+        streamName: "user-service:stream:events:users",
         consumerGroup: "chat-file-service-group",
         consumerName: `chat-consumer-${process.pid}`,
+        cachePrefix: "chat:cache:users:",
       });
       await userStreamConsumer.initialize();
       await userStreamConsumer.start();
@@ -257,7 +259,9 @@ const startServer = async () => {
     if (redisClient) {
       try {
         console.log("🚀 Initialisation MessageDeliveryService...");
-        messageDeliveryService = new MessageDeliveryService(redisClient, io);
+        // ✅ UTILISER LE CLIENT STREAM POUR LES OPÉRATIONS DE STREAMING
+        const streamClient = RedisManager.getStreamClient();
+        messageDeliveryService = new MessageDeliveryService(streamClient, io);
         console.log("⏳ Attente de l'initialisation du consumer...");
         await messageDeliveryService.initialize();
         app.locals.messageDeliveryService = messageDeliveryService;
@@ -400,17 +404,6 @@ const startServer = async () => {
           "✅ Référence messageDeliveryService injectée dans resilientMessageService",
         );
       }
-
-      // resilientMessageService.nukeAllRedisData(); //
-      // ✅ NOUVELLE : SYNCHRONISER LES MESSAGES EXISTANTS
-      // console.log(
-      //   "🔄 Démarrage de la synchronisation MongoDB → Redis Streams..."
-      // );
-      // const syncResult =
-      //   await resilientMessageService.syncExistingMessagesToStream();
-      // console.log(
-      //   `✅ Synchronisation complétée: ${syncResult.synced} messages, ${syncResult.errors} erreur(s)`
-      // );
 
       app.locals.resilientMessageService = resilientMessageService;
       console.log(
@@ -624,6 +617,12 @@ const startServer = async () => {
       markMessageReadUseCase,
       resilientMessageService,
       messageDeliveryService,
+      null, // userCacheService
+      addParticipantUseCase,
+      removeParticipantUseCase,
+      leaveConversationUseCase,
+      deleteMessageUseCase,
+      deleteFileUseCase,
     );
 
     // ✅ CONFIGURER LES GESTIONNAIRES D'ÉVÉNEMENTS SOCKET.IO
@@ -919,28 +918,31 @@ const startServer = async () => {
       console.log("=".repeat(70) + "\n");
 
       // ✅ DÉMARRER LE PRÉ-CHAUFFAGE INTELLIGENT DU CACHE (en arrière-plan)
-      // if (redisClient) {
-      //   console.log("🔥 Démarrage du pré-chauffage intelligent du cache...");
+      if (redisClient) {
+        console.log("🔥 Démarrage du pré-chauffage intelligent du cache...");
 
-      //   const smartPrewarmer = new SmartCachePrewarmer({
-      //     authServiceUrl:
-      //       process.env.AUTH_USER_SERVICE_URL || "http://localhost:8001",
-      //     batchSize: 500,
-      //     delayBetweenBatches: 1500,
-      //     maxUsers: 10000,
-      //   });
+        const smartPrewarmer = new SmartCachePrewarmer({
+          authServiceUrl:
+            process.env.AUTH_USER_SERVICE_URL || "http://localhost:8001",
+          batchSize: 500,
+          delayBetweenBatches: 1500,
+          maxUsers: 10000,
+          streamName: "user-service:stream:events:users",
+          cachePrefix: "chat:cache:users:",
+          userStreamConsumer: app.locals.userStreamConsumer, // ✅ PASSER L'INSTANCE EXISTANTE
+        });
 
-      //   // Lancer en arrière-plan (non-bloquant)
-      //   smartPrewarmer
-      //     .start()
-      //     .then((stats) => {
-      //       console.log("✅ Pré-chauffage terminé avec succès");
-      //       console.log(`   📊 Statistiques:`, stats);
-      //     })
-      //     .catch((error) => {
-      //       console.error("❌ Erreur pré-chauffage:", error.message);
-      //     });
-      // }
+        // Lancer en arrière-plan (non-bloquant)
+        smartPrewarmer
+          .start()
+          .then((stats) => {
+            console.log("✅ Pré-chauffage terminé avec succès");
+            console.log("   📊 Statistiques:", stats);
+          })
+          .catch((error) => {
+            console.error("❌ Erreur pré-chauffage:", error.message);
+          });
+      }
     });
   } catch (error) {
     console.error("❌ Erreur au démarrage:", error);

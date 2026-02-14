@@ -47,6 +47,34 @@ const messageSchema = new mongoose.Schema(
       index: true,
     },
 
+    // ✅ COMPTEURS POUR GROUPES ET BROADCASTS
+    // Pour PRIVATE: totalRecipients = 1
+    // Pour GROUP/BROADCAST: totalRecipients = participants.length - 1 (exclut l'expéditeur)
+    deliveredCount: {
+      type: Number,
+      default: 0,
+    },
+    readCount: {
+      type: Number,
+      default: 0,
+    },
+    totalRecipients: {
+      type: Number,
+      default: 1, // Par défaut pour PRIVATE
+    },
+
+    // ✅ LISTE DES UTILISATEURS QUI ONT REÇU/LU (pour éviter les doublons)
+    deliveredBy: [
+      {
+        type: String, // userId
+      },
+    ],
+    readBy: [
+      {
+        type: String, // userId
+      },
+    ],
+
     // Dates de réception et de lecture (ajout explicite)
     receivedAt: {
       type: Date,
@@ -206,7 +234,7 @@ const messageSchema = new mongoose.Schema(
     timestamps: true,
     versionKey: false,
     collection: "messages",
-  }
+  },
 );
 
 // ===============================
@@ -238,7 +266,7 @@ messageSchema.index(
     partialFilterExpression: {
       isSystemMessage: true,
     },
-  }
+  },
 );
 
 // ===============================
@@ -324,7 +352,7 @@ messageSchema.methods.editContent = async function (newContent) {
 // Publier un événement Kafka
 messageSchema.methods.publishKafkaEvent = async function (
   eventType,
-  additionalData = {}
+  additionalData = {},
 ) {
   try {
     // Vérifier si Kafka est disponible
@@ -362,7 +390,7 @@ messageSchema.methods.publishKafkaEvent = async function (
     });
 
     console.log(
-      `📤 Événement Kafka publié: ${eventType} pour message ${this._id}`
+      `📤 Événement Kafka publié: ${eventType} pour message ${this._id}`,
     );
     return true;
   } catch (error) {
@@ -391,7 +419,7 @@ messageSchema.methods.invalidateCache = async function () {
 
     // Si pas de client Redis disponible, ne pas faire d'erreur
     console.log(
-      `🗑️ Cache invalidé pour message ${this._id} (pas de client Redis)`
+      `🗑️ Cache invalidé pour message ${this._id} (pas de client Redis)`,
     );
     return true;
   } catch (error) {

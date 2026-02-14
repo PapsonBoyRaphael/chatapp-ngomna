@@ -115,6 +115,7 @@ class RemoveParticipant {
             participantId,
             participantName: participantInfo?.name,
             removedBy,
+            participants: conversation.participants,
           },
         );
         console.log(
@@ -147,6 +148,7 @@ class RemoveParticipant {
             : `${removedByInfo?.name || "Un admin"} a retiré ${
                 participantInfo?.name || participantId
               }`,
+          participants: [...conversation.participants, participantId],
           metadata: {
             participantId,
             participantName: participantInfo?.name,

@@ -5,7 +5,7 @@ const RedisManager = require("../redis/RedisManager");
  *
  * Stratégie :
  * - Stockage dans des Redis Hashes (HSET/HGETALL)
- * - Clé: user:profile:{userId} (ex: user:profile:570479H)
+ * - Clé: user-service:cache:users:{userId} (ex: user-service:cache:users:570479H)
  * - TTL par défaut: 7 jours
  * - Champs: id, nom, prenom, fullName, avatar, matricule, ministere, sexe, updatedAt
  *
@@ -17,7 +17,7 @@ const RedisManager = require("../redis/RedisManager");
  */
 class UserCache {
   constructor(options = {}) {
-    this.prefix = options.prefix || "users-service:datastore:users:";
+    this.prefix = options.prefix || "user-service:cache:users:";
     this.defaultTTL = options.defaultTTL || 7 * 24 * 3600; // 7 jours
     this.redis = null;
   }

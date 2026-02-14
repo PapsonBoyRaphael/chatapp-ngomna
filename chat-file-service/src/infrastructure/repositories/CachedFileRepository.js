@@ -46,7 +46,7 @@ class CachedFileRepository {
     try {
       const stream = await this.primaryStore.download(
         localFileName,
-        remoteFileName
+        remoteFileName,
       );
       // Cache existence après succès
       await this.cache.set(metadataKey, true, this.shortTTL);
@@ -72,12 +72,79 @@ class CachedFileRepository {
     }
   }
 
+  // ✅ AJOUTER findById (manquant)
+  async findById(fileId, useCache = true) {
+    if (!useCache) {
+      // Bypass cache si pas demandé
+      return await this.primaryStore.findById(fileId, false);
+    }
+
+    try {
+      // 1. Chercher dans le cache
+      const cacheKey = `${this.cachePrefix}${fileId}`;
+      const cachedFile = await this.cache.get(cacheKey);
+
+      if (cachedFile) {
+        console.log(`✅ Cache HIT: fichier ${fileId}`);
+        return cachedFile;
+      }
+
+      // 2. Chercher dans MongoDB
+      const file = await this.primaryStore.findById(fileId, false);
+
+      if (file) {
+        // 3. Mettre en cache
+        await this.cache.set(cacheKey, file, this.defaultTTL);
+        console.log(`💾 Cache SET: fichier ${fileId}`);
+      }
+
+      return file;
+    } catch (error) {
+      console.error("❌ Erreur findById (cached):", error);
+      throw error;
+    }
+  }
+
+  // ✅ AJOUTER deleteFile (manquant)
+  async deleteFile(fileId, softDelete = true) {
+    try {
+      const result = await this.primaryStore.deleteFile(fileId, softDelete);
+
+      // Invalider les caches liés
+      await this.invalidateFileCaches(fileId);
+
+      return result;
+    } catch (error) {
+      console.error("❌ Erreur deleteFile (cached):", error);
+      throw error;
+    }
+  }
+
+  // ✅ AJOUTER incrementDownloadCount (manquant)
+  async incrementDownloadCount(fileId, userId = null, metadata = {}) {
+    try {
+      const result = await this.primaryStore.incrementDownloadCount(
+        fileId,
+        userId,
+        metadata,
+      );
+
+      // Invalider le cache du fichier car son downloadCount a changé
+      await this.invalidateFileCaches(fileId);
+
+      return result;
+    } catch (error) {
+      console.error("❌ Erreur incrementDownloadCount (cached):", error);
+      throw error;
+    }
+  }
+
   // Mettre à jour les thumbnails avec invalidation
   async updateThumbnails(fileId, thumbnails) {
     try {
       const result = await this.primaryStore.updateThumbnails(
         fileId,
-        thumbnails
+        thumbnails,
       );
 
       // Invalider les caches liés au fichier
@@ -95,7 +162,7 @@ class CachedFileRepository {
     try {
       const result = await this.primaryStore.markThumbnailProcessingFailed(
         fileId,
-        error
+        error,
       );
 
       // Invalider les caches liés

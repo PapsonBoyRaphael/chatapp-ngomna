@@ -34,7 +34,7 @@ class OnlineUserManager {
 
     this.redisManager = RedisManager;
     await this.redisManager.connect();
-    this.redis = this.redisManager.getMainClient();
+    this.redis = this.redisManager.getCacheClient();
 
     await this.setupExpirationListener();
     this.isInitialized = true;

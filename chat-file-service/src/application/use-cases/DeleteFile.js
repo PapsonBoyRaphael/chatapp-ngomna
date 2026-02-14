@@ -66,19 +66,14 @@ class DeleteFile {
     }
 
     // Suppression logique (marquer comme supprimé) ou physique de la DB
-    file.status = "DELETED";
-    file.deletedAt = new Date();
-    file.deletedBy = userId;
-    file.updatedAt = new Date();
-
     // Sauvegarder les modifications OU supprimer complètement
     let result;
     if (physicalDelete) {
       // Suppression complète de la base de données
-      result = await this.fileRepository.delete(fileId);
+      result = await this.fileRepository.deleteFile(fileId, false); // false = hard delete
     } else {
       // Suppression logique (marqué comme supprimé)
-      result = await this.fileRepository.save(file);
+      result = await this.fileRepository.deleteFile(fileId, true); // true = soft delete (status: DELETED)
     }
 
     // ✅ PUBLIER DANS REDIS STREAMS chat:stream:events:files

@@ -1,19 +1,25 @@
 const axios = require("axios");
-const { UserCache } = require("../../../shared");
+const {
+  UserCache,
+  RedisManager,
+  UserStreamConsumer,
+} = require("../../../shared");
 
 /**
  * SmartCachePrewarmer - Système de pré-chauffage intelligent du cache utilisateur
  *
  * Stratégie:
- * - Charge TOUS les utilisateurs depuis auth-user-service/all
+ * - Utilise UserStreamConsumer pour lire les utilisateurs du stream user-service:stream:events:users
+ * - Fallback HTTP vers auth-user-service/all si le stream est vide/indisponible
  * - Traitement par batch pour éviter la surcharge
  * - Non-bloquant : s'exécute en arrière-plan
  *
  * Avantages:
  * - Pas de blocage au démarrage
- * - Cache hit rate élevé (80-95%)comment decompiler une apk sur linux
+ * - Cache hit rate élevé (80-95%)
  * - Réduction des appels HTTP au runtime
  * - Couverture complète de tous les utilisateurs
+ * - Réutilise UserStreamConsumer pour cohérence
  */
 class SmartCachePrewarmer {
   constructor(options = {}) {
@@ -25,6 +31,16 @@ class SmartCachePrewarmer {
     this.delayBetweenBatches = options.delayBetweenBatches || 1500; // 1.5s
     this.maxUsers = options.maxUsers || 10000;
     this.daysBack = options.daysBack || 7;
+    this.streamName =
+      options.streamName ||
+      process.env.USER_SERVICE_STREAM_USERS ||
+      "user-service:stream:events:users";
+    this.cachePrefix =
+      options.cachePrefix ||
+      process.env.CHAT_USERS_CACHE_PREFIX ||
+      "chat:cache:users:";
+    this.redisManager = RedisManager;
+    this.userStreamConsumer = options.userStreamConsumer || null;
     this.isRunning = false;
     this.stats = {
       totalProcessed: 0,
@@ -52,8 +68,20 @@ class SmartCachePrewarmer {
     );
 
     try {
-      // Étape 1: Récupérer TOUS les utilisateurs depuis auth-user-service
-      const allUsers = await this._getAllUsersFromAuthService();
+      // Étape 0: Initialiser le cache avec le préfixe attendu
+      UserCache.prefix = this.cachePrefix;
+      await UserCache.initialize();
+
+      // Étape 1: Récupérer TOUS les utilisateurs depuis le stream (via UserStreamConsumer)
+      let allUsers = await this._getAllUsersFromStream();
+
+      // Fallback HTTP si le stream est vide/indisponible
+      if (allUsers.length === 0) {
+        console.warn(
+          "⚠️ [SmartCachePrewarmer] Stream vide/indisponible, fallback HTTP",
+        );
+        allUsers = await this._getAllUsersFromAuthService();
+      }
 
       if (allUsers.length === 0) {
         console.log("⚠️ [SmartCachePrewarmer] Aucun utilisateur trouvé");
@@ -86,6 +114,171 @@ class SmartCachePrewarmer {
       return this.stats;
     } finally {
       this.isRunning = false;
+    }
+  }
+
+  /**
+   * Récupère TOUS les utilisateurs depuis user-service:stream:events:users
+   * Utilise UserStreamConsumer pour lire le stream
+   * @private
+   */
+  async _getAllUsersFromStream() {
+    try {
+      // Cas 1: UserStreamConsumer fourni en option (recommandé)
+      if (this.userStreamConsumer) {
+        console.log(
+          "✅ [SmartCachePrewarmer] Utilisation du UserStreamConsumer fourni",
+        );
+        return await this._readStreamViaConsumer();
+      }
+
+      // Cas 2: Créer une instance temporaire de UserStreamConsumer
+      console.log(
+        "ℹ️ [SmartCachePrewarmer] Création d'une instance UserStreamConsumer temporaire",
+      );
+      const tempConsumer = new UserStreamConsumer({
+        streamName: this.streamName,
+        consumerGroup: "smart-cache-prewarmer-group",
+        consumerName: `prewarmer-${process.pid}`,
+        cachePrefix: this.cachePrefix,
+      });
+
+      try {
+        await tempConsumer.initialize();
+        const users = await this._readStreamViaConsumer(tempConsumer);
+        return users;
+      } catch (error) {
+        console.warn(
+          "⚠️ [SmartCachePrewarmer] Erreur lecture via UserStreamConsumer:",
+          error.message,
+        );
+        // Fallback à lecture directe du stream
+        return await this._readStreamDirect();
+      }
+    } catch (error) {
+      console.error(
+        "❌ [SmartCachePrewarmer] Erreur récupération stream:",
+        error.message,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Lit le stream via une instance UserStreamConsumer
+   * @private
+   */
+  async _readStreamViaConsumer(consumer = null) {
+    try {
+      const streamClient =
+        consumer?.redis ||
+        this.userStreamConsumer?.redis ||
+        this.redisManager?.clients?.main;
+
+      if (!streamClient) {
+        console.warn(
+          "⚠️ [SmartCachePrewarmer] Redis non disponible pour lecture stream",
+        );
+        return [];
+      }
+
+      const entries = await streamClient.xRange(this.streamName, "-", "+");
+
+      if (!entries || entries.length === 0) {
+        return [];
+      }
+
+      const users = [];
+
+      for (const entry of entries) {
+        const fields = entry?.message || entry?.fields || entry?.[1];
+        const dataRaw = fields?.data;
+        if (!dataRaw) {
+          continue;
+        }
+
+        try {
+          const userData =
+            typeof dataRaw === "string" ? JSON.parse(dataRaw) : dataRaw;
+          if (userData && (userData.id || userData.matricule)) {
+            users.push(userData);
+          }
+        } catch (parseError) {
+          console.warn(
+            "⚠️ [SmartCachePrewarmer] Erreur parsing data stream:",
+            parseError.message,
+          );
+        }
+      }
+
+      console.log(
+        `✅ [SmartCachePrewarmer] ${users.length} utilisateurs récupérés via UserStreamConsumer`,
+      );
+
+      return users;
+    } catch (error) {
+      console.error(
+        "❌ [SmartCachePrewarmer] Erreur lecture via consumer:",
+        error.message,
+      );
+      return [];
+    }
+  }
+
+  /**
+   * Fallback: lit le stream directement sans UserStreamConsumer
+   * @private
+   */
+  async _readStreamDirect() {
+    try {
+      if (!this.redisManager || !this.redisManager.clients?.main) {
+        console.warn(
+          "⚠️ [SmartCachePrewarmer] Redis non disponible pour lecture directe",
+        );
+        return [];
+      }
+
+      const streamClient = this.redisManager.clients.main;
+      const entries = await streamClient.xRange(this.streamName, "-", "+");
+
+      if (!entries || entries.length === 0) {
+        return [];
+      }
+
+      const users = [];
+
+      for (const entry of entries) {
+        const fields = entry?.message || entry?.fields || entry?.[1];
+        const dataRaw = fields?.data;
+        if (!dataRaw) {
+          continue;
+        }
+
+        try {
+          const userData =
+            typeof dataRaw === "string" ? JSON.parse(dataRaw) : dataRaw;
+          if (userData && (userData.id || userData.matricule)) {
+            users.push(userData);
+          }
+        } catch (parseError) {
+          console.warn(
+            "⚠️ [SmartCachePrewarmer] Erreur parsing data:",
+            parseError.message,
+          );
+        }
+      }
+
+      console.log(
+        `✅ [SmartCachePrewarmer] ${users.length} utilisateurs récupérés via lecture directe`,
+      );
+
+      return users;
+    } catch (error) {
+      console.error(
+        "❌ [SmartCachePrewarmer] Erreur lecture directe:",
+        error.message,
+      );
+      return [];
     }
   }
 

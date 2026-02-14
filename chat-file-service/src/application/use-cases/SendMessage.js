@@ -116,7 +116,7 @@ class SendMessage {
             if (this.resilientService) {
               try {
                 await this.resilientService.addToStream(
-                  "stream:conversation:created",
+                  "chat:stream:events:conversation:created",
                   {
                     event: "conversation.created",
                     conversationId: conversation._id.toString(),
@@ -189,6 +189,22 @@ class SendMessage {
         participants: conversation.participants,
       });
 
+      // ✅ CALCULER totalRecipients SELON LE TYPE DE CONVERSATION
+      // Utiliser la valeur stockée si disponible, sinon recalculer
+      let totalRecipients = conversation.totalRecipients || 1; // Par défaut pour PRIVATE
+      if (!conversation.totalRecipients) {
+        if (
+          conversation.type === "GROUP" ||
+          conversation.type === "BROADCAST" ||
+          conversation.type === "CHANNEL"
+        ) {
+          // Pour GROUP/BROADCAST: tous les participants sauf l'expéditeur
+          totalRecipients = conversation.participants.filter(
+            (p) => String(p) !== String(senderId),
+          ).length;
+        }
+      }
+
       // ✅ CRÉER LE MESSAGE
       const message = {
         conversationId: conversation._id || conversation.id,
@@ -204,6 +220,12 @@ class SendMessage {
         content,
         type,
         status: "SENT",
+        // ✅ COMPTEURS POUR GROUPES ET BROADCASTS
+        totalRecipients,
+        deliveredCount: 0,
+        readCount: 0,
+        deliveredBy: [],
+        readBy: [],
         ...(fileId && { fileId }),
         ...(fileName && { fileName }),
         ...(fileUrl && { fileUrl }),

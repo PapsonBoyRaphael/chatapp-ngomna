@@ -92,6 +92,8 @@ class CreateGroup {
       };
     });
 
+    const totalRecipients = participants.filter((id) => id !== adminId).length;
+
     const conversationData = {
       _id: groupId,
       name,
@@ -104,6 +106,7 @@ class CreateGroup {
       isActive: true,
       unreadCounts,
       userMetadata,
+      totalRecipients,
       metadata: {
         autoCreated: true,
         createdFrom: "CreateGroup",

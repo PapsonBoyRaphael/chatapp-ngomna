@@ -3,11 +3,8 @@
  */
 
 // ✅ FACTORY - LE SEUL avec require("redis")
-const RedisFactory = require("./RedisFactory");
-const { RedisService, DEFAULT_CONFIG } = require("./RedisFactory");
 
 // Configuration (legacy - pour compatibilité)
-const redisConfig = require("./redisConfig");
 
 // ✅ MANAGER PRINCIPAL (SINGLETON INSTANCE)
 const RedisManager = require("./RedisManager");
@@ -33,12 +30,8 @@ const WorkerManager = require("./workers/WorkerManager");
 
 module.exports = {
   // ✅ FACTORY - Point d'entrée recommandé
-  RedisFactory,
-  RedisService,
-  DEFAULT_CONFIG,
 
   // Configuration legacy
-  redisConfig,
 
   // ✅ MANAGER PRINCIPAL (L'INSTANCE SINGLETON, pas la classe)
   RedisManager, // ✅ C'est déjà une instance (ligne 525 de RedisManager.js)

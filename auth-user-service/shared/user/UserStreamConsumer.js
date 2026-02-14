@@ -16,8 +16,8 @@ const UserCache = require("./UserCache");
  */
 class UserStreamConsumer {
   constructor(options = {}) {
-    this.streamName = options.streamName || "chat:stream:events:users";
-    this.consumerGroup = options.consumerGroup || "chat-service-group";
+    this.streamName = options.streamName || "user-service:stream:events:users";
+    this.consumerGroup = options.consumerGroup || "user-service-group";
     this.consumerName = options.consumerName || `consumer-${process.pid}`;
     this.pollInterval = options.pollInterval || 1000; // 1 seconde
     this.batchSize = options.batchSize || 10;
@@ -30,7 +30,7 @@ class UserStreamConsumer {
    * Initialise le consumer
    */
   async initialize() {
-    this.redis = RedisManager?.clients?.main;
+    this.redis = RedisManager?.clients?.stream;
 
     if (!this.redis) {
       console.warn("⚠️ [UserStreamConsumer] Redis non disponible");

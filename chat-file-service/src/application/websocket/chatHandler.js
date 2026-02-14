@@ -26,6 +26,11 @@ class ChatHandler {
     resilientMessageService = null,
     messageDeliveryService = null,
     userCacheService = null,
+    addParticipantUseCase = null,
+    removeParticipantUseCase = null,
+    leaveConversationUseCase = null,
+    deleteMessageUseCase = null,
+    deleteFileUseCase = null,
   ) {
     this.io = io;
     this.sendMessageUseCase = sendMessageUseCase;
@@ -45,6 +50,11 @@ class ChatHandler {
     this.markMessageReadUseCase = markMessageReadUseCase;
     this.messageDeliveryService = messageDeliveryService;
     this.userCacheService = userCacheService || new UserCacheService();
+    this.addParticipantUseCase = addParticipantUseCase;
+    this.removeParticipantUseCase = removeParticipantUseCase;
+    this.leaveConversationUseCase = leaveConversationUseCase;
+    this.deleteMessageUseCase = deleteMessageUseCase;
+    this.deleteFileUseCase = deleteFileUseCase;
 
     // ✅ LOG DE DEBUG
     console.log(
@@ -148,6 +158,15 @@ class ChatHandler {
 
         socket.on("ping", () => {
           socket.emit("pong");
+          // console.log("Ping reçu, Pong emit");
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+        });
+
+        socket.on("heartbeat", () => {
+          socket.emit("heartbeat_ack");
+          // console.log("Heartbeat reçu, heartbeat_ack émis");
           if (this.onlineUserManager && socket.userId) {
             this.onlineUserManager.updateLastActivity(socket.userId, socket);
           }
@@ -1223,6 +1242,465 @@ class ChatHandler {
           }
         });
 
+        // ========================================
+        // ✅ NOUVEAUX ÉVÉNEMENTS: Gestion participants, messages, fichiers
+        // ========================================
+
+        // ✅ AJOUTER UN OU PLUSIEURS PARTICIPANTS À UN GROUPE
+        socket.on("addParticipant", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("participant:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { conversationId, participantId } = data;
+            if (!conversationId || !participantId) {
+              return socket.emit("participant:error", {
+                error: "conversationId et participantId requis",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            if (!this.addParticipantUseCase) {
+              return socket.emit("participant:error", {
+                error: "Service non disponible",
+                code: "SERVICE_UNAVAILABLE",
+              });
+            }
+
+            // ✅ Supporter un ID unique ou un tableau d'IDs
+            const participantIds = Array.isArray(participantId)
+              ? participantId
+              : [participantId];
+
+            // Filtrer les valeurs vides
+            const validIds = participantIds
+              .map((id) => (typeof id === "string" ? id.trim() : String(id)))
+              .filter((id) => id.length > 0);
+
+            if (validIds.length === 0) {
+              return socket.emit("participant:error", {
+                error: "Aucun participantId valide fourni",
+                code: "INVALID_PARAMS",
+              });
+            }
+
+            const results = { added: [], failed: [] };
+
+            for (const pid of validIds) {
+              try {
+                await this.addParticipantUseCase.execute({
+                  conversationId,
+                  participantId: pid,
+                  addedBy: userId,
+                });
+                results.added.push(pid);
+              } catch (err) {
+                results.failed.push({ participantId: pid, error: err.message });
+                console.warn(
+                  `⚠️ Échec ajout participant ${pid}: ${err.message}`,
+                );
+              }
+            }
+
+            socket.emit("participant:added", {
+              success: results.added.length > 0,
+              conversationId,
+              participantIds: results.added,
+              failed: results.failed,
+              addedBy: userId,
+              timestamp: new Date().toISOString(),
+            });
+
+            // Notifier la room
+            if (results.added.length > 0) {
+              socket
+                .to(`conversation_${conversationId}`)
+                .emit("participant:added", {
+                  conversationId,
+                  participantIds: results.added,
+                  addedBy: userId,
+                  addedByMatricule: socket.matricule,
+                  timestamp: new Date().toISOString(),
+                });
+            }
+
+            console.log(
+              `✅ ${socket.matricule} a ajouté ${results.added.length}/${validIds.length} participant(s) à ${conversationId}`,
+            );
+          } catch (error) {
+            console.error("❌ Erreur addParticipant:", error);
+            socket.emit("participant:error", {
+              error: error.message,
+              code: "ADD_PARTICIPANT_FAILED",
+            });
+          }
+        });
+
+        // ✅ RETIRER UN OU PLUSIEURS PARTICIPANTS D'UN GROUPE
+        socket.on("removeParticipant", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("participant:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { conversationId, participantId } = data;
+            if (!conversationId || !participantId) {
+              return socket.emit("participant:error", {
+                error: "conversationId et participantId requis",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            if (!this.removeParticipantUseCase) {
+              return socket.emit("participant:error", {
+                error: "Service non disponible",
+                code: "SERVICE_UNAVAILABLE",
+              });
+            }
+
+            // ✅ Supporter un ID unique ou un tableau d'IDs
+            const participantIds = Array.isArray(participantId)
+              ? participantId
+              : [participantId];
+
+            // Filtrer les valeurs vides
+            const validIds = participantIds
+              .map((id) => (typeof id === "string" ? id.trim() : String(id)))
+              .filter((id) => id.length > 0);
+
+            if (validIds.length === 0) {
+              return socket.emit("participant:error", {
+                error: "Aucun participantId valide fourni",
+                code: "INVALID_PARAMS",
+              });
+            }
+
+            const results = { removed: [], failed: [] };
+
+            for (const pid of validIds) {
+              try {
+                await this.removeParticipantUseCase.execute({
+                  conversationId,
+                  participantId: pid,
+                  removedBy: userId,
+                });
+                results.removed.push(pid);
+              } catch (err) {
+                results.failed.push({ participantId: pid, error: err.message });
+                console.warn(
+                  `⚠️ Échec retrait participant ${pid}: ${err.message}`,
+                );
+              }
+            }
+
+            socket.emit("participant:removed", {
+              success: results.removed.length > 0,
+              conversationId,
+              participantIds: results.removed,
+              failed: results.failed,
+              removedBy: userId,
+              timestamp: new Date().toISOString(),
+            });
+
+            // Notifier la room
+            if (results.removed.length > 0) {
+              socket
+                .to(`conversation_${conversationId}`)
+                .emit("participant:removed", {
+                  conversationId,
+                  participantIds: results.removed,
+                  removedBy: userId,
+                  removedByMatricule: socket.matricule,
+                  timestamp: new Date().toISOString(),
+                });
+            }
+
+            console.log(
+              `✅ ${socket.matricule} a retiré ${results.removed.length}/${validIds.length} participant(s) de ${conversationId}`,
+            );
+          } catch (error) {
+            console.error("❌ Erreur removeParticipant:", error);
+            socket.emit("participant:error", {
+              error: error.message,
+              code: "REMOVE_PARTICIPANT_FAILED",
+            });
+          }
+        });
+
+        // ✅ QUITTER UNE CONVERSATION (USE-CASE COMPLET - DB + ROOM)
+        socket.on("leaveConversationPermanent", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("conversation:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { conversationId } = data;
+            if (!conversationId) {
+              return socket.emit("conversation:error", {
+                error: "conversationId requis",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            if (!this.leaveConversationUseCase) {
+              return socket.emit("conversation:error", {
+                error: "Service non disponible",
+                code: "SERVICE_UNAVAILABLE",
+              });
+            }
+
+            const result = await this.leaveConversationUseCase.execute({
+              conversationId,
+              userId,
+            });
+
+            // Quitter la room Socket.IO
+            socket.leave(`conversation_${conversationId}`);
+
+            // Retirer de la room Redis
+            if (this.roomManager) {
+              try {
+                await this.roomManager.removeUserFromRoom(
+                  `conv_${conversationId}`,
+                  userId,
+                );
+              } catch (err) {
+                console.warn("⚠️ Erreur retrait room Redis:", err.message);
+              }
+            }
+
+            socket.emit("conversation:left_permanent", {
+              success: true,
+              conversationId,
+              userId,
+              remainingParticipants: result.remainingParticipants,
+              timestamp: new Date().toISOString(),
+            });
+
+            // Notifier la room
+            socket
+              .to(`conversation_${conversationId}`)
+              .emit("participant:left", {
+                conversationId,
+                userId,
+                matricule: socket.matricule,
+                timestamp: new Date().toISOString(),
+              });
+
+            console.log(
+              `👋 ${socket.matricule} a quitté définitivement ${conversationId}`,
+            );
+          } catch (error) {
+            console.error("❌ Erreur leaveConversationPermanent:", error);
+            socket.emit("conversation:error", {
+              error: error.message,
+              code: "LEAVE_CONVERSATION_FAILED",
+            });
+          }
+        });
+
+        // ✅ MODIFIER LE CONTENU D'UN MESSAGE
+        socket.on("editMessage", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("message:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { messageId, newContent } = data;
+            if (!messageId || !newContent) {
+              return socket.emit("message:error", {
+                error: "messageId et newContent requis",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            if (!this.updateMessageContentUseCase) {
+              return socket.emit("message:error", {
+                error: "Service non disponible",
+                code: "SERVICE_UNAVAILABLE",
+              });
+            }
+
+            const result = await this.updateMessageContentUseCase.execute({
+              messageId,
+              newContent,
+              userId,
+            });
+
+            socket.emit("message:edited", {
+              success: true,
+              messageId,
+              newContent,
+              editedAt: result.editedAt || new Date().toISOString(),
+              timestamp: new Date().toISOString(),
+            });
+
+            // Notifier la room de la conversation
+            if (result.conversationId) {
+              socket
+                .to(`conversation_${result.conversationId}`)
+                .emit("message:edited", {
+                  messageId,
+                  conversationId: result.conversationId,
+                  newContent,
+                  editedBy: userId,
+                  editedByMatricule: socket.matricule,
+                  editedAt: result.editedAt || new Date().toISOString(),
+                  timestamp: new Date().toISOString(),
+                });
+            }
+
+            console.log(
+              `✏️ ${socket.matricule} a modifié le message ${messageId}`,
+            );
+          } catch (error) {
+            console.error("❌ Erreur editMessage:", error);
+            socket.emit("message:error", {
+              error: error.message,
+              code: "EDIT_MESSAGE_FAILED",
+            });
+          }
+        });
+
+        // ✅ SUPPRIMER UN MESSAGE
+        socket.on("deleteMessage", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("message:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { messageId, deleteType } = data;
+            if (!messageId) {
+              return socket.emit("message:error", {
+                error: "messageId requis",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            if (!this.deleteMessageUseCase) {
+              return socket.emit("message:error", {
+                error: "Service non disponible",
+                code: "SERVICE_UNAVAILABLE",
+              });
+            }
+
+            const result = await this.deleteMessageUseCase.execute({
+              messageId,
+              userId,
+              deleteType: deleteType || "FOR_ME",
+            });
+
+            socket.emit("message:deleted", {
+              success: true,
+              messageId,
+              deleteType: result.deleteType,
+              deletedAt: result.deletedAt,
+              message: result.message,
+              timestamp: new Date().toISOString(),
+            });
+
+            // Si supprimé pour tous, notifier la room
+            if (result.deleteType === "FOR_EVERYONE") {
+              if (data.conversationId) {
+                socket
+                  .to(`conversation_${data.conversationId}`)
+                  .emit("message:deleted", {
+                    messageId,
+                    conversationId: data.conversationId,
+                    deleteType: "FOR_EVERYONE",
+                    deletedBy: userId,
+                    deletedByMatricule: socket.matricule,
+                    timestamp: new Date().toISOString(),
+                  });
+              }
+            }
+
+            console.log(
+              `🗑️ ${socket.matricule} a supprimé le message ${messageId} (${result.deleteType})`,
+            );
+          } catch (error) {
+            console.error("❌ Erreur deleteMessage:", error);
+            socket.emit("message:error", {
+              error: error.message,
+              code: "DELETE_MESSAGE_FAILED",
+            });
+          }
+        });
+
+        // ✅ SUPPRIMER UN FICHIER
+        socket.on("deleteFile", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("file:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { fileId, physicalDelete } = data;
+            if (!fileId) {
+              return socket.emit("file:error", {
+                error: "fileId requis",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            if (!this.deleteFileUseCase) {
+              return socket.emit("file:error", {
+                error: "Service non disponible",
+                code: "SERVICE_UNAVAILABLE",
+              });
+            }
+
+            const result = await this.deleteFileUseCase.execute({
+              fileId,
+              userId,
+              physicalDelete: physicalDelete !== false,
+            });
+
+            socket.emit("file:deleted", {
+              success: true,
+              fileId: result.fileId,
+              deletedAt: result.deletedAt,
+              physicalDelete: result.physicalDelete,
+              message: result.message,
+              timestamp: new Date().toISOString(),
+            });
+
+            console.log(
+              `🗑️ ${socket.matricule} a supprimé le fichier ${fileId}`,
+            );
+          } catch (error) {
+            console.error("❌ Erreur deleteFile:", error);
+            socket.emit("file:error", {
+              error: error.message,
+              code: "DELETE_FILE_FAILED",
+            });
+          }
+        });
+
         // ✅ METTRE À JOUR automatiquement la présence lors des interactions
         const originalHandlers = {
           joinConversation: this.handleJoinConversation.bind(this),
@@ -1301,8 +1779,7 @@ class ChatHandler {
 
             userPayload = {
               ...fakeReq.user,
-              name: cachedUserInfo?.name || fakeReq.user.name,
-              fullName: cachedUserInfo?.name || fakeReq.user.fullName,
+              nom: cachedUserInfo?.nom || fakeReq.user.nom,
               avatar: cachedUserInfo?.avatar || fakeReq.user.avatar,
               matricule:
                 fakeReq.user.matricule ||
@@ -1371,6 +1848,9 @@ class ChatHandler {
       };
 
       socket.join(`user_${userIdString}`);
+
+      // ✅ SYNCHRONISATION REDIS EN ARRIÈRE-PLAN (non-bloquante)
+      this.syncUserWithRedis(userIdString, userData);
 
       let conversationIds = [];
 
@@ -1559,9 +2039,6 @@ class ChatHandler {
           `⚠️ [${new Date().toISOString()}] messageDeliveryService est NULL/UNDEFINED!`,
         );
       }
-
-      // ✅ SYNCHRONISATION REDIS EN ARRIÈRE-PLAN (non-bloquante)
-      setImmediate(() => this.syncUserWithRedis(userIdString, userData));
 
       const totalDuration = Date.now() - authStartTime;
       console.log(

@@ -1,20 +1,26 @@
-const { UserCache } = require("../../../shared");
+const { UserCache, RedisManager } = require("../../../shared");
 
 /**
  * SmartCachePrewarmer - Système de pré-chauffage intelligent du cache utilisateur
  *
  * ✅ VERSION AUTH-USER-SERVICE :
  * - Charge les utilisateurs directement depuis MongoDB (pas d'HTTP)
- * - Publie dans Redis UserCache au démarrage
+ * ✅ PUBLIE SUR LE STREAM: app:stream:events:users (pas stockage local)
+ * - ✅ RÉINITIALISE le stream avant publication (supprime les anciennes données)
  * - Découlé du chat-service → aucune dépendance
  *
  * Stratégie:
  * - Récupère tous les utilisateurs depuis MongoDB User collection
+ * - Vide complètement le stream avant de publier (XDEL tout)
  * - Traitement par batch pour éviter la surcharge
+ * - Publie chaque utilisateur sur le stream Redis pour propagation globale
  * - Non-bloquant : s'exécute en arrière-plan
  *
  * Avantages:
  * - Source de vérité = auth-user-service
+ * - ✅ Données publiées sur stream (event-driven)
+ * - ✅ Pas de doublons : stream réinitialisé à chaque démarrage
+ * - Autres services reçoivent les données sans polling
  * - Cache hit rate élevé au démarrage (80-95%)
  * - Réduction des appels HTTP au runtime
  * - Couverture complète de tous les utilisateurs sans appel externe
@@ -26,9 +32,11 @@ class SmartCachePrewarmer {
     this.delayBetweenBatches = options.delayBetweenBatches || 1500; // 1.5s
     this.maxUsers = options.maxUsers || 10000;
     this.isRunning = false;
+    // ✅ RedisManager est déjà une instance singleton
+    this.redisManager = RedisManager;
     this.stats = {
       totalProcessed: 0,
-      cached: 0,
+      published: 0,
       errors: 0,
       startTime: null,
       endTime: null,
@@ -55,12 +63,15 @@ class SmartCachePrewarmer {
     this.stats.startTime = Date.now();
 
     console.log(
-      "🔥 [SmartCachePrewarmer] Démarrage du pré-chauffage depuis MongoDB...",
+      "🔥 [SmartCachePrewarmer] Démarrage du pré-chauffage depuis PostgreSQL...",
     );
 
     try {
-      // Étape 1: Récupérer TOUS les utilisateurs depuis MongoDB
-      const allUsers = await this._getAllUsersFromMongoDB();
+      // Étape 0: Réinitialiser le stream (supprimer les anciennes données)
+      await this._reinitializeStream();
+
+      // Étape 1: Récupérer TOUS les utilisateurs depuis PostgreSQL
+      const allUsers = await this._getAllUsersFromPostgreSQL();
 
       if (allUsers.length === 0) {
         console.log("⚠️ [SmartCachePrewarmer] Aucun utilisateur trouvé");
@@ -82,7 +93,7 @@ class SmartCachePrewarmer {
 
       console.log("✅ [SmartCachePrewarmer] Pré-chauffage terminé:");
       console.log(`   - Traités: ${this.stats.totalProcessed}`);
-      console.log(`   - Mis en cache: ${this.stats.cached}`);
+      console.log(`   - ✅ Publiés sur stream: ${this.stats.published}`);
       console.log(`   - Erreurs: ${this.stats.errors}`);
       console.log(`   - Durée: ${duration}s`);
 
@@ -97,13 +108,63 @@ class SmartCachePrewarmer {
   }
 
   /**
+   * Réinitialise le stream en supprimant toutes les entrées
+   * @private
+   */
+  async _reinitializeStream() {
+    try {
+      if (!this.redisManager || !this.redisManager.streamManager) {
+        console.warn(
+          "⚠️ [SmartCachePrewarmer] StreamManager non disponible pour réinitialisation",
+        );
+        return;
+      }
+
+      const streamName = this.redisManager.streamManager.EVENT_STREAMS.USERS;
+      const streamClient = this.redisManager.clients?.main;
+
+      if (!streamClient) {
+        console.warn("⚠️ [SmartCachePrewarmer] Client Redis non disponible");
+        return;
+      }
+
+      // Récupérer tous les IDs du stream
+      const entries = await streamClient.xRange(streamName, "-", "+");
+
+      if (entries && entries.length > 0) {
+        console.log(
+          `🔄 [SmartCachePrewarmer] Suppression de ${entries.length} anciennes entrées du stream...`,
+        );
+
+        // Supprimer chaque entrée
+        for (const entry of entries) {
+          await streamClient.xDel(streamName, entry.id);
+        }
+
+        console.log(
+          `✅ [SmartCachePrewarmer] Stream réinitialisé (${entries.length} entrées supprimées)`,
+        );
+      } else {
+        console.log(
+          "ℹ️ [SmartCachePrewarmer] Stream vide, pas besoin de réinitialiser",
+        );
+      }
+    } catch (error) {
+      console.warn(
+        "⚠️ [SmartCachePrewarmer] Erreur réinitialisation stream:",
+        error.message,
+      );
+    }
+  }
+
+  /**
    * Récupère TOUS les utilisateurs depuis MongoDB
    * @private
    */
-  async _getAllUsersFromMongoDB() {
+  async _getAllUsersFromPostgreSQL() {
     try {
       console.log(
-        `🔍 [SmartCachePrewarmer] Récupération des utilisateurs depuis MongoDB`,
+        `🔍 [SmartCachePrewarmer] Récupération des utilisateurs depuis PostgreSQL`,
       );
 
       // Utiliser la méthode du repository pour récupérer tous les utilisateurs
@@ -131,7 +192,7 @@ class SmartCachePrewarmer {
   }
 
   /**
-   * Traite les utilisateurs par batch et les cache directement
+   * Traite les utilisateurs par batch et les publie sur le stream
    * @private
    */
   async _processBatchesDirectly(allUsers) {
@@ -145,7 +206,7 @@ class SmartCachePrewarmer {
         `📦 [SmartCachePrewarmer] Batch ${batchNumber}/${totalBatches} (${batch.length} users)`,
       );
 
-      await this._cacheBatch(batch);
+      await this._publishBatchToStream(batch);
 
       // Délai entre les batches pour ne pas surcharger
       if (i + this.batchSize < allUsers.length) {
@@ -155,13 +216,20 @@ class SmartCachePrewarmer {
   }
 
   /**
-   * Met directement en cache un batch d'utilisateurs
+   * Publie un batch d'utilisateurs sur le stream + cache Redis
    * @private
    */
-  async _cacheBatch(users) {
+  async _publishBatchToStream(users) {
     console.log(
-      `📊 [SmartCachePrewarmer] Mise en cache Redis de ${users.length} utilisateurs`,
+      `📊 [SmartCachePrewarmer] Publication sur stream + cache de ${users.length} utilisateurs`,
     );
+
+    // Vérifier que StreamManager est disponible
+    if (!this.redisManager || !this.redisManager.streamManager) {
+      console.error(`❌ [SmartCachePrewarmer] StreamManager non disponible`);
+      this.stats.errors += users.length;
+      return;
+    }
 
     for (const user of users) {
       try {
@@ -177,28 +245,62 @@ class SmartCachePrewarmer {
           continue;
         }
 
-        // ✅ Publier dans Redis UserCache
-        await UserCache.set({
-          id: userId,
-          nom: user.nom || null,
-          prenom: user.prenom || null,
+        // ✅ Construire les données d'utilisateur
+        const userData = {
+          id: String(userId),
+          nom: user.nom || "",
+          prenom: user.prenom || "",
           fullName: user.nom
             ? `${user.prenom || ""} ${user.nom}`.trim()
             : user.name || "Utilisateur inconnu",
-          avatar: user.avatar || user.profile_pic || null,
+          avatar: user.avatar || user.profile_pic || "",
           matricule: user.matricule || userId,
           ministere: user.ministere || "",
           sexe: user.sexe || "",
-        });
+          timestamp: Date.now(),
+        };
 
-        this.stats.cached++;
-        this.stats.totalProcessed++;
-      } catch (cacheError) {
+        // ✅ ÉTAPE 1: Stocker dans le cache Redis (UserCache cache)
+        try {
+          await UserCache.set(userData);
+          // console.log(
+          //   // `💾 [SmartCachePrewarmer] Utilisateur ${userId} stocké dans le cache`,
+          // );
+        } catch (cacheError) {
+          console.warn(
+            `⚠️ [SmartCachePrewarmer] Erreur stockage cache ${userId}:`,
+            cacheError.message,
+          );
+        }
+
+        // ✅ ÉTAPE 2: Publier sur le stream users
+        const streamId = await this.redisManager.streamManager.addToStream(
+          this.redisManager.streamManager.EVENT_STREAMS.USERS,
+          {
+            event: "user:profile:synced",
+            userId: userData.id,
+            data: JSON.stringify(userData),
+          },
+        );
+
+        if (streamId) {
+          this.stats.published++;
+          this.stats.totalProcessed++;
+          // console.log(
+          //   `✅ [SmartCachePrewarmer] Utilisateur ${userId} publié (streamId: ${streamId})`,
+          // );
+        } else {
+          this.stats.errors++;
+          console.warn(
+            `⚠️ [SmartCachePrewarmer] Échec publication utilisateur ${userId}`,
+          );
+        }
+      } catch (streamError) {
         console.error(
-          `❌ [SmartCachePrewarmer] Erreur cache user ${
+          `❌ [SmartCachePrewarmer] Erreur stream user ${
             user.matricule || user.id
           }:`,
-          cacheError.message,
+          streamError.message,
         );
         this.stats.errors++;
       }

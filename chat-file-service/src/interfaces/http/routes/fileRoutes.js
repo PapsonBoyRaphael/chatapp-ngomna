@@ -36,12 +36,12 @@ function createFileRoutes(fileController) {
   // **VALIDATION DES MÉTHODES DU CONTRÔLEUR**
   const requiredMethods = ["uploadFile", "getFile", "deleteFile", "getFiles"];
   const missingMethods = requiredMethods.filter(
-    (method) => typeof fileController[method] !== "function"
+    (method) => typeof fileController[method] !== "function",
   );
 
   if (missingMethods.length > 0) {
     console.error(
-      `❌ Méthodes manquantes dans FileController: ${missingMethods.join(", ")}`
+      `❌ Méthodes manquantes dans FileController: ${missingMethods.join(", ")}`,
     );
     router.all("*", (req, res) => {
       res.status(503).json({
@@ -86,10 +86,10 @@ function createFileRoutes(fileController) {
       }
     });
 
-    // GET /files/:fileId - Télécharger un fichier
+    // GET /files/:fileId - Récupérer les métadonnées d'un fichier
     router.get(
       "/:fileId",
-      validationMiddleware.validateMongoId("fileId"),
+      // ✅ PAS DE VALIDATION MONGO ID CAR FileModel._id EST UN STRING
       async (req, res) => {
         try {
           await fileController.getFile(req, res);
@@ -101,13 +101,13 @@ function createFileRoutes(fileController) {
             error: error.message,
           });
         }
-      }
+      },
     );
 
     // DELETE /files/:fileId - Supprimer un fichier
     router.delete(
       "/:fileId",
-      validationMiddleware.validateMongoId("fileId"),
+      // ✅ PAS DE VALIDATION MONGO ID CAR FileModel._id EST UN STRING
       async (req, res) => {
         try {
           await fileController.deleteFile(req, res);
@@ -119,7 +119,7 @@ function createFileRoutes(fileController) {
             error: error.message,
           });
         }
-      }
+      },
     );
 
     // GET /files/conversation/:conversationId - Fichiers d'une conversation
@@ -132,7 +132,7 @@ function createFileRoutes(fileController) {
         } catch (error) {
           console.error(
             "❌ Erreur route GET /files/conversation/:conversationId:",
-            error
+            error,
           );
           res.status(500).json({
             success: false,
@@ -141,13 +141,13 @@ function createFileRoutes(fileController) {
             error: error.message,
           });
         }
-      }
+      },
     );
 
     // ✅ AJOUTER CETTE ROUTE POUR LES THUMBNAILS
     router.get(
       "/:fileId/thumbnail",
-      validationMiddleware.validateMongoId("fileId"),
+      // ✅ PAS DE VALIDATION MONGO ID CAR FileModel._id EST UN STRING
       async (req, res) => {
         try {
           await fileController.getThumbnail(req, res);
@@ -159,13 +159,13 @@ function createFileRoutes(fileController) {
             error: error.message,
           });
         }
-      }
+      },
     );
 
     // GET /files/:fileId/download - Télécharger un fichier
     router.get(
       "/:fileId/download",
-      validationMiddleware.validateMongoId("fileId"),
+      // ✅ PAS DE VALIDATION MONGO ID CAR FileModel._id EST UN STRING
       async (req, res) => {
         try {
           await fileController.downloadFile(req, res);
@@ -177,7 +177,7 @@ function createFileRoutes(fileController) {
             error: error.message,
           });
         }
-      }
+      },
     );
 
     /**
@@ -200,7 +200,7 @@ function createFileRoutes(fileController) {
             error: error.message,
           });
         }
-      }
+      },
     );
 
     // (Optionnel) POST /files/download-multiple - Télécharger plusieurs fichiers en ZIP

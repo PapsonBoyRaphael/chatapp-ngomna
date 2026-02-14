@@ -3,7 +3,7 @@ const CONFIG = {
   SERVER_URL: "http://localhost:8003",
   RECONNECT_ATTEMPTS: 5,
   RECONNECT_DELAY: 2000,
-  PING_INTERVAL: 30000,
+  PING_INTERVAL: 30000, // Intervalle de 30 secondes pour les pings
 };
 
 // Variables globales
@@ -490,6 +490,197 @@ function setupSocketEvents() {
       code: data.code,
     });
     alert(`Erreur: ${data.error}`);
+  });
+
+  // ========================================
+  // ✅ ÉVÉNEMENTS GESTION PARTICIPANTS
+  // ========================================
+
+  socket.on("participant:added", (data) => {
+    const ids = data.participantIds || [data.participantId];
+    const failedCount = data.failed?.length || 0;
+    log(`✅ ${ids.length} participant(s) ajouté(s)`, "success", data);
+    addReceivedMessage("message", "➕ Participant(s) Ajouté(s)", data, {
+      conversationId: data.conversationId,
+      ajoutés: ids.join(", "),
+      échecs:
+        failedCount > 0
+          ? data.failed.map((f) => `${f.participantId}: ${f.error}`).join("; ")
+          : "Aucun",
+      addedBy: data.addedByMatricule || data.addedBy,
+    });
+    const statusDiv = document.getElementById("participantStatus");
+    if (statusDiv) {
+      let msg = `✅ ${ids.length} participant(s) ajouté(s) avec succès`;
+      if (failedCount > 0) {
+        msg += ` | ⚠️ ${failedCount} échec(s)`;
+      }
+      statusDiv.textContent = msg;
+      statusDiv.className =
+        failedCount > 0 ? "status warning" : "status success";
+    }
+  });
+
+  socket.on("participant:removed", (data) => {
+    const ids = data.participantIds || [data.participantId];
+    const failedCount = data.failed?.length || 0;
+    log(`✅ ${ids.length} participant(s) retiré(s)`, "success", data);
+    addReceivedMessage("message", "➖ Participant(s) Retiré(s)", data, {
+      conversationId: data.conversationId,
+      retirés: ids.join(", "),
+      échecs:
+        failedCount > 0
+          ? data.failed.map((f) => `${f.participantId}: ${f.error}`).join("; ")
+          : "Aucun",
+      removedBy: data.removedByMatricule || data.removedBy,
+    });
+    const statusDiv = document.getElementById("participantStatus");
+    if (statusDiv) {
+      let msg = `✅ ${ids.length} participant(s) retiré(s) avec succès`;
+      if (failedCount > 0) {
+        msg += ` | ⚠️ ${failedCount} échec(s)`;
+      }
+      statusDiv.textContent = msg;
+      statusDiv.className =
+        failedCount > 0 ? "status warning" : "status success";
+    }
+  });
+
+  socket.on("participant:left", (data) => {
+    log("👋 Participant a quitté", "info", data);
+    addReceivedMessage("message", "👋 Participant Parti", data, {
+      conversationId: data.conversationId,
+      userId: data.userId,
+      matricule: data.matricule,
+    });
+  });
+
+  socket.on("participant:error", (data) => {
+    log("❌ Erreur participant", "error", data);
+    addReceivedMessage("error", "❌ Erreur Participant", data, {
+      error: data.error,
+      code: data.code,
+    });
+    const statusDiv = document.getElementById("participantStatus");
+    if (statusDiv) {
+      statusDiv.textContent = `❌ ${data.error}`;
+      statusDiv.className = "status error";
+    }
+  });
+
+  // ========================================
+  // ✅ ÉVÉNEMENTS QUITTER CONVERSATION
+  // ========================================
+
+  socket.on("conversation:left_permanent", (data) => {
+    log("🚪 Conversation quittée définitivement", "success", data);
+    addReceivedMessage("message", "🚪 Conversation Quittée", data, {
+      conversationId: data.conversationId,
+      remainingParticipants: data.remainingParticipants,
+    });
+    const statusDiv = document.getElementById("leaveStatus");
+    if (statusDiv) {
+      statusDiv.textContent = `✅ Vous avez quitté la conversation ${data.conversationId}. ${data.remainingParticipants} participants restants.`;
+      statusDiv.className = "status success";
+    }
+  });
+
+  // ========================================
+  // ✅ ÉVÉNEMENTS ÉDITION MESSAGE
+  // ========================================
+
+  socket.on("message:edited", (data) => {
+    log("✏️ Message modifié", "success", data);
+    addReceivedMessage("message", "✏️ Message Modifié", data, {
+      messageId: data.messageId,
+      newContent: data.newContent,
+      editedBy: data.editedByMatricule || data.editedBy || "Vous",
+      editedAt: data.editedAt,
+    });
+    const statusDiv = document.getElementById("editMessageStatus");
+    if (statusDiv) {
+      statusDiv.textContent = `✅ Message ${data.messageId} modifié avec succès`;
+      statusDiv.className = "status success";
+    }
+  });
+
+  // ========================================
+  // ✅ ÉVÉNEMENTS SUPPRESSION MESSAGE
+  // ========================================
+
+  socket.on("message:deleted", (data) => {
+    log("🗑️ Message supprimé", "success", data);
+    addReceivedMessage("message", "🗑️ Message Supprimé", data, {
+      messageId: data.messageId,
+      deleteType: data.deleteType,
+      deletedBy: data.deletedByMatricule || data.deletedBy || "Vous",
+      message: data.message,
+    });
+    const statusDiv = document.getElementById("deleteMessageStatus");
+    if (statusDiv) {
+      statusDiv.textContent = `✅ ${data.message || "Message supprimé"}`;
+      statusDiv.className = "status success";
+    }
+  });
+
+  socket.on("message:error", (data) => {
+    log("❌ Erreur message", "error", data);
+    addReceivedMessage("error", "❌ Erreur Message", data, {
+      error: data.error,
+      code: data.code,
+    });
+    // Mettre à jour les status divs concernés
+    ["editMessageStatus", "deleteMessageStatus"].forEach((id) => {
+      const statusDiv = document.getElementById(id);
+      if (statusDiv && statusDiv.textContent === "") {
+        statusDiv.textContent = `❌ ${data.error}`;
+        statusDiv.className = "status error";
+      }
+    });
+  });
+
+  // ========================================
+  // ✅ ÉVÉNEMENTS SUPPRESSION FICHIER
+  // ========================================
+
+  socket.on("file:deleted", (data) => {
+    log("🗑️ Fichier supprimé", "success", data);
+    addReceivedMessage("message", "🗑️ Fichier Supprimé", data, {
+      fileId: data.fileId,
+      physicalDelete: data.physicalDelete,
+      message: data.message,
+    });
+    const statusDiv = document.getElementById("deleteFileStatus");
+    if (statusDiv) {
+      statusDiv.textContent = `✅ ${data.message || "Fichier supprimé"}`;
+      statusDiv.className = "status success";
+    }
+  });
+
+  socket.on("file:error", (data) => {
+    log("❌ Erreur fichier", "error", data);
+    addReceivedMessage("error", "❌ Erreur Fichier", data, {
+      error: data.error,
+      code: data.code,
+    });
+    const statusDiv = document.getElementById("deleteFileStatus");
+    if (statusDiv) {
+      statusDiv.textContent = `❌ ${data.error}`;
+      statusDiv.className = "status error";
+    }
+  });
+
+  socket.on("conversation:error", (data) => {
+    log("❌ Erreur conversation", "error", data);
+    addReceivedMessage("error", "❌ Erreur Conversation", data, {
+      error: data.error,
+      code: data.code,
+    });
+    const statusDiv = document.getElementById("leaveStatus");
+    if (statusDiv) {
+      statusDiv.textContent = `❌ ${data.error}`;
+      statusDiv.className = "status error";
+    }
   });
 
   // ✅ ÉVÉNEMENTS CONVERSATIONS CHARGÉES
@@ -1719,7 +1910,7 @@ async function downloadFile(fileId) {
     //   Authorization: `Bearer ${token}`,
     // };
 
-    const res = await fetch(`/files/${fileId}`, {
+    const res = await fetch(`/files/${fileId}/download`, {
       method: "GET",
       headers: headers,
     });
@@ -1730,7 +1921,8 @@ async function downloadFile(fileId) {
     }
 
     if (!res.ok) {
-      throw new Error(`Erreur HTTP: ${res.status}`);
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.message || `Erreur HTTP: ${res.status}`);
     }
 
     // ✅ DÉCLENCHER LE TÉLÉCHARGEMENT
@@ -1746,7 +1938,7 @@ async function downloadFile(fileId) {
 
     log(`✅ Fichier ${fileId} téléchargé`, "success");
   } catch (err) {
-    log(`❌ Erreur téléchargement fichier ${fileId}`, "error", err);
+    log(`❌ Erreur téléchargement fichier ${fileId}: ${err.message}`, "error");
   }
 }
 
@@ -2074,6 +2266,348 @@ function getSenderName(lastMessage, userMetadata) {
 }
 
 // ✅ ÉVÉNEMENTS CONVERSATIONS DÉJÀ DÉFINIS DANS setupSocketEvents()
+
+// ========================================
+// ✅ FONCTIONS GESTION DES PARTICIPANTS
+// ========================================
+
+function addParticipant() {
+  if (!socket || !socket.connected || !isAuthenticated) {
+    log("❌ Socket non connecté ou non authentifié", "error");
+    return;
+  }
+
+  const conversationId = document
+    .getElementById("participantConversationId")
+    ?.value.trim();
+  const rawInput = document.getElementById("participantUserId")?.value.trim();
+
+  if (!conversationId) {
+    log("❌ ID conversation requis", "error");
+    updateStatus("participantStatus", "❌ ID conversation requis", "error");
+    return;
+  }
+
+  if (!rawInput) {
+    log("❌ ID participant(s) requis", "error");
+    updateStatus("participantStatus", "❌ ID participant(s) requis", "error");
+    return;
+  }
+
+  // ✅ Supporter un ID unique ou plusieurs séparés par virgule
+  const ids = rawInput
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+  const participantId = ids.length === 1 ? ids[0] : ids;
+
+  const data = { conversationId, participantId };
+  log(`➕ Ajout de ${ids.length} participant(s)...`, "info", data);
+  updateStatus(
+    "participantStatus",
+    `⏳ Ajout de ${ids.length} participant(s) en cours...`,
+    "info",
+  );
+  socket.emit("addParticipant", data);
+}
+
+function removeParticipant() {
+  if (!socket || !socket.connected || !isAuthenticated) {
+    log("❌ Socket non connecté ou non authentifié", "error");
+    return;
+  }
+
+  const conversationId = document
+    .getElementById("participantConversationId")
+    ?.value.trim();
+  const rawInput = document.getElementById("participantUserId")?.value.trim();
+
+  if (!conversationId) {
+    log("❌ ID conversation requis", "error");
+    updateStatus("participantStatus", "❌ ID conversation requis", "error");
+    return;
+  }
+
+  if (!rawInput) {
+    log("❌ ID participant(s) requis", "error");
+    updateStatus("participantStatus", "❌ ID participant(s) requis", "error");
+    return;
+  }
+
+  // ✅ Supporter un ID unique ou plusieurs séparés par virgule
+  const ids = rawInput
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+  const participantId = ids.length === 1 ? ids[0] : ids;
+
+  const label = ids.length === 1 ? ids[0] : `${ids.length} participants`;
+  if (!confirm(`Êtes-vous sûr de vouloir retirer ${label} ?`)) {
+    return;
+  }
+
+  const data = { conversationId, participantId };
+  log(`➖ Retrait de ${ids.length} participant(s)...`, "info", data);
+  updateStatus(
+    "participantStatus",
+    `⏳ Retrait de ${ids.length} participant(s) en cours...`,
+    "info",
+  );
+  socket.emit("removeParticipant", data);
+}
+
+// ========================================
+// ✅ FONCTION QUITTER CONVERSATION DÉFINITIVEMENT
+// ========================================
+
+function leaveConversationPermanent() {
+  if (!socket || !socket.connected || !isAuthenticated) {
+    log("❌ Socket non connecté ou non authentifié", "error");
+    return;
+  }
+
+  const conversationId = document
+    .getElementById("leaveConversationId")
+    ?.value.trim();
+
+  if (!conversationId) {
+    log("❌ ID conversation requis", "error");
+    updateStatus("leaveStatus", "❌ ID conversation requis", "error");
+    return;
+  }
+
+  if (
+    !confirm(
+      `⚠️ Êtes-vous sûr de vouloir quitter définitivement la conversation ${conversationId} ? Cette action est irréversible !`,
+    )
+  ) {
+    return;
+  }
+
+  const data = { conversationId };
+  log("🚪 Quitter conversation définitivement...", "info", data);
+  updateStatus("leaveStatus", "⏳ Sortie en cours...", "info");
+  socket.emit("leaveConversationPermanent", data);
+}
+
+// ========================================
+// ✅ FONCTION MODIFIER UN MESSAGE
+// ========================================
+
+function editMessage() {
+  if (!socket || !socket.connected || !isAuthenticated) {
+    log("❌ Socket non connecté ou non authentifié", "error");
+    return;
+  }
+
+  const messageId = document.getElementById("editMessageId")?.value.trim();
+  const newContent = document
+    .getElementById("editMessageContent")
+    ?.value.trim();
+
+  if (!messageId) {
+    log("❌ ID message requis", "error");
+    updateStatus("editMessageStatus", "❌ ID message requis", "error");
+    return;
+  }
+
+  if (!newContent) {
+    log("❌ Nouveau contenu requis", "error");
+    updateStatus("editMessageStatus", "❌ Nouveau contenu requis", "error");
+    return;
+  }
+
+  const data = { messageId, newContent };
+  log("✏️ Modification du message...", "info", data);
+  updateStatus("editMessageStatus", "⏳ Modification en cours...", "info");
+  socket.emit("editMessage", data);
+}
+
+function fillEditMessageId() {
+  const lastMessageId = getLastMessageId();
+  if (lastMessageId) {
+    document.getElementById("editMessageId").value = lastMessageId;
+    log(`🔍 ID message rempli: ${lastMessageId}`, "info");
+  }
+}
+
+// ========================================
+// ✅ FONCTION SUPPRIMER UN MESSAGE
+// ========================================
+
+function deleteMessageAction() {
+  if (!socket || !socket.connected || !isAuthenticated) {
+    log("❌ Socket non connecté ou non authentifié", "error");
+    return;
+  }
+
+  const messageId = document.getElementById("deleteMessageId")?.value.trim();
+  const deleteType = document.getElementById("deleteType")?.value || "FOR_ME";
+  const conversationId = document
+    .getElementById("deleteMessageConversationId")
+    ?.value.trim();
+
+  if (!messageId) {
+    log("❌ ID message requis", "error");
+    updateStatus("deleteMessageStatus", "❌ ID message requis", "error");
+    return;
+  }
+
+  if (deleteType === "FOR_EVERYONE" && !conversationId) {
+    log("❌ ID conversation requis pour supprimer pour tout le monde", "error");
+    updateStatus(
+      "deleteMessageStatus",
+      "❌ ID conversation requis pour FOR_EVERYONE",
+      "error",
+    );
+    return;
+  }
+
+  const confirmMsg =
+    deleteType === "FOR_EVERYONE"
+      ? "⚠️ Supprimer ce message pour TOUT LE MONDE ? (irréversible)"
+      : "Supprimer ce message pour vous uniquement ?";
+
+  if (!confirm(confirmMsg)) {
+    return;
+  }
+
+  const data = { messageId, deleteType };
+  if (conversationId) {
+    data.conversationId = conversationId;
+  }
+
+  log(`🗑️ Suppression message (${deleteType})...`, "info", data);
+  updateStatus("deleteMessageStatus", "⏳ Suppression en cours...", "info");
+  socket.emit("deleteMessage", data);
+}
+
+function fillDeleteMessageId() {
+  const lastMessageId = getLastMessageId();
+  if (lastMessageId) {
+    document.getElementById("deleteMessageId").value = lastMessageId;
+    log(`🔍 ID message rempli: ${lastMessageId}`, "info");
+  }
+}
+
+// ========================================
+// ✅ FONCTION SUPPRIMER UN FICHIER (VIA WEBSOCKET)
+// ========================================
+
+function deleteFileAction() {
+  if (!socket || !socket.connected || !isAuthenticated) {
+    log("❌ Socket non connecté ou non authentifié", "error");
+    return;
+  }
+
+  const fileId = document.getElementById("deleteFileId")?.value.trim();
+  const physicalDelete =
+    document.getElementById("physicalDelete")?.checked !== false;
+
+  if (!fileId) {
+    log("❌ ID fichier requis", "error");
+    updateStatus("deleteFileStatus", "❌ ID fichier requis", "error");
+    return;
+  }
+
+  if (!confirm("⚠️ Êtes-vous sûr de vouloir supprimer ce fichier ?")) {
+    return;
+  }
+
+  const data = { fileId, physicalDelete };
+  log("🗑️ Suppression fichier...", "info", data);
+  updateStatus("deleteFileStatus", "⏳ Suppression en cours...", "info");
+  socket.emit("deleteFile", data);
+}
+
+// ========================================
+// ✅ FONCTION TÉLÉCHARGER UN FICHIER
+// ========================================
+
+async function downloadFileById() {
+  const fileId = document.getElementById("downloadFileId")?.value.trim();
+  const statusDiv = document.getElementById("downloadFileStatus");
+
+  if (!fileId) {
+    log("❌ ID fichier requis", "error");
+    if (statusDiv) {
+      statusDiv.textContent = "❌ ID fichier requis";
+      statusDiv.className = "status error";
+    }
+    return;
+  }
+
+  try {
+    if (statusDiv) {
+      statusDiv.textContent = "⏳ Téléchargement en cours...";
+      statusDiv.className = "status info";
+    }
+
+    log(`📥 Téléchargement du fichier ${fileId}...`, "info");
+
+    const res = await fetch(`/files/${fileId}/download`);
+
+    if (!res.ok) {
+      // ✅ RÉCUPÉRER LE MESSAGE D'ERREUR DU SERVEUR
+      let errorMessage = `Erreur HTTP: ${res.status} ${res.statusText}`;
+      try {
+        const errorData = await res.json();
+        if (errorData.message) {
+          errorMessage = errorData.message;
+        }
+      } catch (e) {
+        // Si pas de JSON, garder le message par défaut
+      }
+      throw new Error(errorMessage);
+    }
+
+    // Récupérer le nom du fichier depuis les headers
+    const contentDisposition = res.headers.get("content-disposition");
+    let fileName = `file_${fileId}`;
+    if (contentDisposition) {
+      const match = contentDisposition.match(
+        /filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/,
+      );
+      if (match && match[1]) {
+        fileName = match[1].replace(/['"]/g, "");
+      }
+    }
+
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+
+    if (statusDiv) {
+      statusDiv.textContent = `✅ Fichier "${fileName}" téléchargé avec succès`;
+      statusDiv.className = "status success";
+    }
+    log(`✅ Fichier ${fileId} téléchargé: ${fileName}`, "success");
+  } catch (err) {
+    if (statusDiv) {
+      statusDiv.textContent = `❌ Erreur: ${err.message}`;
+      statusDiv.className = "status error";
+    }
+    log(`❌ Erreur téléchargement fichier ${fileId}: ${err.message}`, "error");
+  }
+}
+
+// ========================================
+// ✅ FONCTION UTILITAIRE POUR METTRE À JOUR LES STATUS
+// ========================================
+
+function updateStatus(elementId, message, type) {
+  const statusDiv = document.getElementById(elementId);
+  if (statusDiv) {
+    statusDiv.textContent = message;
+    statusDiv.className = `status ${type}`;
+  }
+}
 
 async function deleteFile(fileId) {
   if (!confirm("Êtes-vous sûr de vouloir supprimer ce fichier ?")) {

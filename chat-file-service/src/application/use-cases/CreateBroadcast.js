@@ -93,6 +93,10 @@ class CreateBroadcast {
       };
     });
 
+    const totalRecipients = participants.filter(
+      (id) => id !== adminIds[0],
+    ).length;
+
     const conversationData = {
       _id: broadcastId,
       name,
@@ -105,6 +109,7 @@ class CreateBroadcast {
       isActive: true,
       unreadCounts,
       userMetadata,
+      totalRecipients,
       metadata: {
         autoCreated: true,
         createdFrom: "CreateBroadcast",
@@ -182,19 +187,6 @@ class CreateBroadcast {
         );
         // Ne pas bloquer la création si la notification échoue
       }
-    }
-
-    if (this.kafkaProducer) {
-      await this.kafkaProducer.publishMessage({
-        eventType: "BROADCAST_CREATED",
-        conversationId: String(savedConversation._id),
-        createdBy: adminIds[0],
-        participants,
-        name,
-        type: "BROADCAST",
-        timestamp: new Date().toISOString(),
-        source: "CreateBroadcast-UseCase",
-      });
     }
 
     return savedConversation;

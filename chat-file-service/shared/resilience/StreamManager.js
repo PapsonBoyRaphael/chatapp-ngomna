@@ -151,10 +151,7 @@ class StreamManager {
       }
 
       // ✅ VÉRIFIER QUE LES CHAMPS CRITIQUES NE SONT PAS VIDES
-      if (
-        normalizedFields.data === "" ||
-        normalizedFields.data === "undefined"
-      ) {
+      if (normalizedFields === "" || normalizedFields === "undefined") {
         console.warn(
           `⚠️ ATTENTION: Champ 'data' vide ou undefined dans ${streamName}`,
           { fields: Object.keys(fields) },

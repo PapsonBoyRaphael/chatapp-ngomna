@@ -1609,7 +1609,7 @@ class ResilientMessageService {
         "chat:cache:user_sockets:*",
 
         // 4. Messages en attente et delivery
-        "pending:messages:*",
+        "chat:stream:pending:messages:*",
         "pending:*",
         "delivery:*",
 

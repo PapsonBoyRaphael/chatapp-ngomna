@@ -863,7 +863,7 @@ class ResilientMessageService {
         messageId: savedMessage._id?.toString() || savedMessage.id,
         conversationId: conversationId || "",
         senderId: senderId || "",
-        receiverId: receiverId || "",
+        receiverId: receiverId || [],
         content: (savedMessage.content || "").substring(0, 500),
         type: savedMessage.type || "TEXT",
         event: options.event || "NEW_MESSAGE",
@@ -877,6 +877,7 @@ class ResilientMessageService {
 
       // ✅ DÉTERMINER LE STREAM DE DESTINATION
       let streamName = this.STREAMS.MESSAGES;
+      let streamNotify = null;
       let streamDescription = "DÉFAUT";
 
       // Cas 1 : Message privé (1→1)
@@ -887,6 +888,7 @@ class ResilientMessageService {
         receiverId !== "undefined"
       ) {
         streamName = this.MESSAGE_STREAMS.PRIVATE;
+        streamNotify = this.EVENT_STREAMS.NOTIFICATIONS;
         streamDescription = "PRIVÉ";
         this.metrics.privateMessagesPublished++;
       }
@@ -897,6 +899,7 @@ class ResilientMessageService {
         conversationId !== ""
       ) {
         streamName = this.MESSAGE_STREAMS.GROUP;
+        streamNotify = this.EVENT_STREAMS.NOTIFICATIONS;
         streamDescription = "GROUPE";
         this.metrics.groupMessagesPublished++;
       }
@@ -909,6 +912,9 @@ class ResilientMessageService {
       });
 
       const streamId = await this.addToStream(streamName, streamData);
+      if (streamNotify) {
+        await this.addToStream(streamNotify, streamData);
+      }
 
       console.log(`✅ Message publié: ${streamId}`);
       return streamId;
@@ -962,10 +968,27 @@ class ResilientMessageService {
     try {
       const userIdStr = userId.toString();
 
+      // ✅ RÉCUPÉRER LE MESSAGE POUR EXTRAIRE conversationId
+      let conversationId = null;
+      try {
+        if (this.mongoRepository && messageId) {
+          const message = await this.mongoRepository.findById(messageId);
+          if (message) {
+            conversationId = message.conversationId;
+          }
+        }
+      } catch (msgErr) {
+        console.warn(
+          `⚠️ Impossible de récupérer la conversation du message ${messageId}:`,
+          msgErr.message,
+        );
+      }
+
       console.log(`📋 [publishMessageStatus] DÉBUT:`, {
         messageId: messageId?.toString(),
         userId: userIdStr,
         status,
+        conversationId: conversationId?.toString(),
         timestamp: timestamp?.toISOString(),
         participantsCount: conversationParticipants?.length || 0,
         hasContent: !!messageContent,
@@ -1025,6 +1048,7 @@ class ResilientMessageService {
       const eventData = {
         messageId: messageId.toString(),
         userId: userIdStr,
+        conversationId: conversationId ? conversationId.toString() : undefined,
         status: status,
         timestamp: (timestamp || new Date()).toISOString(),
         participants: conversationParticipants
@@ -1092,8 +1116,8 @@ class ResilientMessageService {
           `⏳ [OFFLINE] Utilisateur ${userIdStr} déconnecté → mise en attente pour ${streamType}`,
         );
 
-        // ✅ AJOUTER EN FILE D'ATTENTE DE MISE EN ATTENTE (pending:messages:userId:streamType)
-        const pendingKey = `pending:messages:${userIdStr}:${streamType}`;
+        // ✅ AJOUTER EN FILE D'ATTENTE DE MISE EN ATTENTE (chat:stream:pending:messages:userId:streamType)
+        const pendingKey = `chat:stream:pending:messages:${userIdStr}:${streamType}`;
         console.log(`📤 Ajout à pending queue: ${pendingKey}`, { eventData });
 
         try {
@@ -1456,7 +1480,7 @@ class ResilientMessageService {
           `⏳ [BULK-OFFLINE] Utilisateur ${userIdStr} déconnecté → mise en attente pour ${streamType}`,
         );
 
-        const pendingKey = `pending:messages:${userIdStr}:${streamType}`;
+        const pendingKey = `chat:cache:pending:messages:${userIdStr}:${streamType}`;
         console.log(`📥 Ajout à queue de mise en attente: ${pendingKey}`);
 
         try {
@@ -1639,10 +1663,16 @@ class ResilientMessageService {
         fields.participantId = conversationData.participantId;
         fields.participantName = conversationData.participantName;
         fields.addedBy = conversationData.addedBy;
+        fields.participants = JSON.stringify(
+          conversationData.participants || [],
+        );
       } else if (eventType === "PARTICIPANT_REMOVED") {
         fields.participantId = conversationData.participantId;
         fields.participantName = conversationData.participantName;
         fields.removedBy = conversationData.removedBy;
+        fields.participants = JSON.stringify(
+          conversationData.participants || [],
+        );
       } else if (eventType === "CONVERSATION_DELETED") {
         fields.deletedBy = conversationData.deletedBy;
       }
@@ -2191,8 +2221,8 @@ class ResilientMessageService {
         "chat:cache:user_sockets:*",
 
         // 4. Messages en attente et delivery
-        "pending:messages:*",
-        "pending:*",
+        "chat:stream:pending:messages:*",
+        "chat:stream:pending:*",
         "delivery:*",
 
         // 5. Résilience et fallback
@@ -2209,7 +2239,7 @@ class ResilientMessageService {
         "chat:cache:*",
         "conversation:*",
         "conversations:*",
-        "unread:*",
+        "chat:cache:unread:*",
         "last_messages:*",
         "messages:*",
 
@@ -2449,7 +2479,11 @@ class ResilientMessageService {
         "chat:cache:user_sockets:*",
         "chat:cache:user_sockets_set:*",
       ],
-      messages: ["pending:messages:*", "messages:*", "last_messages:*"],
+      messages: [
+        "chat:stream:pending:messages:*",
+        "messages:*",
+        "last_messages:*",
+      ],
       cache: ["chat:cache:*", "conversation:*", "conversations:*"],
       rooms: [
         "chat:cache:rooms:*",
