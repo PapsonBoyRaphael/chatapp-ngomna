@@ -21,7 +21,7 @@ class UserStreamConsumer {
     this.consumerName = options.consumerName || `consumer-${process.pid}`;
     this.pollInterval = options.pollInterval || 1000; // 1 seconde
     this.batchSize = options.batchSize || 10;
-    this.cachePrefix = options.cachePrefix || "chat:cache:datastore:users:";
+    this.cachePrefix = options.cachePrefix || "user-service:cache:users:";
     this.redis = null;
     this.isRunning = false;
     this.pollTimer = null;
@@ -31,7 +31,7 @@ class UserStreamConsumer {
    * Initialise le consumer
    */
   async initialize() {
-    this.redis = RedisManager?.clients?.main;
+    this.redis = RedisManager?.clients?.stream;
 
     if (!this.redis) {
       console.warn("⚠️ [UserStreamConsumer] Redis non disponible");

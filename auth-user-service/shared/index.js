@@ -14,10 +14,9 @@ const user = require("./user");
 
 module.exports = {
   // Redis exports
-  RedisFactory: redis.RedisFactory,
-  RedisService: redis.RedisService,
+
   RedisManager: redis.RedisManager,
-  redisConfig: redis.redisConfig,
+
   DEFAULT_CONFIG: redis.DEFAULT_CONFIG,
 
   // ✅ MANAGERS REDIS

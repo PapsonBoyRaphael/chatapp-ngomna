@@ -37,6 +37,13 @@ class AddParticipant {
       throw new Error("Seul un membre peut ajouter des participants");
     }
 
+    // Vérifier les permissions d'invitation (si invitations désactivées)
+    const allowInvites = conversation.settings?.allowInvites !== false;
+    const isAdmin = conversation.createdBy === addedBy;
+    if (!allowInvites && !isAdmin) {
+      throw new Error("Seul l'admin peut ajouter des participants");
+    }
+
     // Vérifier que le participant n'est pas déjà membre
     if (conversation.participants.includes(participantId)) {
       throw new Error("Participant déjà membre du groupe");
@@ -121,6 +128,8 @@ class AddParticipant {
             participantId,
             participantName: participantInfo?.name,
             addedBy,
+            userMetadata: conversation.userMetadata,
+            participants: conversation.participants,
           },
         );
         console.log(
@@ -151,6 +160,7 @@ class AddParticipant {
           content: `${addedByInfo?.name || "Un membre"} a ajouté ${
             participantInfo?.name || participantId
           }`,
+          participants: conversation.participants,
           metadata: {
             participantId,
             participantName: participantInfo?.name,

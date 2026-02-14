@@ -488,9 +488,24 @@ class FileController {
       const processingTime = Date.now() - startTime;
       console.error("❌ Erreur téléchargement fichier:", error);
 
-      res.status(500).json({
+      // ✅ DÉTERMINER LE BON STATUS HTTP
+      let statusCode = 500;
+      if (
+        error.message.includes("non trouvé") ||
+        error.message.includes("not found")
+      ) {
+        statusCode = 404;
+      } else if (
+        error.message.includes("supprimé") ||
+        error.message.includes("deleted") ||
+        error.message.includes("Accès refusé")
+      ) {
+        statusCode = 400;
+      }
+
+      res.status(statusCode).json({
         success: false,
-        message: "Erreur lors du téléchargement du fichier",
+        message: error.message || "Erreur lors du téléchargement du fichier",
         error:
           process.env.NODE_ENV === "development"
             ? error.message

@@ -155,8 +155,8 @@ class UserCacheService {
 
       cachedResults.forEach((cached, i) => {
         const mapped = this._mapCacheToResponse(cached, userIds[i]);
-        if (mapped && mapped.name !== "Utilisateur inconnu") {
-          results.push(mapped);
+        if (mapped && mapped.nom !== "Utilisateur inconnu") {
+          results.push(mapped); // Cache hit
         } else {
           missingIds.push(userIds[i]);
           results.push({
@@ -192,7 +192,7 @@ class UserCacheService {
           }
 
           // Repopulate le cache partagé
-          if (fetchedUser.name) {
+          if (fetchedUser.nom) {
             await this.userCache.set(this._buildCachePayload(fetchedUser));
           }
         }

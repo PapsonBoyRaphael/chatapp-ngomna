@@ -62,7 +62,7 @@ class MessageDeliveryService {
     this.userConversations = new Map(); // userId → [conversationIds]
 
     // ✅ CONFIGURATION GÉNÉRALE
-    this.pendingMessagesPrefix = "pending:messages:"; // pending:messages:2
+    this.pendingMessagesPrefix = "chat:stream:pending:messages:"; // chat:stream:pending:messages:2
     this.blockTimeout = 1000; // 1 sec max per stream
     this.maxMessagesPerRead = 20;
 

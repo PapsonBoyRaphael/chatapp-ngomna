@@ -29,7 +29,7 @@ const TypingIndicatorService = require("./services/TypingIndicatorService");
 module.exports = {
   // Connexions
   connectDB,
-  redisConfig,
+
   kafkaConfig,
 
   // Gestionnaires

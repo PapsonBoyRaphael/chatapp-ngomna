@@ -60,7 +60,7 @@ else
     # Vérifier si MinIO est installé
     if command -v minio &> /dev/null; then
         # Définir le répertoire MinIO dans le home
-        MINIO_DATA_DIR="$HOME/minio-data"
+        MINIO_DATA_DIR="./storage/minio-data"
         echo "📁 Création du répertoire MinIO: $MINIO_DATA_DIR"
         
         # Créer le répertoire

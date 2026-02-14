@@ -63,15 +63,15 @@ class SmartCachePrewarmer {
     this.stats.startTime = Date.now();
 
     console.log(
-      "🔥 [SmartCachePrewarmer] Démarrage du pré-chauffage depuis MongoDB...",
+      "🔥 [SmartCachePrewarmer] Démarrage du pré-chauffage depuis PostgreSQL...",
     );
 
     try {
       // Étape 0: Réinitialiser le stream (supprimer les anciennes données)
       await this._reinitializeStream();
 
-      // Étape 1: Récupérer TOUS les utilisateurs depuis MongoDB
-      const allUsers = await this._getAllUsersFromMongoDB();
+      // Étape 1: Récupérer TOUS les utilisateurs depuis PostgreSQL
+      const allUsers = await this._getAllUsersFromPostgreSQL();
 
       if (allUsers.length === 0) {
         console.log("⚠️ [SmartCachePrewarmer] Aucun utilisateur trouvé");
@@ -161,10 +161,10 @@ class SmartCachePrewarmer {
    * Récupère TOUS les utilisateurs depuis MongoDB
    * @private
    */
-  async _getAllUsersFromMongoDB() {
+  async _getAllUsersFromPostgreSQL() {
     try {
       console.log(
-        `🔍 [SmartCachePrewarmer] Récupération des utilisateurs depuis MongoDB`,
+        `🔍 [SmartCachePrewarmer] Récupération des utilisateurs depuis PostgreSQL`,
       );
 
       // Utiliser la méthode du repository pour récupérer tous les utilisateurs
@@ -260,7 +260,7 @@ class SmartCachePrewarmer {
           timestamp: Date.now(),
         };
 
-        // ✅ ÉTAPE 1: Stocker dans le cache Redis (UserCache datastore)
+        // ✅ ÉTAPE 1: Stocker dans le cache Redis (UserCache cache)
         try {
           await UserCache.set(userData);
           // console.log(

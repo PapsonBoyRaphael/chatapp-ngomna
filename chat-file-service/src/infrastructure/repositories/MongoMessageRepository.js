@@ -4,6 +4,12 @@ const mongoose = require("mongoose");
 class MongoMessageRepository {
   constructor(kafkaProducer = null) {
     this.kafkaProducer = kafkaProducer;
+    this.metrics = {
+      dbQueries: 0,
+      errors: 0,
+      kafkaEvents: 0,
+      kafkaErrors: 0,
+    };
   }
 
   // ===============================
@@ -317,7 +323,57 @@ class MongoMessageRepository {
         );
       }
 
-      // ✅ CONSTRUIRE LE FILTRE
+      // ✅ POUR DELIVERED/READ : UTILISER LA LOGIQUE AVEC COMPTEURS
+      // On doit traiter chaque message individuellement pour gérer les compteurs
+      if (status === "DELIVERED" || status === "READ") {
+        let totalModified = 0;
+        let totalMatched = 0;
+
+        // Récupérer les messages à mettre à jour
+        const filter = {};
+        if (conversationId) {
+          filter.conversationId = conversationId;
+        }
+        if (messageIds && messageIds.length > 0) {
+          filter._id = { $in: messageIds };
+        }
+        // Exclure les messages déjà au statut voulu ou envoyés par l'utilisateur
+        filter.senderId = { $ne: receiverId };
+
+        const messages = await Message.find(filter).lean();
+        console.log(`🔍 ${messages.length} messages à traiter pour ${status}`);
+
+        for (const msg of messages) {
+          try {
+            const result = await this.updateSingleMessageStatus(
+              msg._id.toString(),
+              receiverId,
+              status,
+            );
+            if (result.modifiedCount > 0) {
+              totalModified++;
+            }
+            totalMatched++;
+          } catch (err) {
+            console.warn(
+              `⚠️ Erreur mise à jour message ${msg._id}: ${err.message}`,
+            );
+          }
+        }
+
+        const processingTime = Date.now() - startTime;
+        console.log(`✅ Mise à jour statut terminée (avec compteurs):`, {
+          conversationId,
+          status,
+          modifiedCount: totalModified,
+          matchedCount: totalMatched,
+          processingTime: `${processingTime}ms`,
+        });
+
+        return { modifiedCount: totalModified, matchedCount: totalMatched };
+      }
+
+      // ✅ POUR LES AUTRES STATUTS (DELETED, EDITED, etc.) : MISE À JOUR DIRECTE
       let filter = {
         status: { $ne: status },
       };
@@ -326,43 +382,14 @@ class MongoMessageRepository {
         filter.conversationId = conversationId;
       }
 
-      // Pour DELIVERED/READ, on veut les messages reçus par l'utilisateur
-      if (status === "DELIVERED" || status === "READ") {
-        filter.$or = [
-          { receiverId: receiverId },
-          { receiverId: { $exists: false }, senderId: { $ne: receiverId } },
-        ];
-      }
-
       if (messageIds && messageIds.length > 0) {
         filter._id = { $in: messageIds };
       }
 
-      // DEBUG: Compter les messages qui correspondent au filtre (sans status)
-      const debugFilter = { ...filter };
-      delete debugFilter.status;
-      const debugCount = await Message.countDocuments(debugFilter);
-      console.log(
-        `🔍 DEBUG: ${debugCount} messages trouvés avec filtre (sans status)`,
-        debugFilter,
-      );
-
-      // ✅ EFFECTUER LA MISE À JOUR EN MASSE
       const updateResult = await Message.updateMany(filter, {
         $set: {
           status: status,
           updatedAt: new Date(),
-          // ✅ AJOUTER LES CHAMPS DE DATE
-          ...(status === "DELIVERED" && {
-            "metadata.deliveryMetadata.deliveredAt": new Date().toISOString(),
-            "metadata.deliveryMetadata.deliveredBy": receiverId,
-            receivedAt: new Date(), // Ajout du champ receivedAt
-          }),
-          ...(status === "READ" && {
-            "metadata.deliveryMetadata.readAt": new Date().toISOString(),
-            "metadata.deliveryMetadata.readBy": receiverId,
-            readAt: new Date(), // Ajout du champ readAt
-          }),
         },
       });
 
@@ -670,6 +697,7 @@ class MongoMessageRepository {
 
   /**
    * Mettre à jour le statut d'un message spécifique
+   * ✅ GESTION DES COMPTEURS POUR GROUPES ET BROADCASTS
    */
   async updateSingleMessageStatus(messageId, receiverId, status) {
     const startTime = Date.now();
@@ -701,95 +729,146 @@ class MongoMessageRepository {
         );
       }
 
-      // ✅ CONSTRUIRE LE FILTRE POUR LE MESSAGE SPÉCIFIQUE
-      const filter = {
-        _id: messageId,
-        status: { $ne: status }, // Ne pas mettre à jour si déjà au bon statut
-      };
-
-      // ✅ POUR LES STATUTS DELIVERED ET READ, VÉRIFIER QUE L'UTILISATEUR EST LE DESTINATAIRE
-      if (status === "DELIVERED" || status === "READ") {
-        // Option 1: Le receiverId doit correspondre à un participant
-        // (on ne vérifie pas forcément que c'est exactement le receiverId du message)
-        // Car pour les conversations de groupe, plusieurs utilisateurs peuvent marquer comme lu
-
-        // Récupérer d'abord le message pour vérifier
-        var existingMessage = await Message.findById(messageId);
-        if (!existingMessage) {
-          throw new Error(`Message ${messageId} introuvable`);
-        }
-
-        console.log(`✅ Message trouvé pour mise à jour statut:`, {
-          messageId: existingMessage._id,
-          senderId: existingMessage.senderId,
-          conversationId: existingMessage.conversationId,
-          currentStatus: existingMessage.status,
-        });
+      // ✅ RÉCUPÉRER LE MESSAGE POUR VÉRIFICATION ET COMPTEURS
+      const existingMessage = await Message.findById(messageId);
+      if (!existingMessage) {
+        throw new Error(`Message ${messageId} introuvable`);
       }
 
-      // ✅ EMPÊCHER LA RÉGRESSION DE STATUT
-      if (existingMessage) {
-        const statusOrder = { SENT: 1, DELIVERED: 2, READ: 3, EDITED: 4 };
-        if (statusOrder[existingMessage.status] > statusOrder[status]) {
+      console.log(`✅ Message trouvé pour mise à jour statut:`, {
+        messageId: existingMessage._id,
+        senderId: existingMessage.senderId,
+        conversationId: existingMessage.conversationId,
+        currentStatus: existingMessage.status,
+        totalRecipients: existingMessage.totalRecipients || 1,
+        deliveredCount: existingMessage.deliveredCount || 0,
+        readCount: existingMessage.readCount || 0,
+      });
+
+      // ✅ VÉRIFIER SI L'UTILISATEUR A DÉJÀ MARQUÉ CE MESSAGE
+      const deliveredBy = existingMessage.deliveredBy || [];
+      const readBy = existingMessage.readBy || [];
+
+      if (status === "DELIVERED" && deliveredBy.includes(receiverId)) {
+        console.log(
+          `ℹ️ User ${receiverId} a déjà marqué le message comme DELIVERED`,
+        );
+        return {
+          modifiedCount: 0,
+          matchedCount: 1,
+          message: `User ${receiverId} a déjà marqué comme DELIVERED`,
+          processingTime: Date.now() - startTime,
+        };
+      }
+
+      if (status === "READ" && readBy.includes(receiverId)) {
+        console.log(
+          `ℹ️ User ${receiverId} a déjà marqué le message comme READ`,
+        );
+        return {
+          modifiedCount: 0,
+          matchedCount: 1,
+          message: `User ${receiverId} a déjà marqué comme READ`,
+          processingTime: Date.now() - startTime,
+        };
+      }
+
+      // ✅ CONSTRUIRE LA MISE À JOUR SELON LE STATUT
+      const updateOps = {
+        $set: {
+          updatedAt: new Date(),
+        },
+      };
+
+      const totalRecipients = existingMessage.totalRecipients || 1;
+      let newDeliveredCount = existingMessage.deliveredCount || 0;
+      let newReadCount = existingMessage.readCount || 0;
+
+      if (status === "DELIVERED") {
+        // ✅ AJOUTER L'UTILISATEUR À deliveredBy ET INCRÉMENTER deliveredCount
+        updateOps.$addToSet = { deliveredBy: receiverId };
+        updateOps.$inc = { deliveredCount: 1 };
+        updateOps.$set["metadata.deliveryMetadata.deliveredAt"] =
+          new Date().toISOString();
+        updateOps.$set.receivedAt = updateOps.$set.receivedAt || new Date();
+
+        newDeliveredCount++;
+
+        // ✅ SI TOUS ONT REÇU → status = "DELIVERED"
+        if (newDeliveredCount >= totalRecipients) {
+          updateOps.$set.status = "DELIVERED";
           console.log(
-            `⚠️ Impossible de rétrograder le statut de ${existingMessage.status} à ${status}`,
+            `✅ Tous les destinataires ont reçu (${newDeliveredCount}/${totalRecipients}) → status=DELIVERED`,
           );
-          return {
-            modifiedCount: 0,
-            matchedCount: 1,
-            message: `Impossible de rétrograder le statut de ${existingMessage.status} à ${status}`,
-            processingTime: Date.now() - startTime,
-          };
         }
+      } else if (status === "READ") {
+        // ✅ SI L'UTILISATEUR N'A PAS ENCORE REÇU, AJOUTER AUSSI À deliveredBy
+        if (!deliveredBy.includes(receiverId)) {
+          updateOps.$addToSet = {
+            deliveredBy: receiverId,
+            readBy: receiverId,
+          };
+          updateOps.$inc = {
+            deliveredCount: 1,
+            readCount: 1,
+          };
+          newDeliveredCount++;
+        } else {
+          updateOps.$addToSet = { readBy: receiverId };
+          updateOps.$inc = { readCount: 1 };
+        }
+
+        updateOps.$set["metadata.deliveryMetadata.readAt"] =
+          new Date().toISOString();
+        updateOps.$set.readAt = updateOps.$set.readAt || new Date();
+
+        newReadCount++;
+
+        // ✅ SI TOUS ONT LU → status = "READ"
+        if (newReadCount >= totalRecipients) {
+          updateOps.$set.status = "READ";
+          console.log(
+            `✅ Tous les destinataires ont lu (${newReadCount}/${totalRecipients}) → status=READ`,
+          );
+        } else if (
+          newDeliveredCount >= totalRecipients &&
+          existingMessage.status === "SENT"
+        ) {
+          // Si tous ont reçu mais pas encore lu → status = "DELIVERED"
+          updateOps.$set.status = "DELIVERED";
+        }
+      } else if (status === "DELETED" || status === "EDITED") {
+        updateOps.$set.status = status;
       }
 
       // ✅ EFFECTUER LA MISE À JOUR
-      const updateResult = await Message.findOneAndUpdate(
-        filter,
+      const updateResult = await Message.findByIdAndUpdate(
+        messageId,
+        updateOps,
         {
-          $set: {
-            status: status,
-            updatedAt: new Date(),
-
-            // ✅ AJOUTER LES MÉTADONNÉES DE LIVRAISON
-            ...(status === "DELIVERED" && {
-              "metadata.deliveryMetadata.deliveredAt": new Date().toISOString(),
-              receivedAt: new Date(),
-              "metadata.deliveryMetadata.deliveredBy": receiverId,
-            }),
-            ...(status === "READ" && {
-              "metadata.deliveryMetadata.readAt": new Date().toISOString(),
-              readAt: new Date(),
-              "metadata.deliveryMetadata.readBy": receiverId,
-            }),
-          },
-        },
-        {
-          new: true, // Retourner le document mis à jour
+          new: true,
           runValidators: true,
         },
       );
 
       const processingTime = Date.now() - startTime;
 
-      // ✅ VÉRIFIER SI LA MISE À JOUR A RÉUSSI
       if (!updateResult) {
-        console.log(
-          `ℹ️ Aucune mise à jour nécessaire pour message ${messageId} (déjà ${status})`,
-        );
+        console.log(`ℹ️ Aucune mise à jour pour message ${messageId}`);
         return {
           modifiedCount: 0,
           matchedCount: 0,
-          message: `Message déjà au statut ${status}`,
+          message: `Erreur mise à jour`,
           processingTime,
         };
       }
 
       console.log(`✅ Statut message mis à jour:`, {
         messageId: updateResult._id,
-        oldStatus: filter.status,
         newStatus: updateResult.status,
-        updatedAt: updateResult.updatedAt,
+        deliveredCount: updateResult.deliveredCount,
+        readCount: updateResult.readCount,
+        totalRecipients: updateResult.totalRecipients,
         processingTime: `${processingTime}ms`,
       });
 

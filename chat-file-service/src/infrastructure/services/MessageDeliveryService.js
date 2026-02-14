@@ -239,7 +239,7 @@ class MessageDeliveryService {
     this.activeUserStreams = new Map(); // userId → Set of active stream types
 
     // ✅ CONFIGURATION GÉNÉRALE
-    this.pendingMessagesPrefix = "pending:messages:"; // pending:messages:2
+    this.pendingMessagesPrefix = "chat:stream:pending:messages:"; // chat:stream:pending:messages:2
     this.blockTimeout = 1000; // 1 sec max per stream
     this.maxMessagesPerRead = 20;
 
@@ -1239,6 +1239,7 @@ class MessageDeliveryService {
           : {
               // Événement individuel
               messageId: message.messageId,
+              conversationId: message.conversationId,
               userId: message.userId,
               status: message.status,
               participants: participants,
@@ -1294,7 +1295,7 @@ class MessageDeliveryService {
                       ? "statusDeleted"
                       : "statusDelivered";
 
-            const pendingKey = `pending:messages:${recipientIdStr}:${statusStreamType}`;
+            const pendingKey = `chat:stream:pending:messages:${recipientIdStr}:${statusStreamType}`;
 
             // ✅ AJOUTER EN FILE D'ATTENTE (Redis STREAM)
             await this.redis.xAdd(
@@ -1522,10 +1523,49 @@ class MessageDeliveryService {
   async deliverParticipantAddedEvent(message) {
     try {
       const conversationId = String(message.conversationId);
+      const newParticipantId = String(message.participantId);
 
-      // ✅ RÉCUPÉRER TOUS LES PARTICIPANTS DE LA CONVERSATION
-      const allParticipants =
-        await this.getAllConversationParticipants(conversationId);
+      // ✅ RÉCUPÉRER LES PARTICIPANTS DEPUIS LE MESSAGE OU DEPUIS LE CACHE
+      let allParticipants = [];
+
+      // ✅ PRIORITÉ 1 : Utiliser la liste de participants du message si disponible
+      if (message.participants) {
+        try {
+          const parsedParticipants =
+            typeof message.participants === "string"
+              ? JSON.parse(message.participants)
+              : message.participants;
+          allParticipants = parsedParticipants.map(String);
+          console.log(
+            `➕ Participants depuis le message: ${allParticipants.join(", ")}`,
+          );
+        } catch (parseErr) {
+          console.warn("⚠️ Erreur parsing participants:", parseErr.message);
+        }
+      }
+
+      // ✅ PRIORITÉ 2 : Fallback vers le cache mémoire
+      if (allParticipants.length === 0) {
+        allParticipants =
+          await this.getAllConversationParticipants(conversationId);
+      }
+
+      // ✅ S'ASSURER QUE LE NOUVEAU PARTICIPANT EST INCLUS
+      if (newParticipantId && !allParticipants.includes(newParticipantId)) {
+        allParticipants.push(newParticipantId);
+      }
+
+      // ✅ METTRE À JOUR LE CACHE userConversations POUR LE NOUVEAU PARTICIPANT
+      if (newParticipantId && this.userSockets.has(newParticipantId)) {
+        const userConvs = this.userConversations.get(newParticipantId) || [];
+        if (!userConvs.includes(conversationId)) {
+          userConvs.push(conversationId);
+          this.userConversations.set(newParticipantId, userConvs);
+          console.log(
+            `✅ userConversations mis à jour pour ${newParticipantId}: +${conversationId}`,
+          );
+        }
+      }
 
       console.log(
         `➕ Livraison événement participant ajouté à ${allParticipants.length} participant(s)`,
@@ -1563,10 +1603,57 @@ class MessageDeliveryService {
   async deliverParticipantRemovedEvent(message) {
     try {
       const conversationId = String(message.conversationId);
+      const removedParticipantId = String(message.participantId);
 
-      // ✅ RÉCUPÉRER TOUS LES PARTICIPANTS DE LA CONVERSATION
-      const allParticipants =
-        await this.getAllConversationParticipants(conversationId);
+      // ✅ RÉCUPÉRER LES PARTICIPANTS DEPUIS LE MESSAGE OU DEPUIS LE CACHE
+      let allParticipants = [];
+
+      // ✅ PRIORITÉ 1 : Utiliser la liste de participants du message si disponible
+      if (message.participants) {
+        try {
+          const parsedParticipants =
+            typeof message.participants === "string"
+              ? JSON.parse(message.participants)
+              : message.participants;
+          allParticipants = parsedParticipants.map(String);
+          console.log(
+            `➖ Participants depuis le message: ${allParticipants.join(", ")}`,
+          );
+        } catch (parseErr) {
+          console.warn("⚠️ Erreur parsing participants:", parseErr.message);
+        }
+      }
+
+      // ✅ PRIORITÉ 2 : Fallback vers le cache mémoire
+      if (allParticipants.length === 0) {
+        allParticipants =
+          await this.getAllConversationParticipants(conversationId);
+      }
+
+      // ✅ S'ASSURER QUE LE PARTICIPANT RETIRÉ EST AUSSI NOTIFIÉ
+      if (
+        removedParticipantId &&
+        !allParticipants.includes(removedParticipantId)
+      ) {
+        allParticipants.push(removedParticipantId);
+      }
+
+      // ✅ NETTOYER LE CACHE userConversations POUR LE PARTICIPANT RETIRÉ
+      if (
+        removedParticipantId &&
+        this.userConversations.has(removedParticipantId)
+      ) {
+        const userConvs =
+          this.userConversations.get(removedParticipantId) || [];
+        const idx = userConvs.indexOf(conversationId);
+        if (idx !== -1) {
+          userConvs.splice(idx, 1);
+          this.userConversations.set(removedParticipantId, userConvs);
+          console.log(
+            `✅ userConversations nettoyé pour ${removedParticipantId}: -${conversationId}`,
+          );
+        }
+      }
 
       console.log(
         `➖ Livraison événement participant retiré à ${allParticipants.length} participant(s)`,
@@ -2067,9 +2154,9 @@ class MessageDeliveryService {
         return conversationParticipants;
       }
 
-      // ✅ SINON, RETOURNER UNE LISTE VIDE (CAS D'ERREUR OU CONVERSATION INEXISTANTE)
-      console.warn(
-        `⚠️ Aucun participant trouvé pour la conversation ${conversationId}`,
+      // ✅ SINON, RETOURNER UNE LISTE VIDE (le caller peut avoir un fallback)
+      console.log(
+        `ℹ️ Aucun participant connecté trouvé en cache pour la conversation ${conversationId}`,
       );
       return [];
     } catch (error) {
@@ -2149,10 +2236,10 @@ class MessageDeliveryService {
 
       for (const eventType of eventTypes) {
         // ✅ GÉRER LES DEUX FORMATS D'ATTENTE
-        // Format ancien: pending:message:userId (Redis LIST)
-        // Format nouveau: pending:messages:userId:streamType (Redis STREAM)
-        const oldPendingKey = `pending:${eventType}:${userIdStr}`;
-        const newPendingKey = `pending:messages:${userIdStr}:${eventType}`;
+        // Format ancien: chat:stream:pending:message:userId (Redis LIST)
+        // Format nouveau: chat:stream:pending:messages:userId:streamType (Redis STREAM)
+        const oldPendingKey = `chat:stream:pending:${eventType}:${userIdStr}`;
+        const newPendingKey = `chat:stream:pending:messages:${userIdStr}:${eventType}`;
 
         // ✅ TRAITER LES ANCIENNES CLÉS (Redis LIST)
         try {
@@ -2362,7 +2449,7 @@ class MessageDeliveryService {
   ) {
     try {
       const userIdStr = String(userId);
-      const pendingKey = `pending:${eventType}:${userIdStr}`;
+      const pendingKey = `chat:stream:pending:${eventType}:${userIdStr}`;
 
       // ✅ ADAPTER LA STRUCTURE SELON LE TYPE D'ÉVÉNEMENT
       let eventJson;
@@ -2853,6 +2940,32 @@ class MessageDeliveryService {
       console.log(`📁 Événement fichier livré: ${message.event}`);
     } catch (error) {
       console.error("❌ Erreur livraison événement fichier:", error);
+    }
+  }
+
+  /**
+   * ✅ VÉRIFIER SI UN UTILISATEUR EST DANS UNE CONVERSATION
+   */
+  async isUserInConversation(userId, conversationId) {
+    try {
+      const userIdStr = String(userId);
+      const conversationIdStr = String(conversationId);
+
+      // Vérifier dans le cache userConversations
+      const userConversations = this.userConversations.get(userIdStr) || [];
+
+      if (userConversations.includes(conversationIdStr)) {
+        return true;
+      }
+
+      // Si le cache est vide, on retourne false (l'utilisateur n'est pas connecté ou pas dans la conversation)
+      return false;
+    } catch (error) {
+      console.error(
+        `❌ Erreur vérification user in conversation: ${userId} / ${conversationId}:`,
+        error,
+      );
+      return false;
     }
   }
 

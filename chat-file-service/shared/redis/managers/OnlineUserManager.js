@@ -64,7 +64,7 @@ class OnlineUserManager {
 
     this.redisManager = RedisManager;
     await this.redisManager.connect();
-    this.redis = this.redisManager.getMainClient();
+    this.redis = this.redisManager.getCacheClient();
 
     await this.setupExpirationListener();
     this.startCleanupCron(); // ✅ Démarrer le cron
@@ -368,9 +368,15 @@ class OnlineUserManager {
         await this.redis.del(`${this.userSocketPrefix}:${socketId}`);
 
         // Vérifier s'il reste d'autres sockets
-        const remainingSockets = await this.redis.sCard(
+        let remainingSockets = await this.redis.sCard(
           `${this.userSocketsSetPrefix}:${userIdString}`,
         );
+
+        // ✅ NETTOYER LES SOCKETS FANTÔMES avant de décider
+        if (remainingSockets > 0 && this.io) {
+          const { remaining } = await this.cleanupGhostSockets(userIdString);
+          remainingSockets = remaining;
+        }
 
         if (remainingSockets > 0) {
           await this.redis.set(
@@ -388,17 +394,24 @@ class OnlineUserManager {
             "online",
           );
           console.log(
-            `📱 Socket ${socketId} déconnecté, mais ${remainingSockets} autre(s) socket(s) actif(s) pour ${userIdString}`,
+            `📱 Socket ${socketId} déconnecté, mais ${remainingSockets} autre(s) socket(s) actif(s) VALIDÉS pour ${userIdString}`,
           );
-          return true; // Ne pas mettre offline, d'autres connexions actives
+          return true; // Ne pas mettre offline, d'autres connexions actives et validées
         }
       }
 
       // ✅ GARDE-FOU: si socketId non fourni, vérifier s'il reste des sockets
       if (!socketId) {
-        const remainingSockets = await this.redis.sCard(
+        let remainingSockets = await this.redis.sCard(
           `${this.userSocketsSetPrefix}:${userIdString}`,
         );
+
+        // ✅ NETTOYER LES SOCKETS FANTÔMES avant de décider
+        if (remainingSockets > 0 && this.io) {
+          const { remaining } = await this.cleanupGhostSockets(userIdString);
+          remainingSockets = remaining;
+        }
+
         if (remainingSockets > 0) {
           await this.redis.set(
             `${this.presencePrefix}:${userIdString}`,
@@ -415,7 +428,7 @@ class OnlineUserManager {
             "online",
           );
           console.log(
-            `📱 Déconnexion sans socketId, mais ${remainingSockets} socket(s) actif(s) pour ${userIdString}`,
+            `📱 Déconnexion sans socketId, mais ${remainingSockets} socket(s) VALIDÉS actif(s) pour ${userIdString}`,
           );
           return true;
         }
@@ -888,6 +901,119 @@ class OnlineUserManager {
     } catch (error) {
       console.error("❌ Erreur getPresenceStats:", error);
       return null;
+    }
+  }
+
+  /**
+   * ✅ NETTOYER LES SOCKETS FANTÔMES
+   * Vérifie que les sockets dans user_sockets_set sont bien connectés via Socket.IO
+   * @param {string} userId - L'ID de l'utilisateur
+   * @returns {Promise<{removed: number, remaining: number}>}
+   */
+  async cleanupGhostSockets(userId) {
+    if (!this.redis || !this.io) {
+      return { removed: 0, remaining: 0 };
+    }
+
+    try {
+      const userIdString = String(userId);
+      const socketsSetKey = `${this.userSocketsSetPrefix}:${userIdString}`;
+
+      // Récupérer tous les sockets dans le set Redis
+      const storedSockets = await this.redis.sMembers(socketsSetKey);
+
+      if (!storedSockets || storedSockets.length === 0) {
+        return { removed: 0, remaining: 0 };
+      }
+
+      let removedCount = 0;
+      const ghostSockets = [];
+
+      // Vérifier chaque socket
+      for (const socketId of storedSockets) {
+        const socket = this.io.sockets.sockets.get(socketId);
+
+        if (!socket || !socket.connected) {
+          // Socket fantôme trouvé
+          ghostSockets.push(socketId);
+          removedCount++;
+        }
+      }
+
+      // Supprimer les sockets fantômes
+      if (ghostSockets.length > 0) {
+        for (const ghostSocketId of ghostSockets) {
+          await this.redis.sRem(socketsSetKey, ghostSocketId);
+          await this.redis.del(`${this.userSocketPrefix}:${ghostSocketId}`);
+        }
+
+        console.log(
+          `🧹 [OnlineUserManager] ${ghostSockets.length} socket(s) fantôme(s) supprimé(s) pour ${userIdString}`,
+        );
+      }
+
+      // Compter les sockets restants
+      const remainingSockets = await this.redis.sCard(socketsSetKey);
+
+      // Si plus aucun socket actif, mettre l'utilisateur offline
+      if (remainingSockets === 0) {
+        console.log(
+          `👋 [OnlineUserManager] Plus aucun socket valide pour ${userIdString}, mise offline`,
+        );
+        await this.setUserOffline(userIdString);
+      }
+
+      return { removed: removedCount, remaining: remainingSockets };
+    } catch (error) {
+      console.error("❌ Erreur cleanupGhostSockets:", error);
+      return { removed: 0, remaining: 0 };
+    }
+  }
+
+  /**
+   * ✅ NETTOYER TOUS LES SOCKETS FANTÔMES DE TOUS LES UTILISATEURS
+   * À appeler périodiquement ou au démarrage
+   */
+  async cleanupAllGhostSockets() {
+    if (!this.redis || !this.io) {
+      return { totalRemoved: 0, usersAffected: 0 };
+    }
+
+    try {
+      let totalRemoved = 0;
+      let usersAffected = 0;
+      let cursor = "0";
+      const pattern = `${this.userSocketsSetPrefix}:*`;
+
+      do {
+        const result = await this.redis.scan(cursor, {
+          MATCH: pattern,
+          COUNT: 100,
+        });
+
+        cursor = String(result.cursor);
+
+        for (const key of result.keys) {
+          const userId = key.replace(`${this.userSocketsSetPrefix}:`, "");
+          const { removed } = await this.cleanupGhostSockets(userId);
+
+          if (removed > 0) {
+            totalRemoved += removed;
+            usersAffected++;
+          }
+        }
+      } while (cursor !== "0");
+
+      if (totalRemoved > 0) {
+        console.log(
+          `🧹 [OnlineUserManager] Nettoyage terminé: ${totalRemoved} socket(s) fantôme(s) supprimé(s) pour ${usersAffected} utilisateur(s)`,
+        );
+      }
+
+      return { totalRemoved, usersAffected };
+    } catch (error) {
+      console.error("❌ Erreur cleanupAllGhostSockets:", error);
+      return { totalRemoved: 0, usersAffected: 0 };
     }
   }
 

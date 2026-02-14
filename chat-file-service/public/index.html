@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
@@ -501,6 +501,189 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
               </button>
             </div>
           </div>
+        </div>
+
+        <!-- ✅ Section Gestion des Participants -->
+        <div class="section participant-section">
+          <h2>👥 Gestion des Participants</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="participantConversationId"
+              placeholder="ID Conversation (groupe)"
+            />
+            <input
+              type="text"
+              id="participantUserId"
+              placeholder="ID(s) Utilisateur (séparés par virgule pour plusieurs)"
+            />
+            <div class="button-grid">
+              <button onclick="addParticipant()" class="btn-success">
+                ➕ Ajouter Participant(s)
+              </button>
+              <button onclick="removeParticipant()" class="btn-danger">
+                ➖ Retirer Participant(s)
+              </button>
+            </div>
+            <div class="form-help">
+              <small>
+                💡 Seuls les groupes peuvent avoir des participants
+                ajoutés/retirés. Vous pouvez entrer plusieurs IDs séparés par
+                des virgules (ex: id1, id2, id3).
+              </small>
+            </div>
+          </div>
+          <div class="status" id="participantStatus"></div>
+        </div>
+
+        <!-- ✅ Section Quitter une Conversation -->
+        <div class="section leave-section">
+          <h2>🚪 Quitter une Conversation</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="leaveConversationId"
+              placeholder="ID Conversation à quitter définitivement"
+            />
+            <div class="button-grid">
+              <button onclick="leaveConversationPermanent()" class="btn-danger">
+                🚪 Quitter Définitivement
+              </button>
+            </div>
+            <div class="form-help">
+              <small>
+                ⚠️ Cette action est irréversible ! Vous serez retiré du groupe
+                et ne recevrez plus les messages. Le créateur du groupe ne peut
+                pas quitter (il doit transférer la propriété d'abord).
+              </small>
+            </div>
+          </div>
+          <div class="status" id="leaveStatus"></div>
+        </div>
+
+        <!-- ✅ Section Modifier un Message -->
+        <div class="section edit-message-section">
+          <h2>✏️ Modifier un Message</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="editMessageId"
+              placeholder="ID du Message à modifier"
+            />
+            <textarea
+              id="editMessageContent"
+              placeholder="Nouveau contenu du message..."
+              rows="3"
+            ></textarea>
+            <div class="button-grid">
+              <button onclick="editMessage()" class="btn-primary">
+                ✏️ Modifier Message
+              </button>
+              <button onclick="fillEditMessageId()" class="btn-secondary">
+                🔍 Utiliser Dernier Message
+              </button>
+            </div>
+            <div class="form-help">
+              <small>
+                💡 Seul l'auteur du message peut le modifier. Utilisez "Utiliser
+                Dernier Message" pour auto-remplir l'ID.
+              </small>
+            </div>
+          </div>
+          <div class="status" id="editMessageStatus"></div>
+        </div>
+
+        <!-- ✅ Section Supprimer un Message -->
+        <div class="section delete-message-section">
+          <h2>🗑️ Supprimer un Message</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="deleteMessageId"
+              placeholder="ID du Message à supprimer"
+            />
+            <select id="deleteType">
+              <option value="FOR_ME">🙈 Supprimer pour moi uniquement</option>
+              <option value="FOR_EVERYONE">
+                🗑️ Supprimer pour tout le monde
+              </option>
+            </select>
+            <input
+              type="text"
+              id="deleteMessageConversationId"
+              placeholder="ID Conversation (requis pour FOR_EVERYONE)"
+            />
+            <div class="button-grid">
+              <button onclick="deleteMessageAction()" class="btn-danger">
+                🗑️ Supprimer Message
+              </button>
+              <button onclick="fillDeleteMessageId()" class="btn-secondary">
+                🔍 Utiliser Dernier Message
+              </button>
+            </div>
+            <div class="form-help">
+              <small>
+                ⚠️ "Pour tout le monde" : seul l'expéditeur peut supprimer, dans
+                un délai de 5 minutes.
+                <br />
+                📌 "Pour moi" : le message reste visible pour les autres.
+              </small>
+            </div>
+          </div>
+          <div class="status" id="deleteMessageStatus"></div>
+        </div>
+
+        <!-- ✅ Section Supprimer un Fichier -->
+        <div class="section delete-file-section">
+          <h2>🗑️ Supprimer un Fichier</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="deleteFileId"
+              placeholder="ID du Fichier à supprimer"
+            />
+            <label class="checkbox-label">
+              <input type="checkbox" id="physicalDelete" checked />
+              Suppression physique (supprime aussi le fichier du disque)
+            </label>
+            <div class="button-grid">
+              <button onclick="deleteFileAction()" class="btn-danger">
+                🗑️ Supprimer Fichier
+              </button>
+            </div>
+            <div class="form-help">
+              <small>
+                💡 Seul l'uploadeur du fichier peut le supprimer. Si la
+                suppression physique est cochée, le fichier sera aussi supprimé
+                du disque.
+              </small>
+            </div>
+          </div>
+          <div class="status" id="deleteFileStatus"></div>
+        </div>
+
+        <!-- ✅ Section Télécharger un Fichier -->
+        <div class="section download-file-section">
+          <h2>📥 Télécharger un Fichier</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="downloadFileId"
+              placeholder="ID du Fichier à télécharger"
+            />
+            <div class="button-grid">
+              <button onclick="downloadFileById()" class="btn-primary">
+                📥 Télécharger Fichier
+              </button>
+            </div>
+            <div class="form-help">
+              <small>
+                💡 Entrez l'ID du fichier pour le télécharger. Vous pouvez aussi
+                télécharger depuis la section "Mes Fichiers".
+              </small>
+            </div>
+          </div>
+          <div class="status" id="downloadFileStatus"></div>
         </div>
 
         <!-- Section réception complète des messages -->

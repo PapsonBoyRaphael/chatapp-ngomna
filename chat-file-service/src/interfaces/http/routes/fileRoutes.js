@@ -86,10 +86,10 @@ function createFileRoutes(fileController) {
       }
     });
 
-    // GET /files/:fileId - Télécharger un fichier
+    // GET /files/:fileId - Récupérer les métadonnées d'un fichier
     router.get(
       "/:fileId",
-      validationMiddleware.validateMongoId("fileId"),
+      // ✅ PAS DE VALIDATION MONGO ID CAR FileModel._id EST UN STRING
       async (req, res) => {
         try {
           await fileController.getFile(req, res);
@@ -107,7 +107,7 @@ function createFileRoutes(fileController) {
     // DELETE /files/:fileId - Supprimer un fichier
     router.delete(
       "/:fileId",
-      validationMiddleware.validateMongoId("fileId"),
+      // ✅ PAS DE VALIDATION MONGO ID CAR FileModel._id EST UN STRING
       async (req, res) => {
         try {
           await fileController.deleteFile(req, res);
@@ -147,7 +147,7 @@ function createFileRoutes(fileController) {
     // ✅ AJOUTER CETTE ROUTE POUR LES THUMBNAILS
     router.get(
       "/:fileId/thumbnail",
-      validationMiddleware.validateMongoId("fileId"),
+      // ✅ PAS DE VALIDATION MONGO ID CAR FileModel._id EST UN STRING
       async (req, res) => {
         try {
           await fileController.getThumbnail(req, res);
@@ -165,7 +165,7 @@ function createFileRoutes(fileController) {
     // GET /files/:fileId/download - Télécharger un fichier
     router.get(
       "/:fileId/download",
-      validationMiddleware.validateMongoId("fileId"),
+      // ✅ PAS DE VALIDATION MONGO ID CAR FileModel._id EST UN STRING
       async (req, res) => {
         try {
           await fileController.downloadFile(req, res);

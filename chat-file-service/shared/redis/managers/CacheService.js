@@ -28,7 +28,7 @@ class CacheService {
 
     this.redisManager = RedisManager;
     await this.redisManager.connect();
-    this.redis = this.redisManager.getMainClient();
+    this.redis = this.redisManager.getCacheClient();
     this.isInitialized = true;
 
     console.log("✅ CacheService initialisé via RedisManager");
@@ -96,7 +96,7 @@ class CacheService {
       } catch (parseErr) {
         console.error(
           `❌ Erreur parsing JSON en cache pour clé '${cacheKey}':`,
-          parseErr.message
+          parseErr.message,
         );
         // Supprimer la clé corrompue
         await this.redis.del(cacheKey);
@@ -123,7 +123,7 @@ class CacheService {
       } catch (stringifyErr) {
         console.error(
           `❌ Erreur stringify JSON pour clé '${cacheKey}':`,
-          stringifyErr.message
+          stringifyErr.message,
         );
         return false;
       }
@@ -144,7 +144,7 @@ class CacheService {
         return await this._deleteByPattern(keyOrPattern);
       } else {
         const cacheKey = `${this.options.keyPrefix}:${this.sanitizeKey(
-          keyOrPattern
+          keyOrPattern,
         )}`;
         return await this.redis.del(cacheKey);
       }

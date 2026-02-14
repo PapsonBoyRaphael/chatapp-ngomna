@@ -439,6 +439,42 @@ class CachedConversationRepository {
     }
   }
 
+  /**
+   * ✅ METTRE À JOUR UNIQUEMENT LE STATUT DU DERNIER MESSAGE
+   * @param {string} conversationId - ID de la conversation
+   * @param {string} messageId - ID du message (doit correspondre au lastMessage._id)
+   * @param {string} newStatus - Nouveau statut (DELIVERED, READ)
+   */
+  async updateLastMessageStatus(conversationId, messageId, newStatus) {
+    try {
+      const result = await this.primaryStore.updateLastMessageStatus(
+        conversationId,
+        messageId,
+        newStatus,
+      );
+
+      if (result) {
+        // ✅ RÉCUPÉRER LES PARTICIPANTS POUR INVALIDER LE CACHE
+        const participants = result.participants || [];
+
+        // ✅ INVALIDER LE CACHE DES CONVERSATIONS POUR TOUS LES PARTICIPANTS
+        await this.invalidateConversationCaches(conversationId, {
+          participants,
+          invalidateConversation: true,
+        });
+
+        console.log(
+          `🔄 lastMessage.status mis à jour (${newStatus}) et cache invalidé: ${conversationId}`,
+        );
+      }
+
+      return result;
+    } catch (error) {
+      console.error("❌ Erreur updateLastMessageStatus:", error.message);
+      throw error;
+    }
+  }
+
   async incrementUnreadCountInUserMetadata(conversationId, userId, amount = 1) {
     try {
       const result = await this.primaryStore.incrementUnreadCountInUserMetadata(

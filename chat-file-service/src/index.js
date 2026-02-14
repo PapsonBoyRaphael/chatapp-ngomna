@@ -236,7 +236,7 @@ const startServer = async () => {
       console.log("   ✅ RoomManager (shared)");
 
       // ✅ INITIALISER UserCache depuis shared (préfixe chat)
-      UserCache.prefix = "chat:cache:datastore:users:";
+      UserCache.prefix = "chat:cache:users:";
       await UserCache.initialize();
       console.log("   ✅ UserCache (shared) - Cache utilisateur centralisé");
 
@@ -245,7 +245,7 @@ const startServer = async () => {
         streamName: "user-service:stream:events:users",
         consumerGroup: "chat-file-service-group",
         consumerName: `chat-consumer-${process.pid}`,
-        cachePrefix: "chat:cache:datastore:users:",
+        cachePrefix: "chat:cache:users:",
       });
       await userStreamConsumer.initialize();
       await userStreamConsumer.start();
@@ -259,7 +259,9 @@ const startServer = async () => {
     if (redisClient) {
       try {
         console.log("🚀 Initialisation MessageDeliveryService...");
-        messageDeliveryService = new MessageDeliveryService(redisClient, io);
+        // ✅ UTILISER LE CLIENT STREAM POUR LES OPÉRATIONS DE STREAMING
+        const streamClient = RedisManager.getStreamClient();
+        messageDeliveryService = new MessageDeliveryService(streamClient, io);
         console.log("⏳ Attente de l'initialisation du consumer...");
         await messageDeliveryService.initialize();
         app.locals.messageDeliveryService = messageDeliveryService;
@@ -402,17 +404,6 @@ const startServer = async () => {
           "✅ Référence messageDeliveryService injectée dans resilientMessageService",
         );
       }
-
-      // resilientMessageService.nukeAllRedisData(); //
-      // ✅ NOUVELLE : SYNCHRONISER LES MESSAGES EXISTANTS
-      // console.log(
-      //   "🔄 Démarrage de la synchronisation MongoDB → Redis Streams..."
-      // );
-      // const syncResult =
-      //   await resilientMessageService.syncExistingMessagesToStream();
-      // console.log(
-      //   `✅ Synchronisation complétée: ${syncResult.synced} messages, ${syncResult.errors} erreur(s)`
-      // );
 
       app.locals.resilientMessageService = resilientMessageService;
       console.log(
@@ -626,6 +617,12 @@ const startServer = async () => {
       markMessageReadUseCase,
       resilientMessageService,
       messageDeliveryService,
+      null, // userCacheService
+      addParticipantUseCase,
+      removeParticipantUseCase,
+      leaveConversationUseCase,
+      deleteMessageUseCase,
+      deleteFileUseCase,
     );
 
     // ✅ CONFIGURER LES GESTIONNAIRES D'ÉVÉNEMENTS SOCKET.IO
@@ -931,7 +928,8 @@ const startServer = async () => {
           delayBetweenBatches: 1500,
           maxUsers: 10000,
           streamName: "user-service:stream:events:users",
-          cachePrefix: "chat:cache:datastore:users:",
+          cachePrefix: "chat:cache:users:",
+          userStreamConsumer: app.locals.userStreamConsumer, // ✅ PASSER L'INSTANCE EXISTANTE
         });
 
         // Lancer en arrière-plan (non-bloquant)

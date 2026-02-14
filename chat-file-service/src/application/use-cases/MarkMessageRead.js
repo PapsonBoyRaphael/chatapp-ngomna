@@ -74,6 +74,42 @@ class MarkMessageRead {
         durationMs: Date.now() - start,
       });
 
+      // ✅ METTRE À JOUR LE STATUT DU DERNIER MESSAGE SI LE STATUS GLOBAL A CHANGÉ
+      // Uniquement si le message a atteint le statut READ (tous les destinataires ont lu)
+      if (this.conversationRepository && result && result.modifiedCount > 0) {
+        try {
+          const updatedMessage = result.message;
+          const targetConvId = conversationId || updatedMessage?.conversationId;
+          const targetMsgId =
+            messageId || (messageIds && messageIds[messageIds.length - 1]);
+
+          // ✅ VÉRIFIER SI LE STATUT GLOBAL EST MAINTENANT READ
+          if (
+            targetConvId &&
+            targetMsgId &&
+            updatedMessage?.status === "READ"
+          ) {
+            await this.conversationRepository.updateLastMessageStatus(
+              targetConvId,
+              targetMsgId,
+              "READ",
+            );
+            console.log(
+              `✅ lastMessage.status mis à jour → READ (tous ont lu)`,
+            );
+          } else {
+            console.log(
+              `ℹ️ lastMessage.status non mis à jour (${updatedMessage?.readCount || 0}/${updatedMessage?.totalRecipients || 1} ont lu)`,
+            );
+          }
+        } catch (lastMsgError) {
+          console.warn(
+            "⚠️ Erreur mise à jour lastMessage.status READ:",
+            lastMsgError.message,
+          );
+        }
+      }
+
       // ✅ RÉINITIALISER LE COMPTEUR userMetadata.unreadCount DANS MONGODB
       if (result && result.modifiedCount > 0 && this.conversationRepository) {
         try {

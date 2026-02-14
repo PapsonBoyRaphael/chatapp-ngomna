@@ -15,10 +15,10 @@ class UnreadMessageManager {
     this.recalculateFn = null; // Callback pour recalcul par conversation
     this.recalculateTotalFn = null; // Callback pour recalcul total
 
-    this.keyPrefix = options.keyPrefix || "unread";
-    this.userUnreadPrefix = options.userUnreadPrefix || "user_unread";
+    this.keyPrefix = options.keyPrefix || "chat:cache:unread";
+    this.userUnreadPrefix = options.userUnreadPrefix || "chat:cache:unread:user";
     this.conversationUnreadPrefix =
-      options.conversationUnreadPrefix || "conversation_unread";
+      options.conversationUnreadPrefix || "chat:cache:unread:conv";
     this.defaultTTL = options.defaultTTL || 3 * 24 * 3600; // 3 jours
 
     this.isInitialized = false;
@@ -32,7 +32,7 @@ class UnreadMessageManager {
 
     this.redisManager = RedisManager;
     await this.redisManager.connect();
-    this.redis = this.redisManager.getMainClient();
+    this.redis = this.redisManager.getCacheClient();
     this.isInitialized = true;
 
     console.log("✅ UnreadMessageManager initialisé via RedisManager");
@@ -103,7 +103,7 @@ class UnreadMessageManager {
       ]);
 
       console.log(
-        `📈 Compteur incrémenté pour ${userId} dans ${conversationId}: ${userResult}`
+        `📈 Compteur incrémenté pour ${userId} dans ${conversationId}: ${userResult}`,
       );
       return userResult;
     } catch (error) {
@@ -125,7 +125,7 @@ class UnreadMessageManager {
       ]);
 
       console.log(
-        `🔄 Compteur réinitialisé pour ${userId} dans ${conversationId}`
+        `🔄 Compteur réinitialisé pour ${userId} dans ${conversationId}`,
       );
       return true;
     } catch (error) {
@@ -156,7 +156,7 @@ class UnreadMessageManager {
       // ✅ CACHE MISS → UTILISER LE CALLBACK SI DISPONIBLE
       if (this.recalculateFn) {
         console.log(
-          `Miss Redis → recalcul via callback pour ${userId} dans ${conversationId}`
+          `Miss Redis → recalcul via callback pour ${userId} dans ${conversationId}`,
         );
         const realCount = await this.recalculateFn(conversationId, userId);
 
@@ -169,7 +169,7 @@ class UnreadMessageManager {
 
       // Pas de callback → retourner 0
       console.warn(
-        `⚠️ Cache miss et pas de callback de recalcul pour ${conversationId}/${userId}`
+        `⚠️ Cache miss et pas de callback de recalcul pour ${conversationId}/${userId}`,
       );
       return 0;
     } catch (error) {
@@ -207,11 +207,11 @@ class UnreadMessageManager {
 
         if (result.keys.length > 0) {
           const counts = await Promise.all(
-            result.keys.map((key) => this.redis.get(key))
+            result.keys.map((key) => this.redis.get(key)),
           );
           total += counts.reduce(
             (sum, count) => sum + (parseInt(count) || 0),
-            0
+            0,
           );
         }
       } while (cursor !== "0");
@@ -259,7 +259,7 @@ class UnreadMessageManager {
               result.keys.map(async (key) => {
                 const ttl = await this.redis.ttl(key);
                 return ttl <= 0 ? key : null;
-              })
+              }),
             );
 
             const keysToDelete = expired.filter(Boolean);

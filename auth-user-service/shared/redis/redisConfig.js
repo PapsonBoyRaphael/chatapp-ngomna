@@ -4,8 +4,6 @@
  * ✅ Permet aux services existants de continuer à fonctionner
  */
 
-const RedisFactory = require("./RedisFactory");
-
 class RedisConfig {
   constructor() {
     this.serviceName = "shared-legacy";

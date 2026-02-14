@@ -24,6 +24,11 @@ class DownloadFile {
     const file = await this.fileRepository.findById(fileId);
     if (!file) throw new Error("Fichier non trouvé");
 
+    // ✅ VÉRIFIER QUE LE FICHIER N'EST PAS SUPPRIMÉ
+    if (file.status === "DELETED" || file.isDeleted) {
+      throw new Error("Ce fichier a été supprimé et n'est plus disponible");
+    }
+
     // Vérifier les droits de téléchargement
     if (
       typeof file.canBeDownloadedBy === "function" &&

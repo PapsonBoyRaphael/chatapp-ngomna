@@ -15,9 +15,9 @@ class CachedMessageRepository {
     this.quickTTL = 60; // 1 minute pour quick load
     this.unreadTTL = 86400; // 24 heures
 
-    this.userUnreadPrefix = "unread:user";
-    this.conversationUnreadPrefix = "unread:conv";
-    this.cacheKeyPrefix = "msgs";
+    this.userUnreadPrefix = "chat:cache:unread:user";
+    this.conversationUnreadPrefix = "chat:cache:unread:conv";
+    this.cacheKeyPrefix = "chat:cache:msgs";
   }
 
   // ===== LIRE LES MESSAGES D'UNE CONVERSATION (CACHE INTELLIGENT) =====

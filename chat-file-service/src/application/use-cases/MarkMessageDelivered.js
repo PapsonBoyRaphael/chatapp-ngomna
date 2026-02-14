@@ -88,6 +88,42 @@ class MarkMessageDelivered {
         durationMs: Date.now() - start,
       });
 
+      // ✅ METTRE À JOUR LE STATUT DU DERNIER MESSAGE SI LE STATUS GLOBAL A CHANGÉ
+      // Uniquement si le message a atteint le statut DELIVERED (tous les destinataires ont reçu)
+      if (this.conversationRepository && result && result.modifiedCount > 0) {
+        try {
+          const updatedMessage = result.message;
+          const targetConvId = conversationId || updatedMessage?.conversationId;
+          const targetMsgId =
+            messageId || (messageIds && messageIds[messageIds.length - 1]);
+
+          // ✅ VÉRIFIER SI LE STATUT GLOBAL EST MAINTENANT DELIVERED
+          if (
+            targetConvId &&
+            targetMsgId &&
+            updatedMessage?.status === "DELIVERED"
+          ) {
+            await this.conversationRepository.updateLastMessageStatus(
+              targetConvId,
+              targetMsgId,
+              "DELIVERED",
+            );
+            console.log(
+              `✅ lastMessage.status mis à jour → DELIVERED (tous ont reçu)`,
+            );
+          } else {
+            console.log(
+              `ℹ️ lastMessage.status non mis à jour (${updatedMessage?.deliveredCount || 0}/${updatedMessage?.totalRecipients || 1} ont reçu)`,
+            );
+          }
+        } catch (lastMsgError) {
+          console.warn(
+            "⚠️ Erreur mise à jour lastMessage.status DELIVERED:",
+            lastMsgError.message,
+          );
+        }
+      }
+
       // ✅ PUBLIER DANS REDIS STREAMS - STATUT DELIVERED
       // L'accusé de réception est envoyé UNIQUEMENT à l'expéditeur du message
       if (this.resilientMessageService && result && result.modifiedCount > 0) {

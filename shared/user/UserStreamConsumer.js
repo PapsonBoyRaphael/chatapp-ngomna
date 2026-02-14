@@ -30,7 +30,7 @@ class UserStreamConsumer {
    * Initialise le consumer
    */
   async initialize() {
-    this.redis = RedisManager?.clients?.main;
+    this.redis = RedisManager?.clients?.stream;
 
     if (!this.redis) {
       console.warn("⚠️ [UserStreamConsumer] Redis non disponible");

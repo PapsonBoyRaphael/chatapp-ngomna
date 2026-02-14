@@ -44,20 +44,25 @@ class DeleteMessage {
         throw new Error("Seul l'expéditeur peut supprimer pour tout le monde");
       }
 
-      // Vérifier le délai (optionnel, ex: 5 minutes)
+      // Vérifier le délai (configurable via env, défaut: 48 heures)
+      const maxDeleteMinutes = parseInt(
+        process.env.MESSAGE_DELETE_TIMEOUT_MINUTES || "2880",
+      );
       const messageAge = Date.now() - new Date(message.createdAt).getTime();
-      const maxDeleteTime = 5 * 60 * 1000; // 5 minutes
+      const maxDeleteTime = maxDeleteMinutes * 60 * 1000;
       if (messageAge > maxDeleteTime) {
-        throw new Error("Délai de suppression dépassé (max 5 minutes)");
+        throw new Error(
+          `Délai de suppression dépassé (max ${maxDeleteMinutes} minutes)`,
+        );
       }
     }
 
     let result;
 
     if (deleteType === "FOR_EVERYONE") {
-      // Suppression pour tous : marquer comme supprimé
-      message.content = "Ce message a été supprimé";
+      // Suppression pour tous : marquer comme supprimé (contenu inchangé)
       message.isDeleted = true;
+      message.status = "DELETED";
       message.deletedAt = new Date();
       message.deletedBy = userId;
       message.deletedFor = "EVERYONE";

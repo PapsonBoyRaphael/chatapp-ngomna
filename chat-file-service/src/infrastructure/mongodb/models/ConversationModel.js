@@ -163,6 +163,11 @@ const lastMessageSchema = new Schema(
       type: String,
       default: null,
     },
+    status: {
+      type: String,
+      enum: ["SENDING", "SENT", "DELIVERED", "READ", "FAILED"],
+      default: "SENT",
+    },
     timestamp: {
       type: Date,
       required: true,
@@ -202,6 +207,11 @@ const conversationSchema = new Schema(
     ],
     createdBy: {
       type: String,
+      required: true,
+    },
+    totalRecipients: {
+      type: Number,
+      default: 1,
       required: true,
     },
     isActive: {
@@ -373,6 +383,7 @@ conversationSchema.methods.updateLastMessage = function (messageData) {
     type: messageData.type || "TEXT",
     senderId: messageData.senderId,
     senderName: messageData.senderName || null,
+    status: messageData.status || "SENT",
     timestamp: messageData.timestamp || new Date(),
   };
 
@@ -380,6 +391,19 @@ conversationSchema.methods.updateLastMessage = function (messageData) {
   this.metadata.stats.lastActivity = new Date();
   this.metadata.stats.totalMessages += 1;
   this.updatedAt = new Date();
+};
+
+/**
+ * ✅ METTRE À JOUR UNIQUEMENT LE STATUT DU DERNIER MESSAGE
+ * À appeler quand le statut du dernier message change (DELIVERED, READ)
+ */
+conversationSchema.methods.updateLastMessageStatus = function (newStatus) {
+  if (this.lastMessage && this.lastMessage._id) {
+    this.lastMessage.status = newStatus;
+    this.updatedAt = new Date();
+    return true;
+  }
+  return false;
 };
 
 conversationSchema.methods.getUserMetadata = function (userId) {

@@ -17,7 +17,7 @@ const RedisManager = require("../redis/RedisManager");
  */
 class UserCache {
   constructor(options = {}) {
-    this.prefix = options.prefix || "user-service:datastore:users:";
+    this.prefix = options.prefix || "user-service:cache:users:";
     this.defaultTTL = options.defaultTTL || 7 * 24 * 3600; // 7 jours
     this.redis = null;
   }

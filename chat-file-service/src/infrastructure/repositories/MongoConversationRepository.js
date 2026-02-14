@@ -39,8 +39,49 @@ class MongoConversationRepository {
       try {
         existingConversation = await Conversation.findById(cleanedData._id);
         if (existingConversation) {
-          console.log(`✅ Conversation existante trouvée: ${cleanedData._id}`);
-          return existingConversation;
+          console.log(
+            `✅ Conversation existante trouvée: ${cleanedData._id}, mise à jour...`,
+          );
+
+          // ✅ METTRE À JOUR LA CONVERSATION AU LIEU DE RETOURNER L'ANCIENNE VERSION
+          const { _id, __v, ...updateFields } = cleanedData;
+          const updatedConversation = await Conversation.findByIdAndUpdate(
+            cleanedData._id,
+            { $set: updateFields },
+            { new: true, runValidators: true },
+          );
+
+          if (!updatedConversation) {
+            throw new Error(
+              `Échec mise à jour conversation ${cleanedData._id}`,
+            );
+          }
+
+          console.log(`✅ Conversation mise à jour en base:`, {
+            id: updatedConversation._id,
+            participantsCount: updatedConversation.participants?.length,
+            unreadCountsKeys: Object.keys(
+              updatedConversation.unreadCounts || {},
+            ),
+          });
+
+          // ✅ KAFKA EVENT POUR MISE À JOUR
+          if (this.kafkaProducer) {
+            try {
+              await this._publishConversationEvent(
+                "CONVERSATION_UPDATED",
+                updatedConversation,
+                { processingTime: Date.now() - startTime },
+              );
+            } catch (kafkaError) {
+              console.warn(
+                "⚠️ Erreur publication Kafka update:",
+                kafkaError.message,
+              );
+            }
+          }
+
+          return updatedConversation;
         }
       } catch (findError) {
         console.log(
@@ -392,6 +433,7 @@ class MongoConversationRepository {
           content: messageData.content.substring(0, 100),
           type: messageData.type,
           senderId: messageData.senderId,
+          status: messageData.status || "SENT",
           timestamp: new Date(),
         },
         lastMessageAt: new Date(),
@@ -459,6 +501,69 @@ class MongoConversationRepository {
     } catch (error) {
       this.metrics.errors++;
       console.error(`❌ Erreur update last message ${conversationId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ METTRE À JOUR UNIQUEMENT LE STATUT DU DERNIER MESSAGE
+   * Utilisé quand un message est marqué DELIVERED ou READ
+   * @param {string} conversationId - ID de la conversation
+   * @param {string} messageId - ID du message (doit correspondre au lastMessage._id)
+   * @param {string} newStatus - Nouveau statut (DELIVERED, READ)
+   */
+  async updateLastMessageStatus(conversationId, messageId, newStatus) {
+    const startTime = Date.now();
+
+    try {
+      // ✅ VÉRIFIER QUE LE MESSAGE EST BIEN LE DERNIER MESSAGE
+      const conversation = await Conversation.findById(conversationId);
+
+      if (!conversation) {
+        console.warn(
+          `⚠️ Conversation ${conversationId} non trouvée pour updateLastMessageStatus`,
+        );
+        return null;
+      }
+
+      // ✅ VÉRIFIER SI LE MESSAGE EST LE DERNIER MESSAGE
+      const lastMsgId = conversation.lastMessage?._id?.toString();
+      const targetMsgId =
+        typeof messageId === "string" ? messageId : messageId?.toString();
+
+      if (lastMsgId !== targetMsgId) {
+        console.log(
+          `ℹ️ Message ${targetMsgId} n'est pas le dernier message (${lastMsgId}), pas de mise à jour lastMessage.status`,
+        );
+        return null;
+      }
+
+      // ✅ METTRE À JOUR LE STATUT DU DERNIER MESSAGE
+      this.metrics.dbQueries++;
+      const updatedConversation = await Conversation.findByIdAndUpdate(
+        conversationId,
+        {
+          $set: {
+            "lastMessage.status": newStatus,
+            updatedAt: new Date(),
+          },
+        },
+        { new: true },
+      );
+
+      const processingTime = Date.now() - startTime;
+
+      console.log(
+        `✅ lastMessage.status mis à jour: ${conversationId} → ${newStatus} (${processingTime}ms)`,
+      );
+
+      return updatedConversation;
+    } catch (error) {
+      this.metrics.errors++;
+      console.error(
+        `❌ Erreur updateLastMessageStatus ${conversationId}:`,
+        error,
+      );
       throw error;
     }
   }
