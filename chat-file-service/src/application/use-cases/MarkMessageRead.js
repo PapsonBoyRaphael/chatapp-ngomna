@@ -75,31 +75,55 @@ class MarkMessageRead {
       });
 
       // ✅ METTRE À JOUR LE STATUT DU DERNIER MESSAGE SI LE STATUS GLOBAL A CHANGÉ
-      // Uniquement si le message a atteint le statut READ (tous les destinataires ont lu)
       if (this.conversationRepository && result && result.modifiedCount > 0) {
         try {
-          const updatedMessage = result.message;
-          const targetConvId = conversationId || updatedMessage?.conversationId;
-          const targetMsgId =
-            messageId || (messageIds && messageIds[messageIds.length - 1]);
+          const targetConvId = conversationId || result.message?.conversationId;
 
-          // ✅ VÉRIFIER SI LE STATUT GLOBAL EST MAINTENANT READ
-          if (
-            targetConvId &&
-            targetMsgId &&
-            updatedMessage?.status === "READ"
-          ) {
+          if (targetConvId && messageId && result.message?.status === "READ") {
+            // ✅ CAS SINGLE : result.message disponible avec le statut mis à jour
             await this.conversationRepository.updateLastMessageStatus(
               targetConvId,
-              targetMsgId,
+              messageId,
               "READ",
             );
             console.log(
-              `✅ lastMessage.status mis à jour → READ (tous ont lu)`,
+              `✅ lastMessage.status mis à jour → READ (single, tous ont lu)`,
             );
-          } else {
+          } else if (targetConvId && messageIds && messageIds.length > 0) {
+            // ✅ CAS BATCH : result.message N'EST PAS disponible (updateMessageStatus ne le retourne pas)
+            // Récupérer la conversation pour vérifier si son lastMessage est dans le batch
+            const conversation =
+              await this.conversationRepository.findById(targetConvId);
+            const lastMsgId = conversation?.lastMessage?._id?.toString();
+
+            if (
+              lastMsgId &&
+              messageIds.some((id) => id.toString() === lastMsgId)
+            ) {
+              // Le lastMessage de la conversation est dans le batch marqué READ
+              const lastMsg = await this.messageRepository.findById(lastMsgId);
+              if (lastMsg && lastMsg.status === "READ") {
+                await this.conversationRepository.updateLastMessageStatus(
+                  targetConvId,
+                  lastMsgId,
+                  "READ",
+                );
+                console.log(
+                  `✅ lastMessage.status mis à jour → READ (batch, message ${lastMsgId})`,
+                );
+              } else {
+                console.log(
+                  `ℹ️ lastMessage.status non mis à jour (${lastMsg?.readCount || 0}/${lastMsg?.totalRecipients || 1} ont lu)`,
+                );
+              }
+            } else {
+              console.log(
+                `ℹ️ lastMessage (${lastMsgId}) pas dans le batch de ${messageIds.length} messages`,
+              );
+            }
+          } else if (!targetConvId) {
             console.log(
-              `ℹ️ lastMessage.status non mis à jour (${updatedMessage?.readCount || 0}/${updatedMessage?.totalRecipients || 1} ont lu)`,
+              `ℹ️ lastMessage.status non mis à jour: conversationId indisponible`,
             );
           }
         } catch (lastMsgError) {
@@ -110,23 +134,27 @@ class MarkMessageRead {
         }
       }
 
-      // ✅ RÉINITIALISER LE COMPTEUR userMetadata.unreadCount DANS MONGODB
+      // ✅ DÉCRÉMENTER LE COMPTEUR userMetadata.unreadCount DANS MONGODB
       if (result && result.modifiedCount > 0 && this.conversationRepository) {
         try {
           const targetConvId = conversationId || result.message?.conversationId;
           if (targetConvId) {
-            await this.conversationRepository.resetUnreadCountInUserMetadata(
+            const readCount = result.modifiedCount || 1;
+            await this.conversationRepository.decrementUnreadCountInUserMetadata(
               targetConvId,
               userId,
+              readCount,
             );
-            console.log(`✅ Compteur userMetadata réinitialisé pour ${userId}`);
+            console.log(
+              `✅ Compteur userMetadata décrémenté de ${readCount} pour ${userId}`,
+            );
           }
-        } catch (resetError) {
+        } catch (decrementError) {
           console.error(
-            `❌ Erreur réinitialisation compteur userMetadata:`,
-            resetError.message,
+            `❌ Erreur décrémentation compteur userMetadata:`,
+            decrementError.message,
           );
-          // Ne pas faire échouer la mise à jour du statut si la réinitialisation échoue
+          // Ne pas faire échouer la mise à jour du statut si la décrémentation échoue
         }
       }
 

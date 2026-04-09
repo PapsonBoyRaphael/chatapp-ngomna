@@ -44,6 +44,7 @@ const MediaProcessingService = require("./infrastructure/services/MediaProcessin
 const ResilientMessageService = require("./infrastructure/services/ResilientMessageService");
 const UserCacheService = require("./infrastructure/services/UserCacheService");
 const SmartCachePrewarmer = require("./infrastructure/services/SmartCachePrewarmer");
+const ChunkedUploadService = require("./infrastructure/services/ChunkedUploadService");
 
 // Repositories - Cached
 const CachedMessageRepository = require("./infrastructure/repositories/CachedMessageRepository");
@@ -67,6 +68,7 @@ const GetMessageById = require("./application/use-cases/GetMessageById");
 const UpdateMessageContent = require("./application/use-cases/UpdateMessageContent");
 const DownloadFile = require("./application/use-cases/DownloadFile");
 const CreateGroup = require("./application/use-cases/CreateGroup");
+const AddAdmin = require("./application/use-cases/AddAdmin");
 const CreateBroadcast = require("./application/use-cases/CreateBroadcast");
 const MarkMessageDelivered = require("./application/use-cases/MarkMessageDelivered");
 const MarkMessageRead = require("./application/use-cases/MarkMessageRead");
@@ -75,11 +77,17 @@ const RemoveParticipant = require("./application/use-cases/RemoveParticipant");
 const LeaveConversation = require("./application/use-cases/LeaveConversation");
 const DeleteMessage = require("./application/use-cases/DeleteMessage");
 const DeleteFile = require("./application/use-cases/DeleteFile");
+const ForwardMessage = require("./application/use-cases/ForwardMessage");
+const ReplyMessage = require("./application/use-cases/ReplyMessage");
+const SearchOccurrences = require("./application/use-cases/SearchOccurrences");
+const AddReaction = require("./application/use-cases/AddReaction");
+const RemoveReaction = require("./application/use-cases/RemoveReaction");
 
 // Controllers
 const FileController = require("./application/controllers/FileController");
 const MessageController = require("./application/controllers/MessageController");
 const ConversationController = require("./application/controllers/ConversationController");
+const GroupController = require("./application/controllers/GroupController");
 const HealthController = require("./application/controllers/HealthController");
 
 // Repositories - Mongo
@@ -304,6 +312,13 @@ const startServer = async () => {
     // Initialiser le service de traitement multimédia
     const thumbnailService = new ThumbnailService(fileStorageService);
 
+    // ✅ INITIALISER ChunkedUploadService (upload par morceaux > 100 MB)
+    const chunkedUploadService = new ChunkedUploadService(
+      redisClient,
+      fileStorageService,
+    );
+    console.log("✅ ChunkedUploadService initialisé");
+
     console.log("✅ Services de fichiers initialisés");
 
     // ===============================
@@ -350,6 +365,9 @@ const startServer = async () => {
           }
         },
       );
+
+      // ✅ CONFIGURER LE FALLBACK MongoDB POUR lastSeen
+      onlineUserManager.setConversationRepository(conversationRepository);
     }
 
     // ✅ INITIALISER TypingIndicatorService (après conversationRepository)
@@ -415,12 +433,20 @@ const startServer = async () => {
     // 7. INITIALISATION USE CASES
     // ===============================
 
+    // ✅ INITIALISER getFileUseCase EN PREMIER (requis par SendMessage)
+    const getFileUseCase = new GetFile(
+      fileRepository, // Cached
+      cacheServiceInstance,
+    );
+
     // ✅ PASSER resilientService À SendMessage
     const sendMessageUseCase = new SendMessage(
       messageRepository, // Cached
       conversationRepository, // Cached
       cacheServiceInstance,
       resilientMessageService, // ← NOUVEAU
+      null, // userCacheService
+      getFileUseCase, // ✅ AJOUT DE getFileUseCase
     );
 
     const getMessagesUseCase = new GetMessages(
@@ -457,11 +483,6 @@ const startServer = async () => {
       fileRepository, // Cached
       null, // kafkaProducer
       resilientMessageService, // ✅ AJOUTÉ pour publication events:files
-    );
-
-    const getFileUseCase = new GetFile(
-      fileRepository, // Cached
-      cacheServiceInstance,
     );
 
     const getConversationIdsUseCase = new GetConversationIds(
@@ -522,6 +543,11 @@ const startServer = async () => {
       userCacheService,
     );
 
+    const addAdminUseCase = new AddAdmin(
+      conversationRepository,
+      resilientMessageService,
+    );
+
     // ✅ NOUVEAUX USE CASES - Suppression
     const deleteMessageUseCase = new DeleteMessage(
       messageRepository,
@@ -533,6 +559,33 @@ const startServer = async () => {
     const deleteFileUseCase = new DeleteFile(
       fileRepository,
       null, // kafkaProducer
+      resilientMessageService,
+    );
+
+    const forwardMessageUseCase = new ForwardMessage(
+      messageRepository,
+      sendMessageUseCase,
+    );
+
+    const replyMessageUseCase = new ReplyMessage(
+      messageRepository,
+      sendMessageUseCase,
+    );
+
+    const searchOccurrencesUseCase = new SearchOccurrences({
+      fileRepository,
+      conversationRepository,
+      messageRepository,
+    });
+
+    // ✅ NOUVEAUX USE CASES - Réactions
+    const addReactionUseCase = new AddReaction(
+      messageRepository,
+      resilientMessageService,
+    );
+
+    const removeReactionUseCase = new RemoveReaction(
+      messageRepository,
       resilientMessageService,
     );
 
@@ -561,6 +614,8 @@ const startServer = async () => {
       fileStorageService,
       downloadFileUseCase,
       mediaProcessingService,
+      null, // searchOccurrencesUseCase
+      chunkedUploadService, // ✅ Upload chunké > 100 MB
     );
 
     const messageController = new MessageController(
@@ -574,7 +629,19 @@ const startServer = async () => {
       getConversationsUseCase,
       getConversationUseCase,
       redisClient,
+      null, // cacheService
+      searchOccurrencesUseCase,
     );
+
+    const groupController = new GroupController({
+      createGroupUseCase,
+      getConversationUseCase,
+      addParticipantUseCase,
+      removeParticipantUseCase,
+      leaveConversationUseCase,
+      addAdminUseCase,
+      searchOccurrencesUseCase,
+    });
 
     const healthController = new HealthController(redisClient);
 
@@ -590,7 +657,7 @@ const startServer = async () => {
     // ✅ AJOUTER LA ROUTE CONVERSATIONS
     app.use("/conversations", createConversationRoutes(conversationController));
     app.use("/health", createHealthRoutes(healthController));
-    app.use("/groups", createGroupRoutes(createGroupUseCase));
+    app.use("/groups", createGroupRoutes(groupController));
     app.use("/broadcasts", createBroadcastRoutes(createBroadcastUseCase));
 
     // ===============================
@@ -599,6 +666,12 @@ const startServer = async () => {
     console.log("🔌 Configuration du gestionnaire WebSocket...");
 
     // ✅ CRÉER LE CHATHANDLER SANS UserConsumerManager
+    const UpdateCallStatus = require("./application/use-cases/UpdateCallStatus");
+    const updateCallStatusUseCase = new UpdateCallStatus(
+      messageRepository,
+      resilientMessageService,
+    );
+
     const chatHandler = new ChatHandler(
       io,
       sendMessageUseCase,
@@ -623,6 +696,11 @@ const startServer = async () => {
       leaveConversationUseCase,
       deleteMessageUseCase,
       deleteFileUseCase,
+      updateCallStatusUseCase,
+      forwardMessageUseCase,
+      addReactionUseCase,
+      removeReactionUseCase,
+      replyMessageUseCase,
     );
 
     // ✅ CONFIGURER LES GESTIONNAIRES D'ÉVÉNEMENTS SOCKET.IO

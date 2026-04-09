@@ -45,7 +45,7 @@ class ThumbnailService {
           await this.fileStorageService.uploadFromBuffer(
             thumbnailBuffer,
             `thumbnails/${thumbnailFileName}`,
-            "image/webp"
+            "image/webp",
           );
 
         thumbnails.push({
@@ -59,7 +59,7 @@ class ThumbnailService {
       }
 
       console.log(
-        `✅ ${thumbnails.length} thumbnails générés pour ${originalFileName}`
+        `✅ ${thumbnails.length} thumbnails générés pour ${originalFileName}`,
       );
       this.metrics.generated += thumbnails.length;
       return thumbnails;
@@ -67,7 +67,7 @@ class ThumbnailService {
       this.metrics.errors++;
       console.error(
         `❌ Erreur génération thumbnails pour ${originalFileName}:`,
-        error
+        error,
       );
       throw error;
     }
@@ -76,10 +76,14 @@ class ThumbnailService {
   generateThumbnailUrl(remotePath) {
     const config = require("../../config/envValidator");
 
+    // ✅ Conserver le chemin complet (ex: "thumbnails/thumb_medium_xxx.webp")
+    // Supprimer uniquement le préfixe bucket s'il est présent
+    const objectKey = remotePath.startsWith(`${config.s3Bucket}/`)
+      ? remotePath.substring(config.s3Bucket.length + 1)
+      : remotePath;
+
     if (config.env === "development") {
-      return `${config.s3Endpoint}/${config.s3Bucket}/${path.basename(
-        remotePath
-      )}`;
+      return `${config.s3Endpoint}/${config.s3Bucket}/${objectKey}`;
     } else {
       return `/api/files/thumbnail/${path.basename(remotePath)}`;
     }
@@ -101,7 +105,7 @@ class ThumbnailService {
       await fs.ensureDir(tempDir);
       const tempFilePath = path.join(
         tempDir,
-        `temp_${Date.now()}_${Math.random().toString(36).substring(7)}.tmp`
+        `temp_${Date.now()}_${Math.random().toString(36).substring(7)}.tmp`,
       );
       await fs.writeFile(tempFilePath, buffer);
 

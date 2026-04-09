@@ -4,6 +4,7 @@
 
 - [Architecture](#architecture)
 - [SendMessage](#sendmessage)
+- [ForwardMessage](#forwardmessage)
 - [GetConversations](#getconversations)
 - [CreateGroup](#creategroup)
 - [CreateBroadcast](#createbroadcast)
@@ -52,7 +53,7 @@ constructor(
   conversationRepository,
   messageRepository,
   userCacheService,
-  (resilientMessageService = null)
+  (resilientMessageService = null),
 );
 ```
 
@@ -162,7 +163,84 @@ const result = await sendMessage.execute({
 
 ---
 
-## 📋 GetConversations
+## � ForwardMessage
+
+### Description
+
+Transfère un message existant vers une ou plusieurs conversations (max 10). Délègue l'envoi à `SendMessage` pour chaque conversation cible, ce qui garantit le même flux standard (save, WAL, Redis Stream, MDS, `unreadCount`). Chaque message créé porte les champs `isForwarded: true`, `forwardedFrom` (ObjectId du message source) et `originalSenderId`.
+
+### Localisation
+
+`src/application/use-cases/ForwardMessage.js`
+
+### Constructeur
+
+```javascript
+new ForwardMessage(
+  messageRepository, // CachedMessageRepository
+  sendMessageUseCase, // SendMessage (use case)
+);
+```
+
+### Méthode `execute()`
+
+```javascript
+const result = await forwardMessageUseCase.execute({
+  originalMessageId, // string: ID du message à transférer (requis)
+  targetConversationIds, // string | string[]: conversation(s) cible(s) (requis, max 10)
+  senderId, // string: ID de l'utilisateur qui transfère (requis)
+  senderSocketId, // string: Socket ID (optionnel, pour exclusion MDS)
+});
+```
+
+### Résultat
+
+```javascript
+{
+  success: true,
+  forwarded: [{
+    messageId,           // ObjectId du nouveau message
+    conversationId,      // ObjectId de la conversation cible
+    conversationType,    // "PRIVATE" | "GROUP" | "BROADCAST" | "CHANNEL"
+    content,             // Contenu copié
+    type,                // Type copié (TEXT, IMAGE, etc.)
+    isForwarded: true,
+    originalMessageId,   // ObjectId du message source
+    originalSenderId,    // ID de l'expéditeur original
+    timestamp,           // Date de création
+  }],
+  errors: [],            // erreurs par conversation (si partiellement échoué)
+  originalMessageId,
+  count: 1,              // nombre de messages transférés avec succès
+  duration: 42,          // durée en ms
+}
+```
+
+### Flux interne
+
+```
+1. Valider les paramètres (originalMessageId, targetConversationIds, senderId)
+2. Récupérer le message original (vérifier qu'il existe et n'est pas supprimé)
+3. Extraire le fileId des métadonnées fichier (si applicable)
+4. Pour chaque conversation cible :
+   → Appeler SendMessage.execute() avec contenu/type/fileId copiés
+     + champs forward (isForwarded, forwardedFrom, originalSenderId)
+   → SendMessage gère tout : validation, save, WAL, stream, updateLastMessage, unreadCount
+5. Agréger les résultats (succès/erreurs par conversation)
+```
+
+### Gestion des erreurs
+
+| Erreur                                         | Cause                               | Solution                          |
+| ---------------------------------------------- | ----------------------------------- | --------------------------------- |
+| `Message original introuvable`                 | ID invalide                         | Vérifier l'ObjectId               |
+| `Impossible de transférer un message supprimé` | Message `isDeleted: true`           | Choisir un autre message          |
+| `L'utilisateur n'est pas participant`          | Non membre de la conversation cible | Rejoindre la conversation d'abord |
+| `Maximum 10 conversations cibles`              | Trop de cibles                      | Diviser en plusieurs appels       |
+
+---
+
+## �📋 GetConversations
 
 ### Description
 
@@ -214,7 +292,7 @@ categorized: {
 // 2. Tous les participants ont un département
 // 3. Tous les participants ont LE MÊME département que l'utilisateur
 const isDepartement = conversation.userMetadata.every(
-  (meta) => meta.departement && meta.departement === userDepartement
+  (meta) => meta.departement && meta.departement === userDepartement,
 );
 ```
 
@@ -225,7 +303,7 @@ Le nom de l'expéditeur du dernier message est enrichi depuis userMetadata :
 ```javascript
 if (lastMessage && lastMessage.senderId) {
   const senderMeta = conversation.userMetadata?.find(
-    (meta) => meta.userId === lastMessage.senderId
+    (meta) => meta.userId === lastMessage.senderId,
   );
   if (senderMeta && senderMeta.name) {
     lastMessage.senderName = senderMeta.name;
@@ -348,7 +426,7 @@ Crée un groupe de discussion avec enrichissement automatique des profils utilis
 constructor(
   conversationRepository,
   userCacheService,
-  (resilientMessageService = null)
+  (resilientMessageService = null),
 );
 ```
 
@@ -451,7 +529,7 @@ Crée une liste de diffusion avec distinction admin/destinataires et enrichissem
 constructor(
   conversationRepository,
   userCacheService,
-  (resilientMessageService = null)
+  (resilientMessageService = null),
 );
 ```
 
@@ -820,6 +898,6 @@ sudo systemctl restart redis
 
 ---
 
-**Dernière mise à jour** : 8 janvier 2026
-**Version** : 1.0.0
+**Dernière mise à jour** : 7 avril 2026
+**Version** : 1.1.0
 **Auteur** : Équipe ChatApp NGOMNA

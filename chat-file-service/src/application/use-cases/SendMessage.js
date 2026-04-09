@@ -7,13 +7,14 @@ class SendMessage {
     cacheService = null,
     resilientService = null,
     userCacheService = null,
+    getFileUseCase = null, // ✅ AJOUT
   ) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
     this.cacheService = cacheService;
     this.resilientService = resilientService;
-    // ✅ Service intelligent avec Redis cache + fallback HTTP
     this.userCacheService = userCacheService || new UserCacheService();
+    this.getFileUseCase = getFileUseCase; // ✅ AJOUT
   }
 
   // ✅ MODIFIER LA MÉTHODE execute() - RETIRER KAFKA
@@ -24,62 +25,133 @@ class SendMessage {
       const {
         content,
         senderId,
-        conversationId = "",
+        senderSocketId = null,
+        conversationId = null,
         type = "TEXT",
         receiverId = null,
         conversationName = null,
-        duration = null,
         fileId = null,
-        fileName = null,
-        fileUrl = null,
-        fileSize = null,
-        mimeType = null,
+        callMetadata = null,
+        // ✅ CHAMP DE RÉPONSE (optionnel, fourni par replyToMessage)
+        replyTo = null,
+        // ✅ CHAMPS DE TRANSFERT (optionnels, fournis par ForwardMessage)
+        isForwarded = false,
+        forwardedFrom = null,
+        originalSenderId = null,
       } = messageData;
 
-      if (!content || !senderId) {
+      // ✅ Pour les appels, le contenu est auto-généré si absent
+      const isCallType = type === "CALL" || type === "VIDEO_CALL";
+      const finalContent =
+        isCallType && !content
+          ? type === "CALL"
+            ? "📞 Appel audio"
+            : "📹 Appel vidéo"
+          : content;
+
+      if (!finalContent || !senderId) {
         throw new Error("Données de message incomplètes");
+      }
+
+      // ✅ RÉCUPÉRER LES INFOS DU FICHIER SI fileId EST FOURNI
+      let fileMetadata = null;
+      if (fileId && this.getFileUseCase) {
+        try {
+          console.log(`📎 Récupération métadonnées fichier: ${fileId}`);
+          const file = await this.getFileUseCase.execute(fileId, senderId);
+
+          if (file) {
+            // ✅ La durée est dans file.metadata.content.duration (audio/vidéo)
+            const fileDuration = file.metadata?.content?.duration || null;
+
+            fileMetadata = {
+              fileId: file._id,
+              fileName: file.originalName,
+              fileSize: file.size,
+              duration: fileDuration, // ✅ Correspond au schéma MessageModel
+              mimeType: file.mimeType, // ✅ Type MIME du fichier
+              url: file.url,
+              thumbnailUrl: file.metadata?.processing?.thumbnailUrl || null,
+              uploadedAt: file.createdAt,
+              status: file.status,
+            };
+            console.log(`✅ Métadonnées fichier récupérées:`, fileMetadata);
+          }
+        } catch (fileError) {
+          // Bloquer l'envoi si le fichier est invalide/supprimé
+          console.error(`❌ Fichier invalide (${fileId}):`, fileError.message);
+          throw new Error(`Fichier invalide: ${fileError.message}`);
+        }
+      }
+
+      // ✅ CONSTRUIRE LES MÉTADONNÉES D'APPEL SI TYPE CALL/VIDEO_CALL
+      let callMeta = null;
+      if (isCallType && callMetadata) {
+        callMeta = {
+          callId: callMetadata.callId || null,
+          callType: type === "VIDEO_CALL" ? "VIDEO" : "AUDIO",
+          status: callMetadata.status || "INITIATED",
+          initiatorId: callMetadata.initiatorId || senderId,
+          receiverIds:
+            callMetadata.receiverIds ||
+            (receiverId
+              ? Array.isArray(receiverId)
+                ? receiverId
+                : [receiverId]
+              : []),
+          startedAt: callMetadata.startedAt || null,
+          endedAt: callMetadata.endedAt || null,
+          duration: callMetadata.duration || 0,
+          endReason: callMetadata.endReason || null,
+        };
+        console.log(`📞 Métadonnées appel construites:`, callMeta);
       }
 
       console.log(`💬 Traitement message: ${senderId} → ${conversationId}`, {
         hasReceiverId: !!receiverId,
-        contentLength: content.length,
+        contentLength: finalContent.length,
         type,
         fileId,
-        fileName,
-        duration,
+        isCall: isCallType,
       });
-
-      if (conversationId === null) {
-        conversationId = "";
-      }
 
       // ✅ CRÉER/VÉRIFIER LA CONVERSATION
       let conversation = null;
 
-      try {
-        console.log(`🔍 Recherche conversation: ${conversationId}`);
-        conversation =
-          await this.conversationRepository.findById(conversationId);
+      if (conversationId) {
+        try {
+          console.log(`🔍 Recherche conversation: ${conversationId}`);
+          conversation =
+            await this.conversationRepository.findById(conversationId);
 
-        if (conversation && conversation._id) {
-          console.log(`✅ Conversation trouvée: ${conversationId}`);
+          if (conversation && conversation._id) {
+            console.log(`✅ Conversation trouvée: ${conversationId}`);
 
-          // Vérifier que l'expéditeur est participant
-          if (!conversation.participants.includes(senderId)) {
-            throw new Error(
-              `L'utilisateur ${senderId} n'est pas participant de cette conversation`,
-            );
+            // Vérifier que l'expéditeur est participant
+            if (!conversation.participants.includes(senderId)) {
+              throw new Error(
+                `L'utilisateur ${senderId} n'est pas participant de cette conversation`,
+              );
+            }
+
+            if (conversation.type === "CHANNEL") {
+              if (!conversation.settings.broadcastAdmins.includes(senderId)) {
+                throw new Error(
+                  `L'utilisateur ${senderId} n'est pas autorisé à envoyer des messages dans ce canal`,
+                );
+              }
+            }
+          } else {
+            console.log(`⚠️ Conversation ${conversationId} introuvable`);
+            conversation = null;
           }
-        } else {
-          console.log(`⚠️ Conversation ${conversationId} introuvable`);
+        } catch (findError) {
+          console.log(
+            `⚠️ Erreur lors de la recherche conversation ${conversationId}:`,
+            findError.message,
+          );
           conversation = null;
         }
-      } catch (findError) {
-        console.log(
-          `⚠️ Erreur lors de la recherche conversation ${conversationId}:`,
-          findError.message,
-        );
-        conversation = null;
       }
 
       // ✅ CRÉER LA CONVERSATION SI ELLE N'EXISTE PAS
@@ -120,6 +192,7 @@ class SendMessage {
                   {
                     event: "conversation.created",
                     conversationId: conversation._id.toString(),
+                    conversation: conversation,
                     type: "PRIVATE",
                     createdBy: senderId,
                     participants: JSON.stringify(conversation.participants),
@@ -217,27 +290,43 @@ class SendMessage {
             ) ||
             null,
         ),
-        content,
+        content: finalContent,
         type,
         status: "SENT",
-        // ✅ COMPTEURS POUR GROUPES ET BROADCASTS
         totalRecipients,
         deliveredCount: 0,
         readCount: 0,
         deliveredBy: [],
         readBy: [],
-        ...(fileId && { fileId }),
-        ...(fileName && { fileName }),
-        ...(fileUrl && { fileUrl }),
-        ...(fileSize && { fileSize }),
-        ...(mimeType && { mimeType }),
-        ...(duration && { duration }),
         timestamp: new Date(),
+        // ✅ CHAMP DE RÉPONSE (optionnel)
+        ...(replyTo ? { replyTo } : {}),
+        // ✅ CHAMPS DE TRANSFERT (optionnels)
+        ...(isForwarded
+          ? {
+              isForwarded: true,
+              forwardedFrom: forwardedFrom,
+              originalSenderId: originalSenderId,
+            }
+          : {}),
         metadata: {
           conversationName,
           technical: {
-            source: "SendMessage-UseCase",
+            source: isForwarded
+              ? "ForwardMessage-UseCase"
+              : "SendMessage-UseCase",
             clientTimestamp: messageData.timestamp || new Date().toISOString(),
+            ...(isForwarded
+              ? {
+                  forwardedAt: new Date().toISOString(),
+                  originalMessageId: forwardedFrom,
+                }
+              : {}),
+          },
+          // ✅ MÉTADONNÉES CONTENU (fichier et/ou appel)
+          contentMetadata: {
+            file: fileMetadata ? fileMetadata : null,
+            call: callMeta ? callMeta : null,
           },
         },
       };
@@ -248,6 +337,7 @@ class SendMessage {
         contentLength: message.content.length,
         type: message.type,
         hasMetadata: !!message.metadata,
+        hasCallMeta: !!callMeta,
       });
 
       // ✅ ÉTAPE 1 : LOG PRE-WRITE (Write-Ahead Logging)
@@ -263,22 +353,6 @@ class SendMessage {
           savedMessage = await this.resilientService.circuitBreaker.execute(
             () => this.messageRepository.save(message),
           );
-
-          // ✅ PUBLIER DANS LE STREAM REDIS AVEC DONNÉES COMPLÈTES
-          if (savedMessage && conversation) {
-            await this.resilientService.publishToMessageStream(savedMessage, {
-              event: "NEW_MESSAGE",
-              source: "SendMessage-UseCase",
-              conversationParticipants: conversation.participants, // ✅ AJOUTER LES PARTICIPANTS
-            });
-
-            // ✅ ATTENDRE 50ms pour donner du temps au consumer de traiter l'événement conversationCreated
-            // avant le message, puisque les deux streams sont maintenant consommés à priorité égale
-            await new Promise((resolve) => setTimeout(resolve, 50));
-            console.log(
-              `⏱️ Délai de 50ms appliqué après publication du message`,
-            );
-          }
         } else {
           savedMessage = await this.messageRepository.save(message);
         }
@@ -325,9 +399,11 @@ class SendMessage {
         await this.resilientService.logPostWrite(savedMessage._id, walId);
       }
 
-      // ✅ ÉTAPE 4 : METTRE À JOUR LA CONVERSATION
+      // ✅ ÉTAPE 4 : METTRE À JOUR lastMessage AVANT la publication Redis
+      // Cela évite la race condition où MarkMessageDelivered essaie de
+      // mettre à jour lastMessage.status avant que lastMessage._id soit à jour
       try {
-        await this.conversationRepository.updateLastMessage(conversationId, {
+        await this.conversationRepository.updateLastMessage(conversation._id, {
           _id: savedMessage._id || savedMessage.id,
           content: message.content,
           type: message.type,
@@ -336,7 +412,7 @@ class SendMessage {
           messageId: savedMessage._id || savedMessage.id,
           fileId: message.fileId,
         });
-        console.log(`🔄 Conversation mise à jour: ${conversationId}`);
+        console.log(`🔄 Conversation mise à jour: ${conversation._id}`);
       } catch (updateError) {
         console.warn(
           "⚠️ Erreur mise à jour conversation:",
@@ -345,7 +421,28 @@ class SendMessage {
         // ✅ NE PAS FAIRE ÉCHOUER LE MESSAGE SI LA MISE À JOUR ÉCHOUE
       }
 
-      // ✅ RETOURNER LE RÉSULTAT (SANS KAFKA)
+      // ✅ ÉTAPE 5 : PUBLIER DANS LE STREAM REDIS (APRÈS updateLastMessage)
+      // Le consumer pourra désormais mettre à jour lastMessage.status correctement
+      if (this.resilientService && savedMessage && conversation) {
+        // ✅ Publication non-bloquante pour l'ACK
+        this.resilientService
+          .publishToMessageStream(savedMessage, {
+            event: "NEW_MESSAGE",
+            source: "SendMessage-UseCase",
+            conversationParticipants: conversation.participants,
+            senderSocketId,
+          })
+          .catch((err) => {
+            console.error(
+              `❌ Erreur publication stream (non-bloquant):`,
+              err.message,
+            );
+          });
+      }
+
+      // ✅ CONSTRUIRE LE RÉSULTAT IMMÉDIATEMENT (ACK RAPIDE)
+      const messageTimestamp =
+        savedMessage.createdAt || savedMessage.timestamp || message.timestamp;
       const result = {
         success: true,
         message: {
@@ -355,8 +452,16 @@ class SendMessage {
           conversationId: savedMessage.conversationId,
           type: savedMessage.type,
           status: savedMessage.status,
-          timestamp: savedMessage.timestamp,
+          timestamp: messageTimestamp,
           createdAt: savedMessage.createdAt,
+          // ✅ Inclure les métadonnées d'appel si présentes
+          ...(callMeta ? { callMetadata: callMeta } : {}),
+          // ✅ Inclure replyTo si présent
+          ...(replyTo ? { replyTo } : {}),
+          // ✅ Inclure les champs de transfert si présents
+          ...(isForwarded
+            ? { isForwarded: true, forwardedFrom, originalSenderId }
+            : {}),
         },
         conversation: {
           id: conversation._id || conversation.id,
@@ -368,21 +473,26 @@ class SendMessage {
 
       console.log(`✅ Message traité avec succès: ${result.message.id}`);
 
-      // Après la sauvegarde du message, incrémenter les compteurs non-lus
+      // ✅ ÉTAPE 6 : Incrémenter les compteurs non-lus (NON-BLOQUANT)
+      // Fire-and-forget pour ne pas retarder l'ACK
       const otherParticipants = conversation.participants.filter(
         (p) => p !== messageData.senderId,
       );
 
-      // Incrémenter le compteur pour chaque participant sauf l'expéditeur
-      const updatePromises = otherParticipants.map((participantId) =>
-        this.conversationRepository.incrementUnreadCountInUserMetadata(
-          conversation._id || conversation.id,
-          participantId,
-          1,
+      Promise.all(
+        otherParticipants.map((participantId) =>
+          this.conversationRepository.incrementUnreadCountInUserMetadata(
+            conversation._id || conversation.id,
+            participantId,
+            1,
+          ),
         ),
-      );
-
-      await Promise.all(updatePromises);
+      ).catch((err) => {
+        console.error(
+          `❌ Erreur incrémentation compteurs non-lus (non-bloquant):`,
+          err.message,
+        );
+      });
 
       return result;
     } catch (error) {
@@ -470,7 +580,6 @@ class SendMessage {
       });
 
       const conversationData = {
-        _id: conversationId,
         name: conversationName || `Conversation ${senderId} - ${receiverId}`,
         type,
         participants,
@@ -486,6 +595,11 @@ class SendMessage {
           autoDeleteAfter: 0,
         },
       };
+
+      // ✅ conversationId optionnel: si présent, on le conserve pour l'idempotence
+      if (conversationId) {
+        conversationData._id = conversationId;
+      }
 
       // Validation
       this.validateConversationData(conversationData);

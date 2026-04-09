@@ -863,6 +863,7 @@ class ResilientMessageService {
         messageId: savedMessage._id?.toString() || savedMessage.id,
         conversationId: conversationId || "",
         senderId: senderId || "",
+        senderSocketId: options.senderSocketId || "",
         receiverId: receiverId || [],
         content: (savedMessage.content || "").substring(0, 500),
         type: savedMessage.type || "TEXT",
@@ -873,6 +874,19 @@ class ResilientMessageService {
         )?.toISOString(),
         source: options.source || "mongodb_write",
         publishedAt: Date.now().toString(),
+        // ✅ CHAMPS REPLY / FORWARD pour que MDS puisse les relayer dans newMessage
+        ...(savedMessage.replyTo
+          ? { replyTo: savedMessage.replyTo.toString() }
+          : {}),
+        ...(savedMessage.isForwarded
+          ? {
+              isForwarded: "true",
+              forwardedFrom: (savedMessage.forwardedFrom || "").toString(),
+              originalSenderId: (
+                savedMessage.originalSenderId || ""
+              ).toString(),
+            }
+          : {}),
       };
 
       // ✅ DÉTERMINER LE STREAM DE DESTINATION
@@ -959,6 +973,8 @@ class ResilientMessageService {
     timestamp = null,
     conversationParticipants = null,
     messageContent = null, // ✅ NOUVEAU: contenu du message (pour EDITED)
+    senderSocketId = null, // ✅ NOUVEAU: socket.id de l'émetteur pour exclusion MDS
+    metadata = null, // ✅ NOUVEAU: données supplémentaires (deleteType, etc.)
   ) {
     if (!this.redis) {
       console.log(`❌ publishMessageStatus: Redis non disponible`);
@@ -1054,11 +1070,21 @@ class ResilientMessageService {
         participants: conversationParticipants
           ? JSON.stringify(conversationParticipants)
           : "[]",
+        senderSocketId: senderSocketId || "", // ✅ Propager pour exclusion côté MDS
       };
 
       // ✅ AJOUTER LE CONTENU SI C'EST UN EDITED
       if (messageContent) {
         eventData.messageContent = messageContent.substring(0, 1000);
+      }
+
+      // ✅ AJOUTER DES MÉTADONNÉES SUPPLÉMENTAIRES (deleteType, etc.)
+      if (metadata && typeof metadata === "object") {
+        for (const [key, value] of Object.entries(metadata)) {
+          if (value !== null && value !== undefined) {
+            eventData[key] = String(value);
+          }
+        }
       }
 
       console.log(`📊 Event data:`, {
@@ -1097,6 +1123,36 @@ class ResilientMessageService {
           `✅ [ONLINE] Utilisateur ${userIdStr} connecté → publication immédiate dans ${streamType}`,
         );
         try {
+          // ✅ FIX: LIVRAISON DIRECTE via Socket.IO en plus du stream
+          // Le stream consumer peut rater des événements en burst (26+ simultanés)
+          // → on livre directement via la queue sérialisée du MDS
+          if (
+            this.messageDeliveryService &&
+            this.messageDeliveryService.enqueueDirectStatusDelivery
+          ) {
+            const directEventData = {
+              messageId: eventData.messageId,
+              conversationId: eventData.conversationId,
+              userId: eventData.userId,
+              status: eventData.status,
+              participants: conversationParticipants || [],
+              timestamp: eventData.timestamp,
+              ...(eventData.messageContent
+                ? { newContent: eventData.messageContent }
+                : {}),
+              ...(eventData.deleteType
+                ? { deleteType: eventData.deleteType }
+                : {}),
+            };
+            this.messageDeliveryService.enqueueDirectStatusDelivery(
+              userIdStr,
+              directEventData,
+            );
+            console.log(
+              `📤 [DIRECT] Statut ${status} envoyé directement via queue sérialisée à ${userIdStr}`,
+            );
+          }
+
           const streamId = await this.addToStream(streamName, eventData);
           console.log(
             `✅ [PUBLISHED] Message status publié: ${streamId} (${status}) dans ${streamName}`,
@@ -1121,16 +1177,11 @@ class ResilientMessageService {
         console.log(`📤 Ajout à pending queue: ${pendingKey}`, { eventData });
 
         try {
-          const pendingId = await this.redis.xAdd(
-            pendingKey,
-            "*",
-            "event",
-            JSON.stringify(eventData),
-            "streamType",
-            streamType,
-            "addedAt",
-            new Date().toISOString(),
-          );
+          const pendingId = await this.redis.xAdd(pendingKey, "*", {
+            event: JSON.stringify(eventData),
+            streamType: streamType,
+            addedAt: new Date().toISOString(),
+          });
 
           console.log(
             `✅ [PENDING] Événement ${status} mis en attente pour ${userIdStr}: ${pendingId}`,
@@ -1169,6 +1220,8 @@ class ResilientMessageService {
     messageId,
     conversationId,
     conversationParticipants = null,
+    senderSocketId = null, // ✅ NOUVEAU: socket.id de l'émetteur pour exclusion MDS
+    deleteType = null, // ✅ NOUVEAU: type de suppression (FOR_ME, FOR_EVERYONE)
   ) {
     if (!this.redis) {
       console.log(
@@ -1233,6 +1286,9 @@ class ResilientMessageService {
           "DELETED",
           null,
           participants, // ✅ Inclure les participants dans les données
+          null, // messageContent
+          senderSocketId, // ✅ Propager senderSocketId pour exclusion MDS
+          deleteType ? { deleteType } : null, // ✅ Propager deleteType
         );
 
         publishPromises.push(promise);
@@ -1265,6 +1321,7 @@ class ResilientMessageService {
     conversationId,
     messageContent,
     conversationParticipants = null,
+    senderSocketId = null, // ✅ NOUVEAU: socket.id de l'émetteur pour exclusion MDS
   ) {
     if (!this.redis) {
       console.log(
@@ -1331,6 +1388,7 @@ class ResilientMessageService {
           null,
           participants, // ✅ Inclure les participants dans les données
           messageContent, // ✅ INCLURE LE NOUVEAU CONTENU
+          senderSocketId, // ✅ Propager senderSocketId pour exclusion MDS
         );
 
         publishPromises.push(promise);
@@ -1643,6 +1701,7 @@ class ResilientMessageService {
       const fields = {
         eventType,
         conversationId: conversationData.conversationId || conversationData._id,
+        senderSocketId: conversationData.senderSocketId || "", // ✅ Propager pour exclusion côté MDS
         timestamp: new Date().toISOString(),
         ts: Date.now().toString(),
       };

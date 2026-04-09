@@ -14,19 +14,10 @@ const proxy = httpProxy.createProxyServer();
 
 app.use(
   cors({
-    origin: function (origin, callback) {
-      if (
-        process.env.FRONTEND_URL ||
-        /^http:\/\/localhost(:\d+)?$/.test(origin)
-      ) {
-        callback(null, true);
-      } else {
-        callback(new Error("Non autorisé par CORS"));
-      }
-    },
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Custom-Header"],
+    origin: true, // Accepter l'origine de la requête
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: "*", // Accepter tous les headers (dev uniquement)
   }),
 );
 
@@ -95,6 +86,16 @@ app.use(
   }),
 );
 
+// Ajouter un middleware pour loguer les requêtes entrantes
+app.use((req, res, next) => {
+  console.log("🔍 Requête entrante:", {
+    method: req.method,
+    url: req.url,
+    headers: req.headers,
+  });
+  next();
+});
+
 // Routes proxy vers les services
 const routes = [
   {
@@ -124,6 +125,9 @@ proxy.on("proxyReq", (proxyReq, req, res) => {
   // Headers de sécurité
   proxyReq.setHeader("X-Forwarded-For", req.ip);
   proxyReq.setHeader("X-Gateway-Time", Date.now());
+
+  // Ajouter un log pour vérifier les en-têtes transmis au service cible
+  console.log("🔍 En-têtes transmis au service cible:", req.headers);
 
   if (req.body && Object.keys(req.body).length > 0) {
     const bodyData = JSON.stringify(req.body);

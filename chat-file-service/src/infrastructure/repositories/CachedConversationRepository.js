@@ -27,7 +27,7 @@ class CachedConversationRepository {
     this.quickTTL = 60; // 1 minute pour quick load
     this.listTTL = 600; // 10 minutes pour listes
 
-    this.cacheKeyPrefix = "cache:convs";
+    this.cacheKeyPrefix = "chat:cache:convs";
   }
 
   // ===== LIRE LES CONVERSATIONS D'UN UTILISATEUR (CACHE INTELLIGENT) =====
@@ -518,6 +518,32 @@ class CachedConversationRepository {
   }
 
   /**
+   * ✅ DÉCRÉMENTER LE COMPTEUR unreadCount (au lieu de réinitialiser à 0)
+   */
+  async decrementUnreadCountInUserMetadata(conversationId, userId, count = 1) {
+    try {
+      const result = await this.primaryStore.decrementUnreadCountInUserMetadata(
+        conversationId,
+        userId,
+        count,
+      );
+
+      // Invalider le cache pour cet utilisateur
+      await this.invalidateConversationCaches(conversationId, {
+        participants: [userId],
+      });
+
+      return result;
+    } catch (error) {
+      console.error(
+        "❌ Erreur decrementUnreadCountInUserMetadata:",
+        error.message,
+      );
+      throw error;
+    }
+  }
+
+  /**
    * ✅ METTRE À JOUR LE lastSeen POUR UN UTILISATEUR (DÉCONNEXION)
    */
   async updateLastSeenForUser(userId) {
@@ -535,10 +561,18 @@ class CachedConversationRepository {
   }
 
   /**
-   * ✅ OBTENIR LE lastSeen D'UN UTILISATEUR
+   * ✅ OBTENIR LE lastSeen D'UN UTILISATEUR DANS UNE CONVERSATION
    */
   async getLastSeenForUser(conversationId, userId) {
     return await this.primaryStore.getLastSeenForUser(conversationId, userId);
+  }
+
+  /**
+   * ✅ TROUVER LE lastSeen LE PLUS RÉCENT D'UN UTILISATEUR (TOUTES CONVERSATIONS)
+   * Utilisé comme fallback MongoDB quand Redis est vide (ex: après FLUSHALL)
+   */
+  async findLastSeenForUser(userId) {
+    return await this.primaryStore.findLastSeenForUser(userId);
   }
 
   // ===== RECHERCHE =====

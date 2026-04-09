@@ -159,13 +159,16 @@ class FileStorageService {
     try {
       let stream;
 
-      // ✅ EXTRAIRE LE NOM DU FICHIER SI LE CHEMIN COMPLET EST PASSÉ
+      // ✅ EXTRAIRE LA CLÉ MINIO EN SUPPRIMANT SEULEMENT LE NOM DU BUCKET
+      // Ex: "chat-files/thumbnails/thumb.webp" → "thumbnails/thumb.webp"
       // Ex: "chat-files/1234_file.png" → "1234_file.png"
-      const fileNameOnly = remoteFileName.includes("/")
-        ? remoteFileName.split("/").pop()
-        : remoteFileName;
+      // Ex: "thumbnails/thumb.webp" → "thumbnails/thumb.webp" (pas de bucket)
+      let objectKey = remoteFileName;
+      if (objectKey.startsWith(`${this.bucket}/`)) {
+        objectKey = objectKey.substring(this.bucket.length + 1);
+      }
 
-      stream = await this.minioClient.getObject(this.bucket, fileNameOnly);
+      stream = await this.minioClient.getObject(this.bucket, objectKey);
       //  if (this.env === "production") {
       //   const sftp = new Client();
       //   await sftp.connect(this.sftpConfig);

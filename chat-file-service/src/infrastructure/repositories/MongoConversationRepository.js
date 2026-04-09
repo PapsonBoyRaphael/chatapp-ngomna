@@ -23,9 +23,7 @@ class MongoConversationRepository {
         type: conversationData.type,
         participants: conversationData.participants,
         hasRequiredFields: !!(
-          conversationData._id &&
-          conversationData.name &&
-          conversationData.participants
+          conversationData.name && conversationData.participants
         ),
         hasMetadata: !!conversationData.metadata,
         hasAuditLog: !!conversationData.metadata?.auditLog,
@@ -34,59 +32,45 @@ class MongoConversationRepository {
       // ✅ NETTOYAGE ET VALIDATION DES DONNÉES AVANT CRÉATION DU MODÈLE
       const cleanedData = this._sanitizeConversationData(conversationData);
 
-      // ✅ VÉRIFIER SI LA CONVERSATION EXISTE DÉJÀ
-      let existingConversation;
-      try {
-        existingConversation = await Conversation.findById(cleanedData._id);
-        if (existingConversation) {
-          console.log(
-            `✅ Conversation existante trouvée: ${cleanedData._id}, mise à jour...`,
-          );
-
-          // ✅ METTRE À JOUR LA CONVERSATION AU LIEU DE RETOURNER L'ANCIENNE VERSION
-          const { _id, __v, ...updateFields } = cleanedData;
-          const updatedConversation = await Conversation.findByIdAndUpdate(
-            cleanedData._id,
-            { $set: updateFields },
-            { new: true, runValidators: true },
-          );
-
-          if (!updatedConversation) {
-            throw new Error(
-              `Échec mise à jour conversation ${cleanedData._id}`,
+      // ✅ VÉRIFIER SI LA CONVERSATION EXISTE DÉJÀ (uniquement si _id est fourni)
+      if (cleanedData._id) {
+        let existingConversation;
+        try {
+          existingConversation = await Conversation.findById(cleanedData._id);
+          if (existingConversation) {
+            console.log(
+              `✅ Conversation existante trouvée: ${cleanedData._id}, mise à jour...`,
             );
-          }
 
-          console.log(`✅ Conversation mise à jour en base:`, {
-            id: updatedConversation._id,
-            participantsCount: updatedConversation.participants?.length,
-            unreadCountsKeys: Object.keys(
-              updatedConversation.unreadCounts || {},
-            ),
-          });
+            // ✅ METTRE À JOUR LA CONVERSATION AU LIEU DE RETOURNER L'ANCIENNE VERSION
+            const { _id, __v, ...updateFields } = cleanedData;
+            const updatedConversation = await Conversation.findByIdAndUpdate(
+              cleanedData._id,
+              { $set: updateFields },
+              { new: true, runValidators: true },
+            );
 
-          // ✅ KAFKA EVENT POUR MISE À JOUR
-          if (this.kafkaProducer) {
-            try {
-              await this._publishConversationEvent(
-                "CONVERSATION_UPDATED",
-                updatedConversation,
-                { processingTime: Date.now() - startTime },
-              );
-            } catch (kafkaError) {
-              console.warn(
-                "⚠️ Erreur publication Kafka update:",
-                kafkaError.message,
+            if (!updatedConversation) {
+              throw new Error(
+                `Échec mise à jour conversation ${cleanedData._id}`,
               );
             }
-          }
 
-          return updatedConversation;
+            console.log(`✅ Conversation mise à jour en base:`, {
+              id: updatedConversation._id,
+              participantsCount: updatedConversation.participants?.length,
+              unreadCountsKeys: Object.keys(
+                updatedConversation.unreadCounts || {},
+              ),
+            });
+
+            return updatedConversation;
+          }
+        } catch (findError) {
+          console.log(
+            `🔍 Conversation ${cleanedData._id} non trouvée, création nécessaire`,
+          );
         }
-      } catch (findError) {
-        console.log(
-          `🔍 Conversation ${cleanedData._id} non trouvée, création nécessaire`,
-        );
       }
 
       // ✅ CRÉER UNE NOUVELLE CONVERSATION AVEC DONNÉES NETTOYÉES
@@ -226,7 +210,7 @@ class MongoConversationRepository {
         }
 
         // ✅ GESTION SPÉCIFIQUE DES ERREURS MONGODB
-        if (saveError.code === 11000) {
+        if (saveError.code === 11000 && cleanedData._id) {
           console.log(`🔄 Conversation en doublon détectée, récupération...`);
           try {
             const existing = await Conversation.findById(cleanedData._id);
@@ -605,6 +589,11 @@ class MongoConversationRepository {
             };
           }
 
+          // ✅ PROPAGER senderSocketId si disponible dans additionalData
+          if (additionalData.senderSocketId) {
+            conversationData.senderSocketId = additionalData.senderSocketId;
+          }
+
           await this.resilientMessageService.publishConversationEvent(
             eventType,
             conversationData,
@@ -791,9 +780,7 @@ class MongoConversationRepository {
     const sanitized = { ...data };
 
     // ✅ VALIDATION ET NETTOYAGE DE BASE
-    if (!sanitized._id) {
-      throw new Error("ID de conversation requis pour la sanitisation");
-    }
+    // _id optionnel: si absent, il sera généré automatiquement par MongoDB/Mongoose
 
     if (!sanitized.name || typeof sanitized.name !== "string") {
       sanitized.name = `Conversation ${Date.now()}`;
@@ -1228,6 +1215,98 @@ class MongoConversationRepository {
   }
 
   /**
+   * ✅ DÉCRÉMENTER LE COMPTEUR unreadCount (au lieu de réinitialiser à 0)
+   * @param {string} conversationId
+   * @param {string} userId
+   * @param {number} count - nombre de messages lus à soustraire
+   */
+  async decrementUnreadCountInUserMetadata(conversationId, userId, count = 1) {
+    try {
+      const safeCount = Math.max(0, Math.floor(count));
+      if (safeCount === 0) return null;
+
+      console.log(`📉 Décrémentation compteur non-lus userMetadata:`, {
+        conversationId,
+        userId,
+        decrement: safeCount,
+      });
+
+      // Utiliser $inc avec valeur négative + pipeline pour garantir min 0
+      const updateResult = await Conversation.findOneAndUpdate(
+        {
+          _id: conversationId,
+          "userMetadata.userId": userId,
+        },
+        [
+          {
+            $set: {
+              updatedAt: new Date(),
+              userMetadata: {
+                $map: {
+                  input: "$userMetadata",
+                  as: "meta",
+                  in: {
+                    $cond: {
+                      if: { $eq: ["$$meta.userId", userId] },
+                      then: {
+                        $mergeObjects: [
+                          "$$meta",
+                          {
+                            unreadCount: {
+                              $max: [
+                                0,
+                                {
+                                  $subtract: [
+                                    { $ifNull: ["$$meta.unreadCount", 0] },
+                                    safeCount,
+                                  ],
+                                },
+                              ],
+                            },
+                            lastReadAt: new Date(),
+                            lastActivity: new Date(),
+                          },
+                        ],
+                      },
+                      else: "$$meta",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        ],
+        {
+          new: true,
+          runValidators: false,
+        },
+      );
+
+      if (updateResult) {
+        const newCount = updateResult.userMetadata?.find(
+          (m) => m.userId === userId,
+        )?.unreadCount;
+        console.log(`✅ Compteur décrémenté pour l'utilisateur:`, {
+          userId,
+          conversationId,
+          decremented: safeCount,
+          newCount,
+        });
+      }
+
+      return updateResult;
+    } catch (error) {
+      console.error(`❌ Erreur décrémentation userMetadata:`, {
+        error: error.message,
+        conversationId,
+        userId,
+        count,
+      });
+      throw error;
+    }
+  }
+
+  /**
    * ✅ METTRE À JOUR LE lastSeen POUR UN UTILISATEUR DANS TOUTES SES CONVERSATIONS
    * Appelé lors de la déconnexion
    */
@@ -1291,6 +1370,43 @@ class MongoConversationRepository {
       return null;
     } catch (error) {
       console.error(`❌ Erreur getLastSeenForUser:`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * ✅ OBTENIR LE lastSeen LE PLUS RÉCENT D'UN UTILISATEUR (toutes conversations confondues)
+   * Utilisé comme fallback quand Redis ne contient pas l'info
+   */
+  async findLastSeenForUser(userId) {
+    try {
+      const userIdString = String(userId);
+
+      // Chercher dans toutes les conversations actives de l'utilisateur,
+      // le lastSeen le plus récent
+      const conversations = await Conversation.find(
+        {
+          "userMetadata.userId": userIdString,
+          isActive: true,
+        },
+        { "userMetadata.$": 1 },
+      )
+        .sort({ updatedAt: -1 })
+        .limit(1)
+        .lean();
+
+      if (
+        conversations.length > 0 &&
+        conversations[0]?.userMetadata?.[0]?.lastSeen
+      ) {
+        const lastSeen = conversations[0].userMetadata[0].lastSeen;
+        console.log(`📦 findLastSeenForUser: ${userIdString} → ${lastSeen}`);
+        return lastSeen;
+      }
+
+      return null;
+    } catch (error) {
+      console.error(`❌ Erreur findLastSeenForUser:`, error.message);
       return null;
     }
   }

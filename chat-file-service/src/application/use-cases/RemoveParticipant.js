@@ -13,7 +13,12 @@ class RemoveParticipant {
     this.userCacheService = userCacheService;
   }
 
-  async execute({ conversationId, participantId, removedBy }) {
+  async execute({
+    conversationId,
+    participantId,
+    removedBy,
+    senderSocketId = null,
+  }) {
     if (!conversationId || !participantId || !removedBy) {
       throw new Error("conversationId, participantId et removedBy requis");
     }
@@ -116,6 +121,7 @@ class RemoveParticipant {
             participantName: participantInfo?.name,
             removedBy,
             participants: conversation.participants,
+            senderSocketId, // ✅ PROPAGER senderSocketId pour exclusion MDS
           },
         );
         console.log(

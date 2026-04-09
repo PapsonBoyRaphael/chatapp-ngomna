@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { duplexPair } = require("stream");
 
 // Schéma enrichi pour les messages
 const messageSchema = new mongoose.Schema(
@@ -36,6 +37,8 @@ const messageSchema = new mongoose.Schema(
         "LOCATION",
         "CONTACT",
         "SYSTEM",
+        "CALL",
+        "VIDEO_CALL",
       ],
       default: "TEXT",
       index: true,
@@ -179,9 +182,44 @@ const messageSchema = new mongoose.Schema(
           },
         ],
         file: {
-          type: mongoose.Schema.Types.ObjectId,
-          ref: "File",
-          default: null,
+          fileId: String,
+          fileName: String,
+          fileSize: Number,
+          duration: Number, // Pour les médias
+          mimeType: String,
+          url: String,
+          thumbnailUrl: String,
+          uploadedAt: Date,
+          status: String,
+        },
+
+        // ✅ Métadonnées pour les appels (CALL / VIDEO_CALL)
+        call: {
+          callId: String, // Identifiant unique de l'appel
+          callType: {
+            type: String,
+            enum: ["AUDIO", "VIDEO"],
+          },
+          status: {
+            type: String,
+            enum: [
+              "INITIATED", // Appel lancé
+              "RINGING", // En train de sonner
+              "ANSWERED", // Décroché
+              "ENDED", // Terminé normalement
+              "MISSED", // Manqué
+              "DECLINED", // Refusé
+              "CANCELLED", // Annulé par l'appelant
+              "FAILED", // Échec technique
+              "BUSY", // Occupé
+            ],
+          },
+          initiatorId: String, // Matricule de l'appelant
+          receiverIds: [String], // Matricule(s) du/des destinataire(s)
+          startedAt: Date, // Début de l'appel (quand décroché)
+          endedAt: Date, // Fin de l'appel
+          duration: Number, // Durée en secondes (0 si manqué/refusé)
+          endReason: String, // Raison de fin ("user_hangup", "timeout", "error"...)
         },
       },
     },
@@ -192,6 +230,22 @@ const messageSchema = new mongoose.Schema(
       ref: "Message",
       default: null,
     },
+
+    // Gestion du transfert de messages
+    isForwarded: {
+      type: Boolean,
+      default: false,
+    },
+    forwardedFrom: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Message",
+      default: null,
+    },
+    originalSenderId: {
+      type: String,
+      default: null,
+    },
+
     reactions: [
       {
         userId: {
@@ -217,6 +271,25 @@ const messageSchema = new mongoose.Schema(
     deletedAt: {
       type: Date,
       default: null,
+    },
+
+    // Champs de suppression
+    isDeleted: {
+      type: Boolean,
+      default: false,
+    },
+    deletedBy: {
+      type: String, // userId de celui qui a supprimé
+      default: null,
+    },
+    deletedFor: {
+      type: String, // "EVERYONE" ou null (pour FOR_ME on utilise deletedForUsers)
+      enum: ["EVERYONE", null],
+      default: null,
+    },
+    deletedForUsers: {
+      type: [String], // liste de userIds pour suppression "pour moi uniquement"
+      default: [],
     },
 
     // Champs de système
@@ -410,22 +483,9 @@ messageSchema.methods.publishKafkaEvent = async function (
 
 // Invalider le cache Redis - CORRECTION
 messageSchema.methods.invalidateCache = async function () {
-  try {
-    // ✅ ÉVITER LA RÉFÉRENCE CIRCULAIRE
-    // const redisClient = require("../../../index").redisClient;
-
-    // Utiliser le client Redis passé au repository
-    const MongoMessageRepository = require("../../repositories/MongoMessageRepository");
-
-    // Si pas de client Redis disponible, ne pas faire d'erreur
-    console.log(
-      `🗑️ Cache invalidé pour message ${this._id} (pas de client Redis)`,
-    );
-    return true;
-  } catch (error) {
-    console.warn("⚠️ Erreur invalidation cache:", error.message);
-    return false;
-  }
+  // ✅ L'invalidation de cache est gérée par CachedMessageRepository
+  // Ce stub est conservé pour compatibilité avec le middleware post("save")
+  return true;
 };
 
 // ===============================
@@ -488,6 +548,49 @@ messageSchema.statics.getStatistics = async function (conversationId) {
       },
     },
   ]);
+};
+
+// ✅ Mise à jour du statut d'appel (CALL / VIDEO_CALL)
+messageSchema.statics.updateCallStatus = async function (messageId, updates) {
+  const updateFields = {};
+
+  if (updates.status) {
+    updateFields["metadata.contentMetadata.call.status"] = updates.status;
+  }
+  if (updates.startedAt) {
+    updateFields["metadata.contentMetadata.call.startedAt"] = updates.startedAt;
+  }
+  if (updates.endedAt) {
+    updateFields["metadata.contentMetadata.call.endedAt"] = updates.endedAt;
+  }
+  if (updates.duration !== undefined) {
+    updateFields["metadata.contentMetadata.call.duration"] = updates.duration;
+  }
+  if (updates.endReason) {
+    updateFields["metadata.contentMetadata.call.endReason"] = updates.endReason;
+  }
+
+  if (Object.keys(updateFields).length === 0) {
+    console.warn("⚠️ updateCallStatus: aucun champ à mettre à jour");
+    return null;
+  }
+
+  const result = await this.findByIdAndUpdate(
+    messageId,
+    { $set: updateFields },
+    { new: true, lean: true },
+  );
+
+  if (!result) {
+    throw new Error(
+      `Message ${messageId} introuvable pour mise à jour call status`,
+    );
+  }
+
+  console.log(
+    `✅ Call status mis à jour: ${messageId} → ${updates.status || "update"}`,
+  );
+  return result;
 };
 
 // ===============================

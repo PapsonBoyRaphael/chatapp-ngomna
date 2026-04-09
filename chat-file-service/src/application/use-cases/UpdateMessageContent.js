@@ -19,7 +19,7 @@ class UpdateMessageContent {
    * @param {string} params.userId
    * @returns {Promise<Object>} message mis à jour
    */
-  async execute({ messageId, newContent, userId }) {
+  async execute({ messageId, newContent, userId, senderSocketId = null }) {
     if (!messageId || !newContent || !userId) {
       throw new Error("messageId, newContent et userId sont requis");
     }
@@ -84,6 +84,7 @@ class UpdateMessageContent {
           message.conversationId,
           newContent, // ✅ PASSER LE NOUVEAU CONTENU
           conversationParticipants,
+          senderSocketId, // ✅ PROPAGER senderSocketId pour exclusion MDS
         );
         console.log(`📤 [EDITED] événement publié pour message ${messageId}`);
       } catch (streamErr) {

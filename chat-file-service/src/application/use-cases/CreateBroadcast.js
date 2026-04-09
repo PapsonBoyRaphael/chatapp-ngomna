@@ -11,7 +11,13 @@ class CreateBroadcast {
     this.userCacheService = userCacheService || new UserCacheService();
   }
 
-  async execute({ broadcastId, name, adminIds, recipientIds }) {
+  async execute({
+    broadcastId,
+    name,
+    adminIds,
+    recipientIds,
+    senderSocketId = null,
+  }) {
     if (
       !broadcastId ||
       !name ||
@@ -152,33 +158,52 @@ class CreateBroadcast {
           `📢 Publication notification système BROADCAST_CREATED pour: ${savedConversation._id}`,
         );
 
-        await this.resilientMessageService.publishSystemMessage(
+        // await this.resilientMessageService.publishSystemMessage(
+        //   {
+        //     conversationId: String(savedConversation._id),
+        //     type: "SYSTEM",
+        //     subType: "BROADCAST_CREATED",
+        //     senderId: adminIds[0],
+        //     senderName: "Système",
+        //     content: `La liste de diffusion "${name}" a été créée`,
+        //     participants: participants,
+        //     metadata: {
+        //       event: "broadcast_created",
+        //       broadcastName: name,
+        //       broadcastId: String(savedConversation._id),
+        //       creatorId: adminIds[0],
+        //       adminIds: adminIds,
+        //       recipientIds: recipientIds,
+        //       participantCount: participants.length,
+        //       timestamp: new Date().toISOString(),
+        //     },
+        //   },
+        //   {
+        //     eventType: "BROADCAST_CREATED",
+        //     stream: "chat:stream:messages:group", // Utilise le même stream que groupe
+        //   },
+        // );
+        // console.log(
+        //   `✅ Notification système BROADCAST_CREATED publiée pour: ${savedConversation._id}`,
+        // );
+
+        await this.resilientMessageService.addToStream(
+          "chat:stream:events:conversation:created", // Nouveau stream pour les événements de diffusion
           {
-            conversationId: String(savedConversation._id),
-            type: "SYSTEM",
-            subType: "BROADCAST_CREATED",
-            senderId: adminIds[0],
-            senderName: "Système",
-            content: `La liste de diffusion "${name}" a été créée`,
-            participants: participants,
-            metadata: {
-              event: "broadcast_created",
-              broadcastName: name,
-              broadcastId: String(savedConversation._id),
-              creatorId: adminIds[0],
-              adminIds: adminIds,
-              recipientIds: recipientIds,
-              participantCount: participants.length,
-              timestamp: new Date().toISOString(),
-            },
-          },
-          {
-            eventType: "BROADCAST_CREATED",
-            stream: "chat:stream:messages:group", // Utilise le même stream que groupe
+            event: "broadcast.created",
+            conversationId: savedConversation._id.toString(),
+            conversation: savedConversation,
+            type: "BROADCAST",
+            createdBy: adminIds[0],
+            participants: JSON.stringify(participants),
+            name: name,
+            participantCount: participants.length.toString(),
+            senderSocketId: senderSocketId || "", // ✅ Propager pour exclusion MDS
+            timestamp: Date.now().toString(),
           },
         );
         console.log(
-          `✅ Notification système BROADCAST_CREATED publiée pour: ${savedConversation._id}`,
+          `📤 [broadcast.created] publié dans chat:stream:events:conversation:created`,
         );
       } catch (notifError) {
         console.warn(

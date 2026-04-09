@@ -990,7 +990,71 @@ socket.to(`conversation_${conversationId}`).emit("userStoppedTyping", {
 
 ---
 
-## 🔗 Flux de données complet
+## � Transfert de messages
+
+### forwardMessage
+
+Transfère un message existant vers une ou plusieurs conversations.
+
+**Client emit**
+
+```javascript
+socket.emit("forwardMessage", {
+  messageId: String, // ID du message à transférer (requis)
+  targetConversationIds: [String], // ID(s) conversation(s) cible(s) (requis, max 10)
+});
+```
+
+**ACK succès : `forward:sent`**
+
+```javascript
+socket.on("forward:sent", {
+  success: true,
+  originalMessageId: String,
+  forwarded: [
+    {
+      messageId: String,
+      conversationId: String,
+      conversationType: String, // PRIVATE|GROUP|BROADCAST|CHANNEL
+      content: String,
+      type: String,
+      isForwarded: true,
+      originalMessageId: String,
+      originalSenderId: String,
+      timestamp: ISO8601,
+    },
+  ],
+  errors: [{ conversationId, error }], // vide si tout réussi
+  count: Number,
+  userId: String,
+  timestamp: ISO8601,
+});
+```
+
+**ACK erreur : `forward:error`**
+
+```javascript
+socket.on("forward:error", {
+  error: String,
+  code: String, // AUTH_REQUIRED | MISSING_PARAMS | SERVICE_UNAVAILABLE | FORWARD_FAILED
+});
+```
+
+**Use Case** : `ForwardMessage`
+
+**Logique** :
+
+1. Vérifier l'authentification
+2. Valider `messageId` et `targetConversationIds`
+3. Appeler `ForwardMessage.execute()` qui :
+   - Récupère le message original (vérifie qu'il existe et n'est pas supprimé)
+   - Pour chaque conversation cible : délègue à `SendMessage.execute()` avec contenu/type/fileId copiés + champs `isForwarded`, `forwardedFrom`, `originalSenderId`
+   - `SendMessage` gère tout le flux standard : save, WAL, `chat:stream:messages:*`, MDS, `updateLastMessage`, `unreadCount`
+4. Émettre `forward:sent` ACK avec les résultats agrégés
+
+---
+
+## �🔗 Flux de données complet
 
 ### Exemple : Envoi de message
 
@@ -1299,6 +1363,6 @@ socket.on("presence:update", (data) => {
 
 ---
 
-**Dernière mise à jour** : 8 janvier 2026
-**Version** : 1.0.0
+**Dernière mise à jour** : 7 avril 2026
+**Version** : 1.1.0
 **Auteur** : Équipe ChatApp NGOMNA

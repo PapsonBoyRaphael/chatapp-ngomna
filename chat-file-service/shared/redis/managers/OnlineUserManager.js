@@ -44,6 +44,9 @@ class OnlineUserManager {
     // ✅ CALLBACK POUR LA DÉCONNEXION (mise à jour lastSeen dans MongoDB)
     this.onUserDisconnectCallback = options.onUserDisconnect || null;
 
+    // ✅ REPOSITORY POUR FALLBACK MongoDB (lastSeen)
+    this.conversationRepository = null;
+
     this.subscriber = null;
     this.isInitialized = false;
   }
@@ -54,6 +57,14 @@ class OnlineUserManager {
   setOnUserDisconnectCallback(callback) {
     this.onUserDisconnectCallback = callback;
     console.log("✅ Callback de déconnexion configuré");
+  }
+
+  /**
+   * ✅ SETTER POUR LE REPOSITORY DE CONVERSATIONS (fallback MongoDB pour lastSeen)
+   */
+  setConversationRepository(repository) {
+    this.conversationRepository = repository;
+    console.log("✅ ConversationRepository configuré pour fallback lastSeen");
   }
 
   /**
@@ -703,7 +714,7 @@ class OnlineUserManager {
   /**
    * ✅ OBTENIR LE LAST SEEN AVEC RESPECT DE LA PRIVACY
    */
-  async getLastSeen(userId, requesterId = null) {
+  async getLastSeen(userId, requesterId = null, conversationId = null) {
     if (!this.redis) return null;
 
     try {
@@ -714,6 +725,7 @@ class OnlineUserManager {
 
       // Si l'utilisateur n'est pas en ligne, récupérer le lastSeen sauvegardé
       if (!userData) {
+        // ✅ ÉTAPE 1 : Chercher dans le cache Redis dédié
         const lastSeenData = await this.redis.get(
           `chat:cache:last_seen:${userIdString}`,
         );
@@ -726,11 +738,87 @@ class OnlineUserManager {
               disconnectedAt: parsed.disconnectedAt,
               status: "offline",
               isOffline: true,
+              source: "redis_cache",
             };
           } catch (parseErr) {
             console.warn("⚠️ Erreur parsing lastSeen:", parseErr.message);
           }
         }
+
+        // ✅ ÉTAPE 2 : FALLBACK MongoDB si Redis est vide
+        if (this.conversationRepository) {
+          try {
+            let lastSeenFromDb = null;
+
+            // Si on a un conversationId, chercher le lastSeen spécifique
+            if (
+              conversationId &&
+              this.conversationRepository.getLastSeenForUser
+            ) {
+              lastSeenFromDb =
+                await this.conversationRepository.getLastSeenForUser(
+                  conversationId,
+                  userIdString,
+                );
+            }
+
+            // Si pas de conversationId ou pas trouvé, chercher dans les conversations récentes
+            if (
+              !lastSeenFromDb &&
+              this.conversationRepository.findLastSeenForUser
+            ) {
+              lastSeenFromDb =
+                await this.conversationRepository.findLastSeenForUser(
+                  userIdString,
+                );
+            }
+
+            if (lastSeenFromDb) {
+              const lastSeenTimestamp =
+                lastSeenFromDb instanceof Date
+                  ? lastSeenFromDb.toISOString()
+                  : lastSeenFromDb;
+
+              console.log(
+                `📦 lastSeen récupéré depuis MongoDB pour ${userIdString}: ${lastSeenTimestamp}`,
+              );
+
+              // ✅ REMETTRE EN CACHE REDIS pour les prochaines requêtes
+              const cacheData = {
+                lastActivity: lastSeenTimestamp,
+                status: "offline",
+                matricule: userIdString,
+                disconnectedAt: lastSeenTimestamp,
+                source: "mongodb_fallback",
+              };
+
+              await this.redis
+                .set(
+                  `chat:cache:last_seen:${userIdString}`,
+                  JSON.stringify(cacheData),
+                  { EX: 86400 * 30 },
+                )
+                .catch((err) => {
+                  console.warn("⚠️ Erreur re-cache lastSeen:", err.message);
+                });
+
+              return {
+                hidden: false,
+                lastActivity: lastSeenTimestamp,
+                disconnectedAt: lastSeenTimestamp,
+                status: "offline",
+                isOffline: true,
+                source: "mongodb_fallback",
+              };
+            }
+          } catch (dbErr) {
+            console.warn(
+              `⚠️ Erreur fallback MongoDB lastSeen pour ${userIdString}:`,
+              dbErr.message,
+            );
+          }
+        }
+
         return null;
       }
 
@@ -753,6 +841,7 @@ class OnlineUserManager {
         lastActivity: userData.lastActivity,
         status: userData.status,
         isOffline: false,
+        source: "redis_online",
       };
     } catch (error) {
       console.error("❌ Erreur getLastSeen:", error);

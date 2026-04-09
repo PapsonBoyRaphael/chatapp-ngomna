@@ -23,7 +23,12 @@ class DeleteMessage {
    * @param {string} params.deleteType - "FOR_ME" ou "FOR_EVERYONE" (défaut: "FOR_ME")
    * @returns {Promise<Object>} Message mis à jour ou supprimé
    */
-  async execute({ messageId, userId, deleteType = "FOR_ME" }) {
+  async execute({
+    messageId,
+    userId,
+    deleteType = "FOR_ME",
+    senderSocketId = null,
+  }) {
     if (!messageId || !userId) {
       throw new Error("messageId et userId sont requis");
     }
@@ -37,8 +42,17 @@ class DeleteMessage {
     const conversationId = message.conversationId?.toString();
     const senderId = message.senderId?.toString();
 
+    // ✅ NORMALISER LE TYPE DE SUPPRESSION (compat: forAll/forMe)
+    const normalizedDeleteType = (() => {
+      const t = String(deleteType || "FOR_ME").toUpperCase();
+      if (t === "FOR_EVERYONE" || t === "FOR_ALL" || t === "FORALL") {
+        return "FOR_EVERYONE";
+      }
+      return "FOR_ME";
+    })();
+
     // Vérifier les permissions
-    if (deleteType === "FOR_EVERYONE") {
+    if (normalizedDeleteType === "FOR_EVERYONE") {
       // Seul l'expéditeur peut supprimer pour tout le monde
       if (senderId !== userId) {
         throw new Error("Seul l'expéditeur peut supprimer pour tout le monde");
@@ -59,7 +73,7 @@ class DeleteMessage {
 
     let result;
 
-    if (deleteType === "FOR_EVERYONE") {
+    if (normalizedDeleteType === "FOR_EVERYONE") {
       // Suppression pour tous : marquer comme supprimé (contenu inchangé)
       message.isDeleted = true;
       message.status = "DELETED";
@@ -83,9 +97,11 @@ class DeleteMessage {
       result = await this.messageRepository.save(message);
     }
 
-    // ✅ PUBLIER DANS REDIS STREAMS - STATUT DELETED
-    // DELETED doit être envoyé à TOUS les participants de la conversation
-    if (this.resilientMessageService) {
+    // ✅ PUBLIER DANS REDIS STREAMS - STATUT DELETED UNIQUEMENT POUR FOR_EVERYONE
+    if (
+      this.resilientMessageService &&
+      normalizedDeleteType === "FOR_EVERYONE"
+    ) {
       try {
         // ✅ RÉCUPÉRER LES PARTICIPANTS DE LA CONVERSATION
         let conversationParticipants = [];
@@ -114,6 +130,8 @@ class DeleteMessage {
           messageId,
           conversationId,
           conversationParticipants,
+          senderSocketId, // ✅ PROPAGER senderSocketId pour exclusion MDS
+          normalizedDeleteType, // ✅ PROPAGER deleteType normalisé pour que MDS le transmette
         );
         console.log(`📤 [DELETED] événement publié pour message ${messageId}`);
       } catch (streamErr) {
@@ -128,7 +146,7 @@ class DeleteMessage {
     if (
       this.conversationRepository &&
       conversationId &&
-      deleteType === "FOR_EVERYONE"
+      normalizedDeleteType === "FOR_EVERYONE"
     ) {
       try {
         const conversation =
@@ -159,10 +177,11 @@ class DeleteMessage {
     return {
       success: true,
       messageId,
-      deleteType,
+      conversationId,
+      deleteType: normalizedDeleteType,
       deletedAt: new Date(),
       message:
-        deleteType === "FOR_EVERYONE"
+        normalizedDeleteType === "FOR_EVERYONE"
           ? "Message supprimé pour tout le monde"
           : "Message supprimé pour vous",
     };

@@ -6,7 +6,7 @@ class MongoFileRepository {
   constructor(
     redisClient = null,
     kafkaProducer = null,
-    thumbnailService = null
+    thumbnailService = null,
   ) {
     this.redisClient = redisClient;
     this.kafkaProducer = kafkaProducer;
@@ -55,7 +55,23 @@ class MongoFileRepository {
         };
       }
 
-      console.log("💾 Sauvegarde fichier:", file.metadata);
+      console.log("💾 Sauvegarde fichier:", file.originalName, file.mimeType);
+
+      // ✅ Extraire les buffers de miniature vidéo AVANT la sauvegarde MongoDB
+      // (les buffers ne doivent pas être envoyés à Mongoose, ils seront uploadés vers MinIO séparément)
+      let videoThumbnailData = null;
+      if (
+        file.mimeType?.startsWith("video/") &&
+        file.metadata?.content?.thumbnail?.generated &&
+        file.metadata.content.thumbnail.thumbnails?.length > 0
+      ) {
+        videoThumbnailData = { ...file.metadata.content.thumbnail };
+        // Retirer les buffers de l'objet qui sera sauvegardé en BDD
+        delete file.metadata.content.thumbnail.thumbnails;
+        console.log(
+          `🎬 ${videoThumbnailData.thumbnails.length} buffers miniature vidéo extraits avant sauvegarde BDD`,
+        );
+      }
 
       // ✅ CRÉER LE FICHIER EN BASE AVEC CREATE AU LIEU DE FINDBRIDANDUPDATE
       const savedFile = await FileModel.create(file.toObject());
@@ -71,24 +87,46 @@ class MongoFileRepository {
           {
             "metadata.content": file.metadata.content,
           },
-          { new: true }
+          { new: true },
         );
       }
 
       const processingTime = Date.now() - startTime;
 
-      // ✅ DÉCLENCHER LA GÉNÉRATION DE THUMBNAILS SI C'EST UNE IMAGE
+      // ✅ GÉNÉRATION SYNCHRONE DE THUMBNAILS POUR LES IMAGES (< 10MB)
+      // Les thumbnails sont générés AVANT de retourner le résultat pour que
+      // la réponse API inclue les URLs des thumbnails dès le premier appel.
+      const SYNC_THUMBNAIL_MAX_SIZE = 10 * 1024 * 1024; // 10 MB
+      let finalFile = savedFile;
+
       if (
         this.thumbnailService &&
         this.thumbnailService.isImageFile(savedFile.mimeType)
       ) {
-        // Traitement asynchrone en arrière-plan
-        this.processThumbnailsAsync(savedFile).catch((error) => {
-          console.error(
-            `❌ Erreur traitement thumbnails ${savedFile._id}:`,
-            error
-          );
-        });
+        if (savedFile.size <= SYNC_THUMBNAIL_MAX_SIZE) {
+          // ✅ SYNC : attendre les thumbnails avant de retourner
+          try {
+            await this.processThumbnailsAsync(savedFile);
+            // Recharger le document mis à jour avec les thumbnails
+            finalFile =
+              (await FileModel.findById(savedFile._id).lean()) || savedFile;
+          } catch (error) {
+            console.error(
+              `❌ Erreur traitement thumbnails sync ${savedFile._id}:`,
+              error.message,
+            );
+            // Continuer sans thumbnails — le fichier est déjà sauvegardé
+            finalFile = savedFile;
+          }
+        } else {
+          // ✅ ASYNC : fire-and-forget pour les très gros fichiers
+          this.processThumbnailsAsync(savedFile).catch((error) => {
+            console.error(
+              `❌ Erreur traitement thumbnails async ${savedFile._id}:`,
+              error,
+            );
+          });
+        }
 
         // ✅ PUBLIER MESSAGE KAFKA SEULEMENT SI KAFKA EST DISPONIBLE
         if (
@@ -99,19 +137,34 @@ class MongoFileRepository {
             await this.kafkaProducer.publishMessage({
               eventType: "GENERATE_THUMBNAILS",
               fileId: savedFile._id.toString(),
-              originalPath: savedFile.path, // Ou remotePath
+              originalPath: savedFile.path,
               mimeType: savedFile.mimeType,
               originalName: savedFile.originalName,
             });
           } catch (kafkaError) {
             console.warn(
               "⚠️ Erreur publication Kafka GENERATE_THUMBNAILS:",
-              kafkaError.message
+              kafkaError.message,
             );
           }
         } else {
           console.log(
-            "ℹ️ Kafka non disponible, génération thumbnails en mode local"
+            "ℹ️ Kafka non disponible, génération thumbnails en mode local",
+          );
+        }
+      }
+
+      // ✅ SAUVEGARDER LES MINIATURES VIDÉO (buffers extraits avant la sauvegarde BDD)
+      if (videoThumbnailData && videoThumbnailData.thumbnails?.length > 0) {
+        // ✅ SYNC pour les vidéos aussi (les buffers sont déjà en mémoire)
+        try {
+          await this.processVideoThumbnailsAsync(savedFile, videoThumbnailData);
+          finalFile =
+            (await FileModel.findById(savedFile._id).lean()) || finalFile;
+        } catch (error) {
+          console.error(
+            `❌ Erreur sauvegarde miniatures vidéo ${savedFile._id}:`,
+            error,
           );
         }
       }
@@ -120,7 +173,7 @@ class MongoFileRepository {
       if (this.kafkaProducer) {
         try {
           if (typeof this.kafkaProducer.publishMessage === "function") {
-            await this._publishFileEvent("FILE_SAVED", savedFile, {
+            await this._publishFileEvent("FILE_SAVED", finalFile, {
               processingTime,
               isNew: true,
             });
@@ -128,7 +181,7 @@ class MongoFileRepository {
             console.warn("⚠️ KafkaProducer n'a pas la méthode publishMessage");
             console.warn(
               "⚠️ Méthodes disponibles:",
-              Object.getOwnPropertyNames(this.kafkaProducer)
+              Object.getOwnPropertyNames(this.kafkaProducer),
             );
           }
         } catch (kafkaError) {
@@ -137,9 +190,9 @@ class MongoFileRepository {
       }
 
       console.log(
-        `💾 Fichier sauvegardé: ${savedFile._id} (${processingTime}ms)`
+        `💾 Fichier sauvegardé: ${finalFile._id || savedFile._id} (${processingTime}ms)`,
       );
-      return savedFile;
+      return finalFile;
     } catch (error) {
       this.metrics.errors++;
       console.error("❌ Erreur sauvegarde fichier:", error);
@@ -214,14 +267,14 @@ class MongoFileRepository {
       const processingTime = Date.now() - startTime;
 
       console.log(
-        `🔍 Fichiers conversation: ${conversationId} (${files.length} files, ${processingTime}ms)`
+        `🔍 Fichiers conversation: ${conversationId} (${files.length} files, ${processingTime}ms)`,
       );
       return result;
     } catch (error) {
       this.metrics.errors++;
       console.error(
         `❌ Erreur fichiers conversation ${conversationId}:`,
-        error
+        error,
       );
       throw error;
     }
@@ -278,7 +331,7 @@ class MongoFileRepository {
       const processingTime = Date.now() - startTime;
 
       console.log(
-        `🔍 Fichiers utilisateur: ${uploaderId} (${files.length} files, ${processingTime}ms)`
+        `🔍 Fichiers utilisateur: ${uploaderId} (${files.length} files, ${processingTime}ms)`,
       );
       return result;
     } catch (error) {
@@ -349,7 +402,7 @@ class MongoFileRepository {
       }
 
       console.log(
-        `📥 Téléchargement compté: ${fileId} (count: ${file.downloadCount}, ${processingTime}ms)`
+        `📥 Téléchargement compté: ${fileId} (count: ${file.downloadCount}, ${processingTime}ms)`,
       );
       return file;
     } catch (error) {
@@ -390,7 +443,7 @@ class MongoFileRepository {
       const file = await FileModel.findByIdAndUpdate(
         fileId,
         { $set: updateData },
-        { new: true }
+        { new: true },
       );
 
       if (!file) {
@@ -412,7 +465,7 @@ class MongoFileRepository {
       }
 
       console.log(
-        `✅ Fichier marqué comme complété: ${fileId} (${processingTime}ms)`
+        `✅ Fichier marqué comme complété: ${fileId} (${processingTime}ms)`,
       );
       return file;
     } catch (error) {
@@ -445,7 +498,7 @@ class MongoFileRepository {
             },
           },
         },
-        { new: true }
+        { new: true },
       );
 
       if (!file) {
@@ -467,7 +520,7 @@ class MongoFileRepository {
       }
 
       console.log(
-        `❌ Fichier marqué comme échoué: ${fileId} (${processingTime}ms)`
+        `❌ Fichier marqué comme échoué: ${fileId} (${processingTime}ms)`,
       );
       return file;
     } catch (error) {
@@ -495,7 +548,7 @@ class MongoFileRepository {
               updatedAt: new Date(),
             },
           },
-          { new: true }
+          { new: true },
         );
       } else {
         // Hard delete - supprimer complètement
@@ -522,7 +575,7 @@ class MongoFileRepository {
       }
 
       console.log(
-        `🗑️ Fichier supprimé: ${fileId} (soft: ${softDelete}, ${processingTime}ms)`
+        `🗑️ Fichier supprimé: ${fileId} (soft: ${softDelete}, ${processingTime}ms)`,
       );
       return file;
     } catch (error) {
@@ -585,7 +638,7 @@ class MongoFileRepository {
       };
 
       console.log(
-        `🔍 Recherche fichiers: ${files.length} résultats (${result.searchTime}ms)`
+        `🔍 Recherche fichiers: ${files.length} résultats (${result.searchTime}ms)`,
       );
       return result;
     } catch (error) {
@@ -682,7 +735,7 @@ class MongoFileRepository {
             totalSize: data.totalSize,
             percentage: ((data.count / result.totalFiles) * 100).toFixed(2),
             averageSize: (data.totalSize / data.count).toFixed(2),
-          })
+          }),
         );
       }
 
@@ -712,7 +765,7 @@ class MongoFileRepository {
       this.metrics.dbQueries++;
       const result = await FileModel.updateMany(
         { _id: { $in: fileIds } },
-        { $set: updateData }
+        { $set: updateData },
       );
 
       const processingTime = Date.now() - startTime;
@@ -732,7 +785,7 @@ class MongoFileRepository {
       }
 
       console.log(
-        `📦 Mise à jour bulk: ${result.modifiedCount}/${fileIds.length} fichiers (${processingTime}ms)`
+        `📦 Mise à jour bulk: ${result.modifiedCount}/${fileIds.length} fichiers (${processingTime}ms)`,
       );
       return result;
     } catch (error) {
@@ -783,10 +836,10 @@ class MongoFileRepository {
     Object.keys(grouped).forEach((type) => {
       grouped[type].averageSize = grouped[type].totalSize / grouped[type].count;
       grouped[type].formattedTotalSize = this._formatFileSize(
-        grouped[type].totalSize
+        grouped[type].totalSize,
       );
       grouped[type].formattedAverageSize = this._formatFileSize(
-        grouped[type].averageSize
+        grouped[type].averageSize,
       );
     });
 
@@ -846,7 +899,7 @@ class MongoFileRepository {
   async processThumbnailsAsync(savedFile) {
     try {
       console.log(
-        `🖼️ Début génération thumbnails pour ${savedFile.originalName}`
+        `🖼️ Début génération thumbnails pour ${savedFile.originalName}`,
       );
 
       // Télécharger l'image depuis MinIO/SFTP
@@ -857,7 +910,7 @@ class MongoFileRepository {
       const thumbnails = await this.thumbnailService.generateThumbnails(
         tempImagePath,
         savedFile.originalName,
-        savedFile._id
+        savedFile._id,
       );
 
       // Mettre à jour le fichier en base avec les thumbnails
@@ -871,6 +924,83 @@ class MongoFileRepository {
       // Marquer le traitement comme échoué
       await this.markThumbnailProcessingFailed(savedFile._id, error);
       console.error(`❌ Échec génération thumbnails ${savedFile._id}:`, error);
+    }
+  }
+
+  /**
+   * ✅ SAUVEGARDER LES MINIATURES VIDÉO (buffers déjà générés par MediaProcessingService)
+   * Upload chaque buffer de miniature vers le stockage puis met à jour la BDD
+   */
+  async processVideoThumbnailsAsync(savedFile, thumbnailData) {
+    try {
+      console.log(
+        `🎬 Sauvegarde miniatures vidéo pour ${savedFile.originalName}`,
+      );
+
+      const uploadedThumbnails = [];
+      const fileId = savedFile._id.toString();
+      const baseName = path.basename(
+        savedFile.originalName,
+        path.extname(savedFile.originalName),
+      );
+
+      for (const thumb of thumbnailData.thumbnails) {
+        if (!thumb.buffer || thumb.buffer.length === 0) continue;
+
+        const thumbnailFileName = `thumbnail_${thumb.name}_${fileId}_${baseName}.webp`;
+        const remotePath = `thumbnails/${thumbnailFileName}`;
+
+        // Upload vers MinIO/SFTP si le service de stockage est disponible
+        if (
+          this.thumbnailService?.fileStorageService &&
+          typeof this.thumbnailService.fileStorageService.uploadFromBuffer ===
+            "function"
+        ) {
+          const uploadedPath =
+            await this.thumbnailService.fileStorageService.uploadFromBuffer(
+              thumb.buffer,
+              remotePath,
+              "image/webp",
+            );
+
+          uploadedThumbnails.push({
+            size: thumb.name,
+            width: thumb.width,
+            height: thumb.height,
+            path: uploadedPath,
+            url: this.thumbnailService.generateThumbnailUrl(uploadedPath),
+            fileName: thumbnailFileName,
+          });
+        } else {
+          // Fallback: sauvegarder en local
+          const localDir = "./storage/thumbnails";
+          await fs.ensureDir(localDir);
+          const localPath = path.join(localDir, thumbnailFileName);
+          await fs.writeFile(localPath, thumb.buffer);
+
+          uploadedThumbnails.push({
+            size: thumb.name,
+            width: thumb.width,
+            height: thumb.height,
+            path: localPath,
+            url: `/api/files/thumbnail/${thumbnailFileName}`,
+            fileName: thumbnailFileName,
+          });
+        }
+      }
+
+      if (uploadedThumbnails.length > 0) {
+        await this.updateThumbnails(savedFile._id, uploadedThumbnails);
+        console.log(
+          `✅ ${uploadedThumbnails.length} miniatures vidéo sauvegardées pour ${fileId}`,
+        );
+      }
+    } catch (error) {
+      await this.markThumbnailProcessingFailed(savedFile._id, error);
+      console.error(
+        `❌ Échec sauvegarde miniatures vidéo ${savedFile._id}:`,
+        error,
+      );
     }
   }
 
@@ -893,7 +1023,7 @@ class MongoFileRepository {
       const updatedFile = await FileModel.findByIdAndUpdate(
         fileId,
         { $set: updateData },
-        { new: true }
+        { new: true },
       );
 
       // Publier événement Kafka
@@ -924,7 +1054,7 @@ class MongoFileRepository {
     } catch (updateError) {
       console.error(
         `❌ Erreur marking thumbnail failed ${fileId}:`,
-        updateError
+        updateError,
       );
     }
   }
@@ -936,7 +1066,7 @@ class MongoFileRepository {
       typeof this.kafkaProducer.publishMessage !== "function"
     ) {
       console.warn(
-        "⚠️ KafkaProducer non disponible ou méthode publishMessage absente"
+        "⚠️ KafkaProducer non disponible ou méthode publishMessage absente",
       );
       return false;
     }

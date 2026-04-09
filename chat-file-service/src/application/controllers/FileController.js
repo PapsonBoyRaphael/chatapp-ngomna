@@ -4,6 +4,7 @@ const multer = require("multer");
 const { v4: uuidv4 } = require("uuid");
 const UploadFile = require("../../application/use-cases/UploadFile");
 const DownloadFile = require("../use-cases/DownloadFile");
+const { json } = require("stream/consumers");
 const upload = multer({ dest: "uploads/" });
 
 class FileController {
@@ -15,6 +16,7 @@ class FileController {
     downloadFileUseCase = null,
     mediaProcessingService = null,
     searchOccurrencesUseCase = null,
+    chunkedUploadService = null,
   ) {
     this.uploadFileUseCase = uploadFileUseCase;
     this.getFileUseCase = getFileUseCase;
@@ -23,6 +25,7 @@ class FileController {
     this.downloadFileUseCase = downloadFileUseCase;
     this.searchOccurrencesUseCase = searchOccurrencesUseCase;
     this.mediaProcessingService = mediaProcessingService;
+    this.chunkedUploadService = chunkedUploadService;
 
     this.maxListLimit = 50; // Limit pour lists/multiple
 
@@ -35,13 +38,42 @@ class FileController {
       downloadFileUseCase: !!this.downloadFileUseCase,
       searchOccurrencesUseCase: !!this.searchOccurrencesUseCase,
       mediaProcessingService: !!this.mediaProcessingService,
+      chunkedUploadService: !!this.chunkedUploadService,
     });
   }
 
   async uploadFile(req, res) {
     const startTime = Date.now();
 
+    console.log("🔍 Requête reçue dans le contrôleur uploadFile:", {
+      headers: req.headers,
+      body: req.body,
+      file: req.file,
+    });
+
     try {
+      // ✅ IDEMPOTENCE : vérifier upload_token (client peut réessayer sans doublon)
+      const uploadToken =
+        req.body.upload_token || req.headers["x-upload-token"];
+      if (uploadToken && this.chunkedUploadService) {
+        const existingResult =
+          await this.chunkedUploadService.checkToken(uploadToken);
+        if (existingResult) {
+          console.log(
+            `🔄 Upload idempotent détecté (token: ${uploadToken.substring(0, 8)}...)`,
+          );
+          return res.status(200).json({
+            success: true,
+            data: existingResult,
+            idempotent: true,
+            metadata: {
+              processingTime: `${Date.now() - startTime}ms`,
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+      }
+
       if (!req.file) {
         return res.status(400).json({
           success: false,
@@ -112,8 +144,14 @@ class FileController {
       }
 
       // ✅ CONSTRUCTION COMPLÈTE DU FILEDATA AVEC MÉTADONNÉES
+      // ✅ Normaliser l'encodage UTF-8 du nom de fichier
+      const originalName = Buffer.from(
+        req.file.originalname,
+        "latin1",
+      ).toString("utf8");
+
       const fileData = {
-        originalName: req.file.originalname,
+        originalName: originalName,
         fileName: safeFileName, // ✅ Utiliser le nom sécurisé généré (UUID + extension)
         path: remotePath,
         size: req.file.size,
@@ -132,17 +170,9 @@ class FileController {
             category: fileMetadata.technical?.category || "media",
             encoding: "binary",
           },
+          // ✅ CONSERVER TOUTES les métadonnées content (audio, vidéo, image, thumbnail, etc.)
           content: {
-            duration: fileMetadata.content?.duration || null,
-            bitrate: fileMetadata.content?.bitrate || null,
-            sampleRate: fileMetadata.content?.sampleRate || null,
-            channels: fileMetadata.content?.channels || null,
-            codec: fileMetadata.content?.codec || null,
-            title: fileMetadata.content?.title || null,
-            artist: fileMetadata.content?.artist || null,
-            album: fileMetadata.content?.album || null,
-            genre: fileMetadata.content?.genre || null,
-            year: fileMetadata.content?.year || null,
+            ...fileMetadata.content,
           },
 
           // ✅ MÉTADONNÉES DE TRAITEMENT
@@ -199,7 +229,7 @@ class FileController {
       let result;
       if (this.uploadFileUseCase) {
         result = await this.uploadFileUseCase.execute(fileData);
-        console.log(`✅ Fichier enregistré en base: ${result}`);
+        // console.log(`✅ Fichier enregistré en base: ${JSON.stringify(result)}`);
       } else {
         result = {
           id: Date.now().toString(),
@@ -208,9 +238,12 @@ class FileController {
         };
       }
 
-      const processingTime = Date.now() - startTime;
+      // ✅ STOCKER le mapping token → résultat pour idempotence
+      if (uploadToken && this.chunkedUploadService) {
+        await this.chunkedUploadService.storeTokenResult(uploadToken, result);
+      }
 
-      // ✅ RÉPONSE AVEC MÉTADONNÉES ENRICHIES
+      const processingTime = Date.now() - startTime;
       res.status(201).json({
         success: true,
         data: {
@@ -279,18 +312,20 @@ class FileController {
         });
       }
 
+      const { displayInfo } = {
+        formattedSize: this._formatFileSize(file.size),
+        type: file.metadata?.technical?.fileType || "UNKNOWN",
+        category: file.metadata?.technical?.category || "other",
+        canDownload: file.status === "COMPLETED",
+        canPreview: this._canPreviewFile(file),
+        previewUrl: file.metadata?.processing?.thumbnailUrl || file.url,
+      };
+
       // ✅ FORMATAGE DES MÉTADONNÉES POUR LA RÉPONSE
       const formattedFile = {
         ...file,
         // ✅ INFORMATIONS FORMATÉES POUR LE CLIENT
-        displayInfo: {
-          formattedSize: this._formatFileSize(file.size),
-          type: file.metadata?.technical?.fileType || "UNKNOWN",
-          category: file.metadata?.technical?.category || "other",
-          canDownload: file.status === "COMPLETED",
-          canPreview: this._canPreviewFile(file),
-          previewUrl: file.metadata?.processing?.thumbnailUrl || file.url,
-        },
+        displayInfo,
       };
 
       const processingTime = Date.now() - startTime;
@@ -475,12 +510,26 @@ class FileController {
         return res.redirect(result.downloadUrl);
       } else {
         // Mode actuel : streamer le fichier
+        const originalName =
+          result.file.originalName || result.file.fileName || "download";
+        // Fallback ASCII : retirer les caractères non-ASCII
+        const safeAsciiName = originalName.replace(/[^\x20-\x7E]/g, "_");
+        // Encodage UTF-8 (RFC 5987) pour les navigateurs modernes
+        const encodedName = encodeURIComponent(originalName).replace(
+          /'/g,
+          "%27",
+        );
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="${result.file.originalName || result.file.fileName}"`,
+          `attachment; filename="${safeAsciiName}"; filename*=UTF-8''${encodedName}`,
         );
-        res.setHeader("Content-Type", result.file.mimeType);
-        res.setHeader("Content-Length", result.file.size);
+        res.setHeader(
+          "Content-Type",
+          result.file.mimeType || "application/octet-stream",
+        );
+        if (result.file.size) {
+          res.setHeader("Content-Length", result.file.size);
+        }
 
         result.fileStream.pipe(res);
       }
@@ -625,18 +674,370 @@ class FileController {
         .json({ success: false, message: "Thumbnail non disponible" });
     }
 
-    const thumbnailUrl = file.metadata.processing.thumbnails.find(
+    const thumbnail = file.metadata.processing.thumbnails.find(
       (t) => t.size === size,
-    )?.url;
-    if (!thumbnailUrl) throw new Error("Taille thumbnail invalide");
+    );
+    if (!thumbnail) throw new Error("Taille thumbnail invalide");
+
+    // ✅ Utiliser le path MinIO (clé exacte) plutôt que l'URL HTTP
+    const thumbnailKey = thumbnail.path || thumbnail.url;
 
     // Stream le thumbnail
     const thumbnailStream = await this.fileStorageService.download(
       null,
-      thumbnailUrl,
+      thumbnailKey,
     );
     res.setHeader("Content-Type", "image/webp");
     thumbnailStream.pipe(res);
+  }
+
+  // ================================
+  // UPLOAD CHUNKÉ (FICHIERS > 100 MB)
+  // ================================
+
+  /**
+   * GET /files/upload/status?token=xxx
+   * Vérifie le statut d'un upload (monolithique ou chunké)
+   */
+  async checkUploadStatus(req, res) {
+    try {
+      const { token, uploadId } = req.query;
+      const identifier = token || uploadId;
+
+      if (!identifier) {
+        return res.status(400).json({
+          success: false,
+          message: "Paramètre 'token' ou 'uploadId' requis",
+          code: "MISSING_PARAM",
+        });
+      }
+
+      if (!this.chunkedUploadService) {
+        return res.status(503).json({
+          success: false,
+          message: "Service d'upload chunké non disponible",
+        });
+      }
+
+      const status =
+        await this.chunkedUploadService.getUploadStatus(identifier);
+
+      return res.status(200).json({
+        success: true,
+        ...status,
+      });
+    } catch (error) {
+      console.error("❌ Erreur checkUploadStatus:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Erreur lors de la vérification du statut",
+        error: error.message,
+      });
+    }
+  }
+
+  /**
+   * POST /files/upload/init
+   * Initialise un upload chunké pour fichiers > 100 MB
+   * Body: { fileName, fileSize, mimeType, totalChunks, upload_token?, conversationId? }
+   */
+  async initChunkedUpload(req, res) {
+    try {
+      const userId =
+        req.user?.id || req.user?.userId || req.headers["user-id"];
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: "Utilisateur non authentifié",
+          code: "UNAUTHORIZED",
+        });
+      }
+
+      if (!this.chunkedUploadService) {
+        return res.status(503).json({
+          success: false,
+          message: "Service d'upload chunké non disponible",
+        });
+      }
+
+      const { fileName, fileSize, mimeType, totalChunks, conversationId } =
+        req.body;
+      const uploadToken =
+        req.body.upload_token || req.headers["x-upload-token"];
+
+      const result = await this.chunkedUploadService.initUpload({
+        fileName,
+        fileSize: parseInt(fileSize),
+        mimeType,
+        totalChunks: parseInt(totalChunks),
+        uploadToken,
+        userId: String(userId),
+        conversationId: conversationId || null,
+      });
+
+      // Si déjà complété (idempotence)
+      if (result.status === "already_completed") {
+        return res.status(200).json({
+          success: true,
+          ...result,
+          idempotent: true,
+        });
+      }
+
+      return res.status(201).json({
+        success: true,
+        ...result,
+      });
+    } catch (error) {
+      console.error("❌ Erreur initChunkedUpload:", error);
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  }
+
+  /**
+   * POST /files/upload/chunk/:uploadId
+   * Envoie un chunk (body: file multipart 'chunk' + chunkIndex)
+   */
+  async uploadChunk(req, res) {
+    try {
+      const { uploadId } = req.params;
+      const chunkIndex = req.body.chunkIndex || req.headers["x-chunk-index"];
+
+      if (chunkIndex === undefined || chunkIndex === null) {
+        return res.status(400).json({
+          success: false,
+          message: "chunkIndex requis (body ou header x-chunk-index)",
+          code: "MISSING_CHUNK_INDEX",
+        });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          message: "Aucun chunk fourni (multipart field 'chunk')",
+          code: "NO_CHUNK",
+        });
+      }
+
+      if (!this.chunkedUploadService) {
+        return res.status(503).json({
+          success: false,
+          message: "Service d'upload chunké non disponible",
+        });
+      }
+
+      const result = await this.chunkedUploadService.storeChunk(
+        uploadId,
+        parseInt(chunkIndex),
+        req.file.buffer,
+      );
+
+      return res.status(200).json({
+        success: true,
+        ...result,
+      });
+    } catch (error) {
+      console.error("❌ Erreur uploadChunk:", error);
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+  }
+
+  /**
+   * POST /files/upload/complete/:uploadId
+   * Assemble les chunks, uploade vers MinIO, crée en DB
+   */
+  async completeChunkedUpload(req, res) {
+    const startTime = Date.now();
+    try {
+      const { uploadId } = req.params;
+      const userId =
+        req.user?.id || req.user?.userId || req.headers["user-id"];
+
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          message: "Utilisateur non authentifié",
+          code: "UNAUTHORIZED",
+        });
+      }
+
+      if (!this.chunkedUploadService) {
+        return res.status(503).json({
+          success: false,
+          message: "Service d'upload chunké non disponible",
+        });
+      }
+
+      // ✅ ASSEMBLER ET UPLOADER VERS MINIO
+      const { assembledFilePath, remotePath, safeFileName, session } =
+        await this.chunkedUploadService.completeUpload(uploadId);
+
+      // ✅ EXTRAIRE MÉTADONNÉES (lecture du fichier assemblé)
+      let fileMetadata = {};
+      try {
+        const assembledBuffer = await fs.readFile(assembledFilePath);
+        fileMetadata = await this.mediaProcessingService.processFile(
+          assembledBuffer,
+          session.fileName,
+          session.mimeType,
+        );
+        console.log(
+          `✅ Métadonnées extraites pour fichier chunké: ${session.fileName}`,
+        );
+      } catch (metadataError) {
+        console.warn(
+          `⚠️ Erreur extraction métadonnées (chunked):`,
+          metadataError.message,
+        );
+        fileMetadata = {
+          technical: {
+            extension: path.extname(session.fileName).toLowerCase(),
+            fileType: this.mediaProcessingService?.getFileType?.(
+              session.mimeType,
+              session.fileName,
+            ) || "OTHER",
+            category: "other",
+            encoding: "binary",
+          },
+          content: {},
+        };
+      }
+
+      // ✅ NORMALISER LE NOM D'ORIGINE UTF-8
+      const originalName = Buffer.from(session.fileName, "latin1").toString(
+        "utf8",
+      );
+
+      // ✅ CONSTRUIRE LES DONNÉES FICHIER
+      const fileData = {
+        originalName: originalName,
+        fileName: safeFileName,
+        path: remotePath,
+        size: session.fileSize,
+        mimeType: session.mimeType,
+        uploadedBy: String(session.userId),
+        conversationId: session.conversationId || null,
+        url: remotePath,
+        status: "UPLOADING",
+        metadata: {
+          technical: {
+            ...fileMetadata.technical,
+            extension: path.extname(session.fileName).toLowerCase(),
+            fileType: fileMetadata.technical?.fileType || "OTHER",
+            category: fileMetadata.technical?.category || "media",
+            encoding: "binary",
+          },
+          content: { ...fileMetadata.content },
+          processing: {
+            status: "pending",
+            thumbnailGenerated: false,
+            compressed: false,
+            processed: false,
+          },
+          redisMetadata: {
+            cacheKey: `file:${Date.now()}`,
+            ttl: 7200,
+            cachedAt: new Date(),
+            cacheHits: 0,
+          },
+          security: {
+            encrypted: false,
+            accessLevel: "private",
+            scanStatus: "pending",
+          },
+          storage: {
+            provider: this.fileStorageService?.constructor.name.includes("S3")
+              ? "s3"
+              : "sftp",
+            bucket: process.env.S3_BUCKET || "default",
+            region: process.env.S3_REGION || "us-east-1",
+            storageClass: "standard",
+            backupStatus: "pending",
+          },
+          usage: {
+            downloadCount: 0,
+            firstDownload: null,
+            lastDownload: null,
+            downloadHistory: [],
+            shareCount: 0,
+            viewCount: 0,
+          },
+        },
+        downloadCount: 0,
+        isPublic: false,
+        tags: [],
+      };
+
+      // ✅ ENREGISTRER EN DB
+      let result;
+      if (this.uploadFileUseCase) {
+        result = await this.uploadFileUseCase.execute(fileData);
+      } else {
+        result = {
+          id: safeFileName.replace(/\.[^/.]+$/, ""),
+          ...fileData,
+          uploadedAt: new Date().toISOString(),
+        };
+      }
+
+      // ✅ STOCKER TOKEN → RÉSULTAT POUR IDEMPOTENCE
+      if (session.uploadToken && this.chunkedUploadService) {
+        await this.chunkedUploadService.storeTokenResult(
+          session.uploadToken,
+          result,
+        );
+      }
+
+      // ✅ NETTOYAGE CHUNKS TEMPORAIRES
+      await this.chunkedUploadService.cleanup(uploadId);
+
+      const processingTime = Date.now() - startTime;
+
+      console.log(
+        `✅ Upload chunké terminé: ${session.fileName} (${Math.round(session.fileSize / 1024 / 1024)} MB) en ${processingTime}ms`,
+      );
+
+      return res.status(201).json({
+        success: true,
+        data: {
+          ...result,
+          metadata: {
+            ...result.metadata,
+            extracted: fileMetadata,
+          },
+        },
+        metadata: {
+          processingTime: `${processingTime}ms`,
+          fileType: fileMetadata.technical?.fileType || "UNKNOWN",
+          hasMetadata: !!fileMetadata.technical,
+          chunkedUpload: true,
+          totalChunks: session.totalChunks,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      const processingTime = Date.now() - startTime;
+      console.error("❌ Erreur completeChunkedUpload:", error);
+
+      return res.status(500).json({
+        success: false,
+        message: "Erreur lors de la finalisation de l'upload chunké",
+        error:
+          process.env.NODE_ENV === "development"
+            ? error.message
+            : "Erreur interne",
+        metadata: {
+          processingTime: `${processingTime}ms`,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
   }
 
   // ================================

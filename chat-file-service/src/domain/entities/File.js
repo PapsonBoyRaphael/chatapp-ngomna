@@ -202,7 +202,11 @@ class File {
           aspectRatio: existing.aspectRatio,
           videoCodec: existing.videoCodec,
           audioCodec: existing.audioCodec,
+          audioChannels: existing.audioChannels,
+          audioSampleRate: existing.audioSampleRate,
           hasSubtitles: existing.hasSubtitles || false,
+          // ✅ Miniature vidéo (frame extraite + thumbnails générés)
+          thumbnail: existing.thumbnail || null,
         };
 
       case "AUDIO":
@@ -546,7 +550,7 @@ class File {
     mimeType,
     size,
     uploadedBy,
-    conversationId = null
+    conversationId = null,
   ) {
     const fileName = `${Date.now()}_${originalName}`;
 

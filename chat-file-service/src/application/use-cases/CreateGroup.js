@@ -11,15 +11,17 @@ class CreateGroup {
     this.userCacheService = userCacheService || new UserCacheService();
   }
 
-  async execute({ groupId, name, adminId, members }) {
-    if (
-      !groupId ||
-      !name ||
-      !adminId ||
-      !Array.isArray(members) ||
-      members.length === 0
-    ) {
-      throw new Error("groupId, name, adminId et members requis");
+  async execute({
+    groupId = null,
+    name,
+    type,
+    adminId,
+    members,
+    finalAdmins = [],
+    senderSocketId = null,
+  }) {
+    if (!name || !adminId || !Array.isArray(members) || members.length === 0) {
+      throw new Error("name, adminId et members requis");
     }
 
     // ✅ Valider l'existence des utilisateurs via UserCacheService
@@ -95,9 +97,8 @@ class CreateGroup {
     const totalRecipients = participants.filter((id) => id !== adminId).length;
 
     const conversationData = {
-      _id: groupId,
       name,
-      type: "GROUP",
+      type: type || "GROUP",
       participants,
       createdBy: adminId,
       createdAt: new Date(),
@@ -134,8 +135,16 @@ class CreateGroup {
         maxParticipants: 200,
         messageRetention: 0,
         autoDeleteAfter: 0,
+        broadcastAdmins: finalAdmins.length > 0 ? finalAdmins : [adminId],
+        broadcastRecipients: finalAdmins.length > 0 ? participants : [], // Si des admins spécifiques sont définis, ce sont eux les destinataires de diffusion
       },
     };
+
+    // ✅ groupId optionnel: si fourni, il devient l'_id métier; sinon Mongo génère automatiquement l'_id
+    if (groupId) {
+      conversationData._id = groupId;
+    }
+
     console.log("userMetadata", userMetadata);
 
     const savedConversation =
@@ -154,6 +163,7 @@ class CreateGroup {
             participants: JSON.stringify(participants),
             name: name,
             participantCount: participants.length.toString(),
+            senderSocketId: senderSocketId || "", // ✅ Propager pour exclusion MDS
             timestamp: Date.now().toString(),
           },
         );
@@ -168,83 +178,74 @@ class CreateGroup {
       }
     }
 
-    // ✅ PUBLIER NOTIFICATION SYSTÈME VIA RESILIENT MESSAGE SERVICE
-    if (this.resilientMessageService) {
-      try {
-        console.log(
-          `📢 Publication notification système GROUP_CREATED pour: ${savedConversation._id}`,
-        );
+    // // ✅ PUBLIER NOTIFICATION SYSTÈME VIA RESILIENT MESSAGE SERVICE
+    // if (this.resilientMessageService) {
+    //   try {
+    //     console.log(
+    //       `📢 Publication notification système GROUP_CREATED pour: ${savedConversation._id}`,
+    //     );
 
-        await this.resilientMessageService.publishSystemMessage(
-          {
-            conversationId: String(savedConversation._id),
-            type: "SYSTEM",
-            subType: "GROUP_CREATED",
-            senderId: adminId,
-            senderName: "Système",
-            content: `Le groupe "${name}" a été créé`,
-            participants: participants,
-            metadata: {
-              event: "group_created",
-              groupName: name,
-              groupId: String(savedConversation._id),
-              creatorId: adminId,
-              participantCount: participants.length,
-              timestamp: new Date().toISOString(),
-            },
-          },
-          {
-            eventType: "GROUP_CREATED",
-            stream: "chat:stream:messages:group",
-          },
-        );
-        console.log(
-          `✅ Notification système GROUP_CREATED publiée pour: ${savedConversation._id}`,
-        );
-      } catch (notifError) {
-        console.warn(
-          "⚠️ Erreur publication notification GROUP_CREATED:",
-          notifError.message,
-        );
-        // Ne pas bloquer la création si la notification échoue
-      }
-    }
-
-    if (this.kafkaProducer) {
-      await this.kafkaProducer.publishMessage({
-        eventType: "GROUP_CREATED",
-        conversationId: String(savedConversation._id),
-        createdBy: adminId,
-        participants,
-        name,
-        type: "GROUP",
-        timestamp: new Date().toISOString(),
-        source: "CreateGroup-UseCase",
-      });
-    }
+    //     await this.resilientMessageService.publishSystemMessage(
+    //       {
+    //         conversationId: String(savedConversation._id),
+    //         type: "SYSTEM",
+    //         subType: "GROUP_CREATED",
+    //         senderId: adminId,
+    //         senderName: "Système",
+    //         content: `Le groupe "${name}" a été créé`,
+    //         participants: participants,
+    //         metadata: {
+    //           event: "group_created",
+    //           groupName: name,
+    //           groupId: String(savedConversation._id),
+    //           creatorId: adminId,
+    //           participantCount: participants.length,
+    //           timestamp: new Date().toISOString(),
+    //         },
+    //       },
+    //       {
+    //         eventType: "GROUP_CREATED",
+    //         stream: "chat:stream:messages:group",
+    //       },
+    //     );
+    //     console.log(
+    //       `✅ Notification système GROUP_CREATED publiée pour: ${savedConversation._id}`,
+    //     );
+    //   } catch (notifError) {
+    //     console.warn(
+    //       "⚠️ Erreur publication notification GROUP_CREATED:",
+    //       notifError.message,
+    //     );
+    //     // Ne pas bloquer la création si la notification échoue
+    //   }
+    // }
 
     // ✅ PUBLIER DANS LE STREAM REDIS POUR CONVERSATION CRÉÉE
     if (this.resilientMessageService) {
       try {
-        await this.resilientMessageService.publishConversationEvent(
-          "CONVERSATION_CREATED",
+        await this.resilientMessageService.addToStream(
+          "chat:stream:events:conversation:created", // Nouveau stream pour les événements de conversation
           {
-            conversationId: String(savedConversation._id),
-            name: savedConversation.name,
-            type: savedConversation.type,
-            createdBy: savedConversation.createdBy,
-            participants: savedConversation.participants,
+            event: "conversation.created",
+            conversationId: savedConversation._id.toString(),
+            conversation: savedConversation, // Inclure les détails de la conversation pour les consommateurs qui veulent plus d'infos
+            type: type || "GROUP",
+            createdBy: adminId,
+            participants: JSON.stringify(participants),
+            name: name,
+            participantCount: participants.length.toString(),
+            senderSocketId: senderSocketId || "", // ✅ Propager pour exclusion MDS
+            timestamp: Date.now().toString(),
           },
         );
         console.log(
-          `✅ Événement CONVERSATION_CREATED publié dans Redis stream pour: ${savedConversation._id}`,
+          `📤 [conversation.created] publié dans chat:stream:events:conversation:created`,
         );
-      } catch (streamError) {
-        console.warn(
-          "⚠️ Erreur publication stream CONVERSATION_CREATED:",
-          streamError.message,
+      } catch (streamErr) {
+        console.error(
+          "❌ Erreur publication stream conversation.created:",
+          streamErr.message,
         );
-        // Ne pas bloquer la création si la publication stream échoue
       }
     }
 

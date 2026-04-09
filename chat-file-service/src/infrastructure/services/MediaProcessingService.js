@@ -38,7 +38,7 @@ class MediaProcessingService {
     }
     if (buffer.length > this.maxBufferSize) {
       throw new Error(
-        `Buffer trop grand (${buffer.length} > ${this.maxBufferSize})`
+        `Buffer trop grand (${buffer.length} > ${this.maxBufferSize})`,
       );
     }
     if (!this.isSupportedMimeType(mimeType)) {
@@ -92,10 +92,10 @@ class MediaProcessingService {
         setTimeout(
           () =>
             reject(
-              new Error(`Timeout processing ${fileType} (${timeoutValue}ms)`)
+              new Error(`Timeout processing ${fileType} (${timeoutValue}ms)`),
             ),
-          timeoutValue // ✅ UTILISER LA VARIABLE CORRECTE
-        )
+          timeoutValue, // ✅ UTILISER LA VARIABLE CORRECTE
+        ),
       );
 
       let processingPromise;
@@ -146,8 +146,8 @@ class MediaProcessingService {
         new Promise((_, reject) =>
           setTimeout(
             () => reject(new Error("Audio parsing timeout")),
-            this.audioProcessTimeout - 1000 // 1s avant le timeout global
-          )
+            this.audioProcessTimeout - 1000, // 1s avant le timeout global
+          ),
         ),
       ]);
 
@@ -197,8 +197,8 @@ class MediaProcessingService {
         new Promise((_, reject) =>
           setTimeout(
             () => reject(new Error("Image metadata timeout")),
-            this.imageProcessTimeout - 1000
-          )
+            this.imageProcessTimeout - 1000,
+          ),
         ),
       ]);
 
@@ -229,76 +229,87 @@ class MediaProcessingService {
   }
 
   /**
-   * ✅ TRAITEMENT DES VIDÉOS
+   * ✅ TRAITEMENT DES VIDÉOS AVEC EXTRACTION DE FRAME ET MINIATURE
    */
   async processVideo(buffer, metadata) {
-    return new Promise((resolve, reject) => {
-      // ✅ TIMEOUT GLOBAL POUR TOUT LE PROCESSUS
-      const videoTimeout = setTimeout(
-        () => reject(new Error("Video processing timeout")),
-        this.videoProcessTimeout
-      );
+    const tempId = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    const tempPath = `/tmp/video_${tempId}`;
+    const framePath = `/tmp/frame_${tempId}.jpg`;
 
-      try {
-        // Écrire buffer temporairement pour ffprobe
-        const tempPath = `/tmp/video_${Date.now()}`;
-        fs.writeFileSync(tempPath, buffer);
+    try {
+      // Écrire buffer temporairement pour ffprobe/ffmpeg
+      await fs.writeFile(tempPath, buffer);
 
-        ffmpeg.ffprobe(tempPath, (err, data) => {
-          clearTimeout(videoTimeout);
+      // 1. Extraire les métadonnées via ffprobe
+      const probeData = await this._ffprobeAsync(tempPath);
 
-          if (err) {
-            console.warn("⚠️ Erreur video ffprobe:", err.message);
-            fs.unlinkSync(tempPath).catch(() => {});
-            resolve(metadata); // Retourner metadata partielle
-            return;
-          }
+      if (probeData) {
+        const videoStream = probeData.streams.find(
+          (s) => s.codec_type === "video",
+        );
+        const audioStream = probeData.streams.find(
+          (s) => s.codec_type === "audio",
+        );
 
-          try {
-            const videoStream = data.streams.find(
-              (s) => s.codec_type === "video"
-            );
-            const audioStream = data.streams.find(
-              (s) => s.codec_type === "audio"
-            );
+        if (videoStream) {
+          metadata.content.dimensions = {
+            width: videoStream.width || null,
+            height: videoStream.height || null,
+          };
+          metadata.content.duration =
+            parseFloat(videoStream.duration) ||
+            parseFloat(probeData.format?.duration) ||
+            null;
+          metadata.content.bitrate = parseInt(videoStream.bit_rate) || null;
+          metadata.content.fps =
+            this.parseFps(videoStream.r_frame_rate) || null;
+          metadata.content.aspectRatio =
+            videoStream.display_aspect_ratio || null;
+          metadata.content.videoCodec = videoStream.codec_name || null;
+        }
 
-            if (videoStream) {
-              metadata.content.dimensions = {
-                width: videoStream.width || null,
-                height: videoStream.height || null,
-              };
-              metadata.content.duration =
-                parseFloat(videoStream.duration) || null;
-              metadata.content.bitrate = parseInt(videoStream.bit_rate) || null;
-              metadata.content.fps =
-                this.parseFps(videoStream.r_frame_rate) || null;
-              metadata.content.aspectRatio =
-                videoStream.display_aspect_ratio || null;
-              metadata.content.videoCodec = videoStream.codec_name || null;
-            }
-
-            if (audioStream) {
-              metadata.content.audioCodec = audioStream.codec_name || null;
-              metadata.content.audioChannels = audioStream.channels || null;
-              metadata.content.audioSampleRate =
-                parseInt(audioStream.sample_rate) || null;
-            }
-
-            console.log(`✅ Vidéo traitée`);
-            fs.unlinkSync(tempPath).catch(() => {});
-            resolve(metadata);
-          } catch (error) {
-            console.warn("⚠️ Erreur parsing vidéo:", error.message);
-            fs.unlinkSync(tempPath).catch(() => {});
-            resolve(metadata);
-          }
-        });
-      } catch (error) {
-        clearTimeout(videoTimeout);
-        console.warn("⚠️ Erreur traitement vidéo:", error.message);
-        resolve(metadata);
+        if (audioStream) {
+          metadata.content.audioCodec = audioStream.codec_name || null;
+          metadata.content.audioChannels = audioStream.channels || null;
+          metadata.content.audioSampleRate =
+            parseInt(audioStream.sample_rate) || null;
+        }
       }
-    });
+
+      // 2. Extraire une frame et générer les miniatures
+      try {
+        const thumbnailData = await this._extractFrameAndGenerateThumbnails(
+          tempPath,
+          framePath,
+          metadata.content.duration,
+        );
+
+        if (thumbnailData) {
+          metadata.content.thumbnail = thumbnailData;
+          console.log(
+            `🖼️ Miniature vidéo générée: ${thumbnailData.thumbnails.length} taille(s) à ${thumbnailData.extractedAtSecond}s`,
+          );
+        }
+      } catch (thumbError) {
+        console.warn(
+          "⚠️ Erreur extraction miniature vidéo:",
+          thumbError.message,
+        );
+        metadata.content.thumbnail = {
+          generated: false,
+          error: thumbError.message,
+        };
+      }
+
+      console.log(`✅ Vidéo traitée avec miniature`);
+      return metadata;
+    } catch (error) {
+      console.warn("⚠️ Erreur traitement vidéo:", error.message);
+      return metadata;
+    } finally {
+      // Nettoyage garanti des fichiers temporaires
+      await this._cleanupTempFiles(tempPath, framePath);
+    }
   }
 
   /**
@@ -315,8 +326,8 @@ class MediaProcessingService {
             new Promise((_, reject) =>
               setTimeout(
                 () => reject(new Error("PDF parsing timeout")),
-                this.documentProcessTimeout - 1000
-              )
+                this.documentProcessTimeout - 1000,
+              ),
             ),
           ]);
 
@@ -382,40 +393,9 @@ class MediaProcessingService {
     }
   }
 
-  /**
-   * Traitement des fichiers audio
-   */
-  async processAudio(buffer, metadata) {
-    try {
-      // Utiliser music-metadata pour les métadonnées audio
-      const audioMetadata = await mm.parseBuffer(buffer);
-
-      metadata.content = {
-        duration: audioMetadata.format.duration,
-        bitrate: audioMetadata.format.bitrate,
-        sampleRate: audioMetadata.format.sampleRate,
-        channels: audioMetadata.format.numberOfChannels,
-        codec: audioMetadata.format.codec,
-      };
-
-      // Métadonnées ID3 si disponibles
-      if (audioMetadata.common) {
-        metadata.content = {
-          ...metadata.content,
-          title: audioMetadata.common.title,
-          artist: audioMetadata.common.artist,
-          album: audioMetadata.common.album,
-          genre: audioMetadata.common.genre?.[0],
-          year: audioMetadata.common.year,
-        };
-      }
-
-      return metadata;
-    } catch (error) {
-      console.warn("⚠️ Erreur traitement audio:", error.message);
-      return metadata;
-    }
-  }
+  // ===============================
+  // MÉTHODES UTILITAIRES FILETYPE
+  // ===============================
 
   /**
    * Fallback pour l'audio avec FFprobe
@@ -443,125 +423,7 @@ class MediaProcessingService {
   }
 
   /**
-   * Traitement des vidéos
-   */
-  async processVideo(filePath, metadata) {
-    return new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(filePath, async (err, data) => {
-        if (err) {
-          console.warn("⚠️ Erreur traitement vidéo:", err.message);
-          resolve(metadata);
-          return;
-        }
-
-        try {
-          const videoStream = data.streams.find(
-            (s) => s.codec_type === "video"
-          );
-          const audioStream = data.streams.find(
-            (s) => s.codec_type === "audio"
-          );
-
-          if (videoStream) {
-            metadata.content.dimensions = {
-              width: videoStream.width,
-              height: videoStream.height,
-            };
-            metadata.content.duration = parseFloat(videoStream.duration);
-            metadata.content.bitrate = parseInt(videoStream.bit_rate);
-            metadata.content.fps = this.parseFps(videoStream.r_frame_rate);
-            metadata.content.aspectRatio = videoStream.display_aspect_ratio;
-            metadata.content.videoCodec = videoStream.codec_name;
-          }
-
-          if (audioStream) {
-            metadata.content.audioCodec = audioStream.codec_name;
-            metadata.content.audioChannels = audioStream.channels;
-            metadata.content.audioSampleRate = parseInt(
-              audioStream.sample_rate
-            );
-          }
-
-          resolve(metadata);
-        } catch (error) {
-          console.warn("⚠️ Erreur extraction métadonnées vidéo:", error);
-          resolve(metadata);
-        }
-      });
-    });
-  }
-
-  /**
-   * Traitement des documents
-   */
-  async processDocument(buffer, metadata) {
-    try {
-      // 1. Pour les PDF
-      if (metadata.technical.extension === ".pdf") {
-        const pdfData = await pdfParse(buffer);
-        metadata.content = {
-          pageCount: pdfData.numpages || 0,
-          text: pdfData.text ? pdfData.text.substring(0, 1000) : null,
-          wordCount: pdfData.text ? pdfData.text.split(/\s+/).length : 0,
-          hasImages: pdfData.text ? pdfData.text.includes("/Image") : false,
-          author: pdfData.info?.Author || null,
-          title: pdfData.info?.Title || null,
-          creator: pdfData.info?.Creator || null,
-          size: buffer.length,
-          encoding: "binary",
-        };
-      }
-      // 2. Pour les fichiers texte
-      else if (metadata.technical.extension.match(/\.(txt|rtf|md)$/)) {
-        try {
-          const text = buffer.toString("utf8");
-          metadata.content = {
-            text: text.substring(0, 1000),
-            wordCount: text.split(/\s+/).length,
-            lineCount: text.split("\n").length,
-            encoding: "utf8",
-            size: buffer.length,
-          };
-        } catch {
-          // Si échec décodage UTF8, traiter comme binaire
-          metadata.content = {
-            size: buffer.length,
-            encoding: "binary",
-          };
-        }
-      }
-      // 3. Pour les documents Office
-      else if (
-        metadata.technical.extension.match(/\.(doc|docx|xls|xlsx|ppt|pptx)$/)
-      ) {
-        metadata.content = {
-          size: buffer.length,
-          encoding: "binary",
-          type: metadata.technical.extension.substring(1).toUpperCase(),
-        };
-      }
-      // 4. Pour tout autre type de document
-      else {
-        metadata.content = {
-          size: buffer.length,
-          encoding: "binary",
-        };
-      }
-
-      return metadata;
-    } catch (error) {
-      console.warn("⚠️ Erreur traitement document:", error.message);
-      // En cas d'erreur, retourner au moins les métadonnées basiques
-      metadata.content = {
-        size: buffer.length,
-        encoding: "binary",
-      };
-      return metadata;
-    }
-  }
-
-  /**
-   * Traitement des PDF
+   * Traitement des PDF (filePath)
    */
   async processPDF(filePath, metadata) {
     try {
@@ -615,11 +477,9 @@ class MediaProcessingService {
   /**
    * Traitement des autres types de fichiers
    */
-  async processOtherFile(filePath, metadata) {
+  async processOtherFile(buffer, metadata) {
     // Métadonnées basiques pour les types non supportés
-    const stats = await fs.stat(filePath);
-    metadata.content.size = stats.size;
-
+    metadata.content.size = buffer.length;
     return metadata;
   }
 
@@ -647,7 +507,7 @@ class MediaProcessingService {
       // Extraction basique via commande système
       try {
         const { stdout } = await execAsync(
-          `exiftool -j "${filePath}" 2>/dev/null || echo "{}"`
+          `exiftool -j "${filePath}" 2>/dev/null || echo "{}"`,
         );
         const exifData = JSON.parse(stdout)[0];
 
@@ -661,11 +521,11 @@ class MediaProcessingService {
             exif.location = {
               latitude: this.convertExifGps(
                 exifData.GPSLatitude,
-                exifData.GPSLatitudeRef
+                exifData.GPSLatitudeRef,
               ),
               longitude: this.convertExifGps(
                 exifData.GPSLongitude,
-                exifData.GPSLongitudeRef
+                exifData.GPSLongitudeRef,
               ),
             };
           }
@@ -704,6 +564,112 @@ class MediaProcessingService {
       return null;
     }
   }
+
+  // ===============================
+  // MÉTHODES HELPER VIDÉO
+  // ===============================
+
+  /**
+   * ✅ Wrapper async pour ffprobe (callback → Promise)
+   */
+  _ffprobeAsync(filePath) {
+    return new Promise((resolve) => {
+      ffmpeg.ffprobe(filePath, (err, data) => {
+        if (err) {
+          console.warn("⚠️ Erreur ffprobe:", err.message);
+          resolve(null);
+        } else {
+          resolve(data);
+        }
+      });
+    });
+  }
+
+  /**
+   * ✅ Extrait une frame de la vidéo et génère les miniatures (small, medium, large)
+   * @param {string} videoPath - Chemin du fichier vidéo temporaire
+   * @param {string} framePath - Chemin de sortie pour la frame extraite
+   * @param {number|null} duration - Durée de la vidéo en secondes
+   * @returns {Object} Données de miniature avec buffers
+   */
+  async _extractFrameAndGenerateThumbnails(videoPath, framePath, duration) {
+    // Calculer le timestamp de capture (25% de la durée, max 10s, min 0.5s)
+    const captureTime = duration
+      ? Math.max(0.5, Math.min(duration * 0.25, 10))
+      : 1;
+
+    // Extraire une frame avec ffmpeg (timeout 15s)
+    await execAsync(
+      `ffmpeg -ss ${captureTime} -i "${videoPath}" -vframes 1 -q:v 2 "${framePath}" -y 2>/dev/null`,
+      { timeout: 15000 },
+    );
+
+    // Lire la frame extraite
+    const frameBuffer = await fs.readFile(framePath);
+    if (!frameBuffer || frameBuffer.length === 0) {
+      throw new Error("Frame vidéo extraite vide");
+    }
+
+    // Récupérer les dimensions de la frame originale
+    const frameMeta = await sharp(frameBuffer).metadata();
+
+    // Générer les miniatures avec sharp (mêmes tailles que ThumbnailService)
+    const thumbnailSizes = [
+      { name: "small", width: 150, height: 150 },
+      { name: "medium", width: 300, height: 300 },
+      { name: "large", width: 600, height: 600 },
+    ];
+
+    const thumbnails = [];
+    for (const size of thumbnailSizes) {
+      const thumbBuffer = await sharp(frameBuffer)
+        .resize(size.width, size.height, {
+          fit: "cover",
+          position: "center",
+        })
+        .webp({ quality: 80 })
+        .toBuffer();
+
+      thumbnails.push({
+        name: size.name,
+        width: size.width,
+        height: size.height,
+        buffer: thumbBuffer,
+        mimeType: "image/webp",
+        byteSize: thumbBuffer.length,
+      });
+    }
+
+    console.log(
+      `🎬 Frame extraite à ${captureTime.toFixed(1)}s → ${thumbnails.length} miniatures générées (${frameMeta.width}x${frameMeta.height})`,
+    );
+
+    return {
+      generated: true,
+      extractedAtSecond: parseFloat(captureTime.toFixed(1)),
+      frameWidth: frameMeta.width || null,
+      frameHeight: frameMeta.height || null,
+      thumbnails,
+    };
+  }
+
+  /**
+   * ✅ Nettoyage sécurisé des fichiers temporaires
+   */
+  async _cleanupTempFiles(...paths) {
+    for (const filePath of paths) {
+      try {
+        await fs.access(filePath);
+        await fs.unlink(filePath);
+      } catch {
+        // Fichier n'existe pas ou déjà supprimé, ignorer silencieusement
+      }
+    }
+  }
+
+  // ===============================
+  // MÉTHODES UTILITAIRES
+  // ===============================
 
   /**
    * Parse les FPS vidéo
@@ -835,7 +801,7 @@ class MediaProcessingService {
       };
     } catch (error) {
       throw new Error(
-        `Impossible d'obtenir les infos du fichier: ${error.message}`
+        `Impossible d'obtenir les infos du fichier: ${error.message}`,
       );
     }
   }
