@@ -30,6 +30,7 @@ class MessageDeliveryService {
           // typing retiré — géré par TypingIndicatorService
           "conversationCreated",
           "private",
+          "call",
           "statusRead",
           "statusDelivered",
         ],
@@ -972,28 +973,41 @@ class MessageDeliveryService {
 
               for (const participantId of participants) {
                 const userIdStr = String(participantId);
-                if (this.userSockets.has(userIdStr)) {
-                  const socketIds = this.userSockets.get(userIdStr);
-                  for (const socketId of socketIds) {
-                    // ✅ EXCLURE LE SOCKET SPÉCIFIQUE DE L'ÉMETTEUR (multi-device)
-                    if (excludeSocketId && socketId === excludeSocketId) {
-                      console.log(
-                        `⏭️ call:statusUpdated - socket émetteur exclu: ${socketId}`,
-                      );
-                      continue;
+
+                // ✅ VÉRIFIER SI LE STREAM CALL EST ACTIF POUR CET UTILISATEUR
+                if (this.isStreamActiveForUser(userIdStr, "call")) {
+                  if (this.userSockets.has(userIdStr)) {
+                    const socketIds = this.userSockets.get(userIdStr);
+                    for (const socketId of socketIds) {
+                      // ✅ EXCLURE LE SOCKET SPÉCIFIQUE DE L'ÉMETTEUR (multi-device)
+                      if (excludeSocketId && socketId === excludeSocketId) {
+                        console.log(
+                          `⏭️ call:statusUpdated - socket émetteur exclu: ${socketId}`,
+                        );
+                        continue;
+                      }
+                      const targetSocket =
+                        this.io?.sockets?.sockets?.get(socketId);
+                      if (targetSocket) {
+                        targetSocket.emit("call:statusUpdated", callEvent);
+                        console.log(
+                          `📞 call:statusUpdated (${message.status}) livré à ${userIdStr}`,
+                        );
+                      }
                     }
-                    const targetSocket =
-                      this.io?.sockets?.sockets?.get(socketId);
-                    if (targetSocket) {
-                      targetSocket.emit("call:statusUpdated", callEvent);
-                      console.log(
-                        `📞 call:statusUpdated (${message.status}) livré à ${userIdStr}`,
-                      );
-                    }
+                  } else {
+                    console.log(
+                      `⏳ Participant ${userIdStr} déconnecté — événement appel en attente`,
+                    );
+                    await this.addToPendingQueue(
+                      userIdStr,
+                      { ...callEvent, event: "call:statusUpdated" },
+                      "call",
+                    );
                   }
                 } else {
                   console.log(
-                    `⏳ Participant ${userIdStr} déconnecté — événement appel en attente`,
+                    `⏸️ Stream call pas encore actif pour ${userIdStr}, événement mis en attente`,
                   );
                   await this.addToPendingQueue(
                     userIdStr,

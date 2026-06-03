@@ -123,6 +123,12 @@ function setupSocketEvents() {
       `✅ Authentifié: ${data.matricule} (${data.userId})`,
       "success",
     );
+    // Auto-enregistrement de la clé E2EE après authentification
+    console.log("📋 Appel de autoRegisterE2EEKey()...");
+    autoRegisterE2EEKey().catch((err) => {
+      console.error("❌ Erreur dans autoRegisterE2EEKey:", err);
+      log(`❌ Erreur E2EE auto-register: ${err.message}`, "error");
+    });
   });
 
   socket.on("auth_error", (data) => {
@@ -1146,6 +1152,214 @@ function setupSocketEvents() {
       "error",
     );
   });
+
+  // ========================================
+  // ÉVÉNEMENTS CHIFFREMENT E2EE
+  // ========================================
+
+  socket.on("encryption:keyRegistered", (data) => {
+    log("🔑 Clé publique enregistrée", "success", data);
+    updateStatus(
+      "e2eeRegisterStatus",
+      `✅ Clé enregistrée — version: ${data.keyVersion} | fingerprint: ${data.fingerprint?.slice(0, 16)}…`,
+      "success",
+    );
+    document.getElementById("e2eeFingerprint").textContent =
+      data.fingerprint || "—";
+    document.getElementById("e2eeKeyVersion").textContent =
+      data.keyVersion || "—";
+    addReceivedMessage("e2ee", "🔑 Clé E2EE Enregistrée", data, {
+      keyVersion: data.keyVersion,
+      fingerprint: data.fingerprint,
+    });
+  });
+
+  socket.on("encryption:publicKey", (data) => {
+    log("📤 Clé publique reçue", "info", data);
+    updateStatus(
+      "e2eeGetKeyStatus",
+      `✅ Clé reçue — fingerprint: ${data.fingerprint?.slice(0, 16)}…`,
+      "success",
+    );
+    document.getElementById("e2eeRecipientKeyDisplay").textContent =
+      data.publicKey ? data.publicKey.slice(0, 80) + "…" : "N/A";
+    addReceivedMessage("e2ee", "📤 Clé Publique Reçue", data, {
+      userId: data.userId,
+      fingerprint: data.fingerprint,
+      keyVersion: data.keyVersion,
+    });
+  });
+
+  socket.on("encryption:config", (data) => {
+    log("⚙️ Config chiffrement", "info", data);
+    updateStatus(
+      "e2eeConfigStatus",
+      `Mode actif: ${data.mode} | E2EE: ${data.isE2EEEnabled ? "✅" : "❌"}`,
+      "info",
+    );
+    document.getElementById("e2eeCurrentMode").textContent = data.mode || "—";
+    addReceivedMessage("e2ee", "⚙️ Config E2EE", data, data);
+  });
+
+  socket.on("encryption:modeChanged", (data) => {
+    log("🔄 Mode chiffrement changé", "warning", data);
+    updateStatus(
+      "e2eeSwitchStatus",
+      `✅ Mode changé → ${data.newMode}`,
+      "success",
+    );
+    document.getElementById("e2eeCurrentMode").textContent =
+      data.newMode || "—";
+    addReceivedMessage("e2ee", "🔄 Mode E2EE Changé", data, {
+      previousMode: data.previousMode,
+      newMode: data.newMode,
+      changedBy: data.changedBy,
+    });
+  });
+
+  socket.on("encryption:keyRevoked", (data) => {
+    log("🚫 Clé révoquée", "warning", data);
+    updateStatus(
+      "e2eeRevokeStatus",
+      `✅ Clé révoquée pour userId: ${data.userId}`,
+      "success",
+    );
+    document.getElementById("e2eeFingerprint").textContent = "—";
+    document.getElementById("e2eeKeyVersion").textContent = "—";
+    addReceivedMessage("e2ee", "🚫 Clé E2EE Révoquée", data, data);
+  });
+
+  socket.on("encryption:error", (data) => {
+    log("❌ Erreur chiffrement", "error", data);
+    const msg = data.message || data.error || JSON.stringify(data);
+    [
+      "e2eeRegisterStatus",
+      "e2eeGetKeyStatus",
+      "e2eeConfigStatus",
+      "e2eeSwitchStatus",
+      "e2eeRevokeStatus",
+    ].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) updateStatus(id, `❌ ${msg}`, "error");
+    });
+    addReceivedMessage("error", "❌ Erreur E2EE", data, { error: msg });
+  });
+
+  // ========================================
+  // 📂 ÉVÉNEMENTS ARCHIVAGE
+  // ========================================
+
+  socket.on("conversation:archived", (data) => {
+    updateStatus(
+      "archiveStatus",
+      `✅ Archivée: ${data.conversationId}${data.alreadyArchived ? " (déjà archivée)" : ""}`,
+      "success",
+    );
+    addReceivedMessage("archive", "📥 Conversation Archivée", data, data);
+    log(`📂 Conversation archivée: ${data.conversationId}`, "success");
+  });
+
+  socket.on("conversation:unarchived", (data) => {
+    updateStatus(
+      "archiveStatus",
+      `✅ Désarchivée: ${data.conversationId}${data.alreadyUnarchived ? " (déjà active)" : ""}`,
+      "success",
+    );
+    addReceivedMessage("archive", "📤 Conversation Désarchivée", data, data);
+    log(`📂 Conversation désarchivée: ${data.conversationId}`, "success");
+  });
+
+  socket.on("conversation:archivedList", (data) => {
+    const count = data.conversations?.length || 0;
+    updateStatus(
+      "archivedListStatus",
+      `✅ ${count} conversation(s) archivée(s) — total: ${data.totalCount || 0}`,
+      "success",
+    );
+    const container = document.getElementById("archivedConvList");
+    if (container) {
+      if (count === 0) {
+        container.innerHTML =
+          '<em style="color:#888">Aucune conversation archivée</em>';
+      } else {
+        container.innerHTML = data.conversations
+          .map(
+            (c) =>
+              `<div style="padding:4px 0; border-bottom:1px solid #333">
+            <strong>${c.name || c.id || c._id}</strong>
+            <span style="color:#888; margin-left:8px">[${c.type || "?"}]</span>
+            ${c.archivedAt ? `<span style="color:#f59e0b; margin-left:8px">📅 ${new Date(c.archivedAt).toLocaleDateString()}</span>` : ""}
+          </div>`,
+          )
+          .join("");
+      }
+    }
+    addReceivedMessage("archive", "📂 Liste Archivées", data, {
+      count,
+      totalCount: data.totalCount,
+    });
+  });
+
+  socket.on("conversation:archiveError", (data) => {
+    const msg = data.message || JSON.stringify(data);
+    updateStatus("archiveStatus", `❌ ${msg}`, "error");
+    updateStatus("archivedListStatus", `❌ ${msg}`, "error");
+    addReceivedMessage("error", "❌ Erreur Archivage", data, { error: msg });
+    log(`❌ Erreur archivage: ${msg}`, "error");
+  });
+}
+
+// ========================================
+// FONCTIONS ARCHIVAGE
+// ========================================
+
+function archiveConversation() {
+  const conversationId = document
+    .getElementById("archiveConvId")
+    ?.value?.trim();
+  if (!conversationId) {
+    updateStatus("archiveStatus", "❌ conversationId requis", "error");
+    return;
+  }
+  if (!socket || !isAuthenticated) {
+    updateStatus("archiveStatus", "❌ Non authentifié", "error");
+    return;
+  }
+  updateStatus("archiveStatus", "⏳ Archivage en cours...", "info");
+  socket.emit("conversation:archive", { conversationId });
+  log(`📤 Émission conversation:archive pour ${conversationId}`, "info");
+}
+
+function unarchiveConversation() {
+  const conversationId = document
+    .getElementById("archiveConvId")
+    ?.value?.trim();
+  if (!conversationId) {
+    updateStatus("archiveStatus", "❌ conversationId requis", "error");
+    return;
+  }
+  if (!socket || !isAuthenticated) {
+    updateStatus("archiveStatus", "❌ Non authentifié", "error");
+    return;
+  }
+  updateStatus("archiveStatus", "⏳ Désarchivage en cours...", "info");
+  socket.emit("conversation:unarchive", { conversationId });
+  log(`📤 Émission conversation:unarchive pour ${conversationId}`, "info");
+}
+
+function getArchivedConversations() {
+  if (!socket || !isAuthenticated) {
+    updateStatus("archivedListStatus", "❌ Non authentifié", "error");
+    return;
+  }
+  const page = parseInt(document.getElementById("archivedPage")?.value) || 1;
+  const limit = parseInt(document.getElementById("archivedLimit")?.value) || 20;
+  updateStatus("archivedListStatus", "⏳ Chargement...", "info");
+  socket.emit("conversation:getArchived", { page, limit });
+  log(
+    `📤 Émission conversation:getArchived (page=${page}, limit=${limit})`,
+    "info",
+  );
 }
 
 // ========================================
@@ -3773,4 +3987,321 @@ function clearCallLog() {
   if (callLog)
     callLog.innerHTML =
       '<div style="color:#888; text-align:center;">Journal vide</div>';
+}
+
+// ========================================
+// FONCTIONS CHIFFREMENT E2EE
+// ========================================
+
+// Stockage de la paire de clés générée (en mémoire, côté test uniquement)
+let e2eeKeyPair = null;
+
+/**
+ * Génère une paire de clés RSA-OAEP 4096 bits via SubtleCrypto (Web API)
+ * et exporte la clé publique au format PEM SPKI.
+ */
+async function generateE2EEKeyPair() {
+  updateStatus(
+    "e2eeRegisterStatus",
+    "⏳ Génération de la paire RSA-4096...",
+    "info",
+  );
+  try {
+    const keyPair = await window.crypto.subtle.generateKey(
+      {
+        name: "RSA-OAEP",
+        modulusLength: 4096,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256",
+      },
+      true,
+      ["encrypt", "decrypt"],
+    );
+
+    // Export clé publique → PEM SPKI
+    const spki = await window.crypto.subtle.exportKey(
+      "spki",
+      keyPair.publicKey,
+    );
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(spki)));
+    const pem = `-----BEGIN PUBLIC KEY-----\n${b64.match(/.{1,64}/g).join("\n")}\n-----END PUBLIC KEY-----`;
+
+    // Export clé privée → PEM PKCS8 (stockée en mémoire uniquement)
+    const pkcs8 = await window.crypto.subtle.exportKey(
+      "pkcs8",
+      keyPair.privateKey,
+    );
+    const b64priv = btoa(String.fromCharCode(...new Uint8Array(pkcs8)));
+    const pemPriv = `-----BEGIN PRIVATE KEY-----\n${b64priv.match(/.{1,64}/g).join("\n")}\n-----END PRIVATE KEY-----`;
+
+    e2eeKeyPair = {
+      publicKey: pem,
+      privateKey: pemPriv,
+      cryptoKeyPair: keyPair,
+    };
+
+    document.getElementById("e2eePublicKeyDisplay").textContent = pem;
+    updateStatus(
+      "e2eeRegisterStatus",
+      "✅ Paire RSA-4096 générée — prête à enregistrer",
+      "success",
+    );
+    log("🔑 Paire RSA-4096 générée avec succès", "success");
+  } catch (err) {
+    updateStatus(
+      "e2eeRegisterStatus",
+      `❌ Erreur génération: ${err.message}`,
+      "error",
+    );
+    log(`❌ Erreur génération RSA: ${err.message}`, "error");
+  }
+}
+
+/**
+ * Auto-enregistre la clé publique E2EE juste après l'authentification.
+ * Génère une nouvelle paire si nécessaire.
+ */
+async function autoRegisterE2EEKey() {
+  try {
+    if (!socket || !isAuthenticated) {
+      log(
+        "⚠️ Impossible d'auto-enregistrer : socket ou auth non disponible",
+        "warning",
+      );
+      return;
+    }
+
+    if (!e2eeKeyPair) {
+      log("🔑 Génération automatique de la paire RSA-4096...", "info");
+      // Génération silencieuse sans toucher les statuts de la section E2EE
+      const keyPair = await window.crypto.subtle.generateKey(
+        {
+          name: "RSA-OAEP",
+          modulusLength: 4096,
+          publicExponent: new Uint8Array([1, 0, 1]),
+          hash: "SHA-256",
+        },
+        true,
+        ["encrypt", "decrypt"],
+      );
+      const spki = await window.crypto.subtle.exportKey(
+        "spki",
+        keyPair.publicKey,
+      );
+      const b64 = btoa(String.fromCharCode(...new Uint8Array(spki)));
+      const pem = `-----BEGIN PUBLIC KEY-----\n${b64.match(/.{1,64}/g).join("\n")}\n-----END PUBLIC KEY-----`;
+      const pkcs8 = await window.crypto.subtle.exportKey(
+        "pkcs8",
+        keyPair.privateKey,
+      );
+      const b64priv = btoa(String.fromCharCode(...new Uint8Array(pkcs8)));
+      const pemPriv = `-----BEGIN PRIVATE KEY-----\n${b64priv.match(/.{1,64}/g).join("\n")}\n-----END PRIVATE KEY-----`;
+      e2eeKeyPair = {
+        publicKey: pem,
+        privateKey: pemPriv,
+        cryptoKeyPair: keyPair,
+      };
+
+      // Mise à jour UI si l'élément existe
+      const displayEl = document.getElementById("e2eePublicKeyDisplay");
+      if (displayEl) {
+        displayEl.textContent = pem;
+      }
+      log("✅ Paire RSA-4096 générée automatiquement", "success");
+    }
+
+    log("📤 Émission encryption:registerKey (auto)...", "info");
+    socket.emit("encryption:registerKey", {
+      publicKey: e2eeKeyPair.publicKey,
+      deviceInfo: { platform: "web-test-client", deviceName: "HTML Testeur" },
+    });
+    log("🔑 Auto-enregistrement clé E2EE après auth — émis", "info");
+  } catch (err) {
+    log(`⚠️ Auto-enregistrement E2EE échoué: ${err.message}`, "error");
+    console.error("Erreur auto-register E2EE:", err);
+  }
+}
+
+/**
+ * Enregistre manuellement la clé publique générée auprès du serveur.
+ */
+function registerE2EEKey() {
+  if (!socket || !isAuthenticated) {
+    alert("Authentifiez-vous d'abord");
+    return;
+  }
+  if (!e2eeKeyPair) {
+    updateStatus(
+      "e2eeRegisterStatus",
+      "❌ Générez d'abord une paire de clés",
+      "error",
+    );
+    return;
+  }
+
+  updateStatus("e2eeRegisterStatus", "⏳ Enregistrement...", "info");
+  socket.emit("encryption:registerKey", {
+    publicKey: e2eeKeyPair.publicKey,
+    deviceInfo: { platform: "web-test-client", deviceName: "HTML Testeur" },
+  });
+  log("📤 Émission encryption:registerKey", "info");
+}
+
+/**
+ * Récupère la clé publique d'un autre utilisateur.
+ */
+function getRecipientPublicKey() {
+  if (!socket || !isAuthenticated) {
+    alert("Authentifiez-vous d'abord");
+    return;
+  }
+  const targetUserId = document.getElementById("e2eeTargetUserId").value.trim();
+  if (!targetUserId) {
+    updateStatus("e2eeGetKeyStatus", "❌ Entrez un userId cible", "error");
+    return;
+  }
+
+  updateStatus(
+    "e2eeGetKeyStatus",
+    `⏳ Récupération clé de ${targetUserId}...`,
+    "info",
+  );
+  socket.emit("encryption:getPublicKey", { targetUserId });
+  log(`📤 Émission encryption:getPublicKey pour ${targetUserId}`, "info");
+}
+
+/**
+ * Récupère la configuration de chiffrement active.
+ */
+function getEncryptionConfig() {
+  if (!socket || !isAuthenticated) {
+    alert("Authentifiez-vous d'abord");
+    return;
+  }
+  updateStatus("e2eeConfigStatus", "⏳ Récupération config...", "info");
+  socket.emit("encryption:getConfig");
+  log("📤 Émission encryption:getConfig", "info");
+}
+
+/**
+ * Change le mode de chiffrement (admin uniquement).
+ */
+function switchEncryptionMode() {
+  if (!socket || !isAuthenticated) {
+    alert("Authentifiez-vous d'abord");
+    return;
+  }
+  const mode = document.getElementById("e2eeSwitchModeSelect").value;
+  updateStatus(
+    "e2eeSwitchStatus",
+    `⏳ Changement vers mode: ${mode}...`,
+    "info",
+  );
+  socket.emit("encryption:switchMode", { mode });
+  log(`📤 Émission encryption:switchMode → ${mode}`, "info");
+}
+
+/**
+ * Révoque la clé publique de l'utilisateur connecté.
+ */
+function revokeE2EEKey() {
+  if (!socket || !isAuthenticated) {
+    alert("Authentifiez-vous d'abord");
+    return;
+  }
+  if (
+    !confirm(
+      "⚠️ Révoquer votre clé E2EE ? Les messages futurs ne pourront plus être chiffrés jusqu'à réenregistrement.",
+    )
+  )
+    return;
+  updateStatus("e2eeRevokeStatus", "⏳ Révocation en cours...", "info");
+  socket.emit("encryption:revokeKey");
+  e2eeKeyPair = null;
+  document.getElementById("e2eePublicKeyDisplay").textContent = "(aucune clé)";
+  log("📤 Émission encryption:revokeKey", "warning");
+}
+
+/**
+ * Test de diagnostic E2EE complet
+ */
+function testE2EEConnection() {
+  console.log("🔍 ═══════════════════════════════════════════════════════");
+  console.log("🔍 DIAGNOSTIC E2EE COMPLET");
+  console.log("🔍 ═══════════════════════════════════════════════════════");
+
+  // 1. Vérifier l'état du socket
+  console.log("\n1️⃣ État Socket.IO");
+  console.log("   socket existe:", !!socket);
+  console.log("   socket.connected:", socket?.connected);
+  console.log("   socket.id:", socket?.id);
+
+  // 2. Vérifier l'authentification
+  console.log("\n2️⃣ État Authentification");
+  console.log("   isAuthenticated:", isAuthenticated);
+  console.log("   currentUser:", currentUser);
+  console.log("   socket.userId:", socket?.userId);
+
+  // 3. Vérifier la paire de clés
+  console.log("\n3️⃣ Paire de clés E2EE");
+  console.log("   e2eeKeyPair existe:", !!e2eeKeyPair);
+  if (e2eeKeyPair) {
+    console.log("   publicKey length:", e2eeKeyPair.publicKey?.length);
+    console.log(
+      "   publicKey preview:",
+      e2eeKeyPair.publicKey?.substring(0, 50) + "...",
+    );
+  }
+
+  // 4. Vérifier les éléments DOM
+  console.log("\n4️⃣ Éléments DOM");
+  const elements = [
+    "e2eePublicKeyDisplay",
+    "e2eeFingerprint",
+    "e2eeKeyVersion",
+    "e2eeCurrentMode",
+  ];
+  elements.forEach((id) => {
+    const el = document.getElementById(id);
+    console.log(
+      `   ${id}:`,
+      !!el,
+      el ? `(${el.textContent?.substring(0, 20)}...)` : "",
+    );
+  });
+
+  // 5. Test d'émission
+  console.log("\n5️⃣ Test Émission Socket");
+  if (!socket || !socket.connected) {
+    console.error("   ❌ Socket non connecté");
+  } else if (!isAuthenticated) {
+    console.error("   ❌ Non authentifié");
+  } else {
+    console.log("   ✅ Prêt à émettre");
+
+    // Test avec un événement factice
+    console.log("   📤 Test avec encryption:getConfig...");
+    socket.emit("encryption:getConfig");
+
+    // Si paire existe, tester l'enregistrement
+    if (e2eeKeyPair) {
+      console.log("   📤 Test avec encryption:registerKey...");
+      socket.emit("encryption:registerKey", {
+        publicKey: e2eeKeyPair.publicKey,
+        deviceInfo: { platform: "diagnostic-test", deviceName: "Test Manual" },
+      });
+    } else {
+      console.log("   ⚠️  Pas de paire de clés, génération...");
+      generateE2EEKeyPair().then(() => {
+        console.log("   ✅ Génération terminée, réessayez le diagnostic");
+      });
+    }
+  }
+
+  console.log("\n🔍 ═══════════════════════════════════════════════════════");
+  console.log("🔍 Vérifiez les logs du serveur pour voir si les événements");
+  console.log("🔍 encryption:* sont bien reçus côté serveur.");
+  console.log("🔍 ═══════════════════════════════════════════════════════\n");
+
+  log("🔍 Diagnostic E2EE exécuté — voir console (F12)", "info");
 }

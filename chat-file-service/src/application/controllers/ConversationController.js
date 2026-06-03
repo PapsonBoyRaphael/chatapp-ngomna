@@ -4,12 +4,16 @@ class ConversationController {
     getConversationUseCase,
     redisClient = null,
     cacheService = null,
-    searchOccurrencesUseCase = null
+    searchOccurrencesUseCase = null,
+    archiveConversationUseCase = null,
+    getArchivedConversationsUseCase = null
   ) {
     this.getConversationsUseCase = getConversationsUseCase;
     this.getConversationUseCase = getConversationUseCase;
     this.redisClient = redisClient;
     this.searchOccurrencesUseCase = searchOccurrencesUseCase;
+    this.archiveConversationUseCase = archiveConversationUseCase;
+    this.getArchivedConversationsUseCase = getArchivedConversationsUseCase;
   }
 
   // ✅ MÉTHODE PRINCIPALE POUR RÉCUPÉRER LES CONVERSATIONS (SANS CACHE CONTROLLER)
@@ -383,6 +387,143 @@ class ConversationController {
         success: false,
         message: "Erreur lors de la recherche globale",
         error: error.message,
+      });
+    }
+  }
+
+  // ✅ ARCHIVER / DÉSARCHIVER UNE CONVERSATION
+  async archiveConversation(req, res) {
+    const startTime = Date.now();
+    try {
+      const { conversationId } = req.params;
+      const userId = req.user?.id || req.user?.userId || req.headers['user-id'];
+      const { action = 'archive' } = req.body;
+
+      if (!conversationId || !userId) {
+        return res.status(400).json({
+          success: false,
+          message: 'ID conversation et utilisateur requis',
+          code: 'MISSING_PARAMS',
+        });
+      }
+
+      if (!['archive', 'unarchive'].includes(action)) {
+        return res.status(400).json({
+          success: false,
+          message: "L'action doit être 'archive' ou 'unarchive'",
+          code: 'INVALID_ACTION',
+        });
+      }
+
+      if (!this.archiveConversationUseCase) {
+        return res.status(501).json({
+          success: false,
+          message: 'Fonctionnalité non disponible',
+          code: 'USE_CASE_NOT_INJECTED',
+        });
+      }
+
+      const result = await this.archiveConversationUseCase.execute(userId, conversationId, action);
+      const processingTime = Date.now() - startTime;
+
+      res.json({
+        success: true,
+        message: result.alreadyInState
+          ? `Conversation déjà ${action === 'archive' ? 'archivée' : 'désarchivée'}`
+          : `Conversation ${action === 'archive' ? 'archivée' : 'désarchivée'} avec succès`,
+        data: result,
+        metadata: {
+          processingTime: `${processingTime}ms`,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      const processingTime = Date.now() - startTime;
+      console.error('❌ Erreur archiveConversation:', error);
+
+      const statusCode =
+        error.message?.includes('non trouvée') || error.message?.includes('not found') ? 404
+        : error.message?.includes('autorisé') || error.message?.includes('participant') ? 403
+        : 500;
+
+      res.status(statusCode).json({
+        success: false,
+        message: error.message || 'Erreur lors de l\'archivage',
+        code: 'ARCHIVE_CONVERSATION_FAILED',
+        metadata: {
+          processingTime: `${processingTime}ms`,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    }
+  }
+
+  // ✅ DÉSARCHIVER (wrapper)
+  async unarchiveConversation(req, res) {
+    req.body = { ...req.body, action: 'unarchive' };
+    return this.archiveConversation(req, res);
+  }
+
+  // ✅ RÉCUPÉRER LES CONVERSATIONS ARCHIVÉES
+  async getArchivedConversations(req, res) {
+    const startTime = Date.now();
+    try {
+      const userId = req.user?.id || req.user?.userId || req.headers['user-id'];
+      const { page = 1, limit = 20 } = req.query;
+
+      if (!userId) {
+        return res.status(400).json({
+          success: false,
+          message: 'ID utilisateur requis',
+          code: 'MISSING_USER_ID',
+        });
+      }
+
+      if (!this.getArchivedConversationsUseCase) {
+        return res.status(501).json({
+          success: false,
+          message: 'Fonctionnalité non disponible',
+          code: 'USE_CASE_NOT_INJECTED',
+        });
+      }
+
+      const pageNum = Math.max(1, parseInt(page));
+      const limitNum = Math.min(Math.max(1, parseInt(limit)), 50);
+
+      const result = await this.getArchivedConversationsUseCase.execute(userId, {
+        page: pageNum,
+        limit: limitNum,
+      });
+
+      const processingTime = Date.now() - startTime;
+
+      res.json({
+        success: true,
+        message: `${result.conversations?.length || 0} conversation(s) archivée(s) récupérée(s)`,
+        data: {
+          conversations: result.conversations || [],
+          totalCount: result.totalCount || 0,
+          pagination: result.pagination || {},
+        },
+        metadata: {
+          userId,
+          processingTime: `${processingTime}ms`,
+          timestamp: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      const processingTime = Date.now() - startTime;
+      console.error('❌ Erreur getArchivedConversations:', error);
+
+      res.status(500).json({
+        success: false,
+        message: 'Erreur lors de la récupération des conversations archivées',
+        error: process.env.NODE_ENV === 'development' ? error.message : 'Erreur interne',
+        code: 'GET_ARCHIVED_FAILED',
+        metadata: {
+          processingTime: `${processingTime}ms`,
+          timestamp: new Date().toISOString(),
+        },
       });
     }
   }

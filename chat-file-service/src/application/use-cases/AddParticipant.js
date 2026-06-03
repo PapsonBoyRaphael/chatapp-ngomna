@@ -121,6 +121,18 @@ class AddParticipant {
       });
     }
 
+    // verifier si le total des membres dépasse la limite pour un GROUP et convertir en CHANNEL si nécessaire
+    const MAX_GROUP_MEMBERS = process.env.MAX_GROUP_MEMBERS || 200; // Exemple de limite, à ajuster selon les besoins
+    if (
+      conversation.participants.length > MAX_GROUP_MEMBERS &&
+      conversation.type === "GROUP"
+    ) {
+      conversation.type = "CHANNEL";
+      console.log(
+        `⚠️ Conversation ${conversationId} convertie en CHANNEL car nombre de membres (${conversation.participants.length}) dépasse la limite pour GROUP.`,
+      );
+    }
+
     conversation.updatedAt = new Date();
 
     // Sauvegarder

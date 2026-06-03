@@ -36,7 +36,7 @@ class CachedMessageRepository {
       let cacheKey = null;
       let ttl = this.shortTTL;
 
-      if (useCache && this.cache) {
+      if (useCache && this.cache && !cursor) {
         // ✅ Inclure userId dans la clé de cache pour isoler les suppressions FOR_ME
         const userSegment = userId ? `:u${userId}` : "";
 
@@ -87,6 +87,10 @@ class CachedMessageRepository {
           conversationId,
           { cursor, limit, direction, userId },
         );
+
+        console.log(
+          `🔍 Pagination cursor-based: ${result.messages.length} messages récupérés (nextCursor: ${result.nextCursor})`,
+        );
       } else {
         // ✅ PAGINATION PAGE-BASED (fallback)
         const messages = await this.primaryStore.findByConversation(
@@ -99,6 +103,9 @@ class CachedMessageRepository {
           nextCursor: messages.nextCursor || null,
           hasMore: messages.hasMore || false,
         };
+        console.log(
+          `🔍 Pagination page-based: ${result.messages.length} messages récupérés (page: ${page}), nextCursor: ${result.nextCursor}`,
+        );
       }
 
       // ✅ METTRE EN CACHE SELON LA STRATÉGIE

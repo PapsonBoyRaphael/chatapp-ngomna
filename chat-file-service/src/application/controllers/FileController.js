@@ -17,6 +17,8 @@ class FileController {
     mediaProcessingService = null,
     searchOccurrencesUseCase = null,
     chunkedUploadService = null,
+    encryptionService = null, // ✅ E2EE
+    keyManagementService = null, // ✅ E2EE
   ) {
     this.uploadFileUseCase = uploadFileUseCase;
     this.getFileUseCase = getFileUseCase;
@@ -26,6 +28,8 @@ class FileController {
     this.searchOccurrencesUseCase = searchOccurrencesUseCase;
     this.mediaProcessingService = mediaProcessingService;
     this.chunkedUploadService = chunkedUploadService;
+    this.encryptionService = encryptionService; // ✅ E2EE
+    this.keyManagementService = keyManagementService; // ✅ E2EE
 
     this.maxListLimit = 50; // Limit pour lists/multiple
 
@@ -107,9 +111,54 @@ class FileController {
       console.log(`🆔 ID fichier généré (UUID): ${fileId}`);
       console.log(`📝 Nom sécurisé généré: ${safeFileName}`);
 
+      // ✅ CHIFFREMENT E2EE DU BUFFER (si activé)
+      let uploadBuffer = req.file.buffer;
+      let fileEncryptionMeta = {
+        mode: "none",
+        iv: null,
+        tag: null,
+        encryptedKey: null,
+        keyVersion: null,
+      };
+
+      const fileOwnerId = req.body.receiverId || userId; // destinataire ou proprio
+      if (
+        this.encryptionService?.isE2EEEnabled() &&
+        this.keyManagementService &&
+        fileOwnerId
+      ) {
+        try {
+          const recipientPublicKey =
+            await this.keyManagementService.getPublicKey(String(fileOwnerId));
+          const keyMeta = await this.keyManagementService.getKeyMetadata(
+            String(fileOwnerId),
+          );
+          const encResult = await this.encryptionService.encryptFile(
+            uploadBuffer,
+            recipientPublicKey,
+          );
+
+          uploadBuffer = encResult.buffer;
+          fileEncryptionMeta = {
+            mode: "e2ee",
+            iv: encResult.iv,
+            tag: encResult.tag,
+            encryptedKey: encResult.encryptedKey,
+            keyVersion: keyMeta?.keyVersion ?? null,
+          };
+          console.log(
+            `🔐 Fichier chiffré E2EE pour ${fileOwnerId} (keyVersion=${fileEncryptionMeta.keyVersion})`,
+          );
+        } catch (encErr) {
+          console.warn(
+            `⚠️ Chiffrement E2EE fichier ignoré pour ${fileOwnerId}: ${encErr.message}`,
+          );
+        }
+      }
+
       // ✅ UPLOAD VERS LE STOCKAGE (utiliser le safeFileName)
       const remotePath = await this.fileStorageService.uploadFromBuffer(
-        req.file.buffer,
+        uploadBuffer,
         safeFileName,
         req.file.mimetype,
       );
@@ -193,7 +242,7 @@ class FileController {
 
           // ✅ MÉTADONNÉES DE SÉCURITÉ
           security: {
-            encrypted: false,
+            encrypted: fileEncryptionMeta.mode === "e2ee",
             accessLevel: "private",
             scanStatus: "pending",
           },
@@ -227,6 +276,8 @@ class FileController {
         isClientRecorded:
           req.body.isClientRecorded === true ||
           req.body.isClientRecorded === "true",
+        // ✅ MÉTADONNÉES DE CHIFFREMENT E2EE
+        encryptionMetadata: fileEncryptionMeta,
       };
 
       let result;

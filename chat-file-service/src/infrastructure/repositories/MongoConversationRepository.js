@@ -1,25 +1,6 @@
 const Conversation = require("../mongodb/models/ConversationModel");
 
 class MongoConversationRepository {
-  /**
-   * Recherche une conversation par un champ arbitraire (ex: code_structure)
-   * @param {Object} query - Objet de requête MongoDB (ex: { code_structure: '...' })
-   * @returns {Promise<Object|null>} Conversation trouvée ou null
-   */
-  async findOne(query = {}) {
-    if (!query || typeof query !== "object") {
-      throw new Error("Query object requis pour findOne");
-    }
-    try {
-      return await Conversation.findOne(query);
-    } catch (error) {
-      console.error(
-        "❌ Erreur MongoConversationRepository.findOne:",
-        error.message,
-      );
-      return null;
-    }
-  }
   constructor(kafkaProducer = null, resilientMessageService = null) {
     this.kafkaProducer = kafkaProducer;
     this.resilientMessageService = resilientMessageService;
@@ -359,7 +340,13 @@ class MongoConversationRepository {
   }
 
   async findByParticipant(userId, options = {}) {
-    const { page = 1, limit = 20, type = null, useCache = true } = options;
+    const {
+      page = 1,
+      limit = 20,
+      type = null,
+      useCache = true,
+      includeArchived = false,
+    } = options;
     const startTime = Date.now();
 
     try {
@@ -371,7 +358,13 @@ class MongoConversationRepository {
             typeof userId === "string" ? Number(userId) : String(userId),
           ],
         },
+        isActive: true, // ✅ Seulement conversations actives
       };
+
+      // ✅ Exclure les conversations archivées par cet utilisateur par défaut
+      if (!includeArchived) {
+        filter.archivedBy = { $nin: [String(userId || "")] };
+      }
 
       if (type) filter.type = type;
 
@@ -423,122 +416,6 @@ class MongoConversationRepository {
       this.metrics.errors++;
       console.error(`❌ Erreur conversations participant ${userId}:`, error);
       throw error;
-    }
-  }
-
-  /**
-   * ✅ TROUVER UNE CONVERSATION PRIVÉE ENTRE DEUX UTILISATEURS
-   */
-  async findPrivateConversation(participant1, participant2) {
-    try {
-      return await Conversation.findOne({
-        type: "PRIVATE",
-        participants: { $all: [String(participant1), String(participant2)] },
-        isActive: true,
-      }).lean();
-    } catch (error) {
-      console.error("\u274c Erreur findPrivateConversation:", error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * ✅ METTRE À JOUR broadcastMetadata sur une conversation BROADCAST
-   * Ajoute les nouvelles entrées (recipientId → conversationId) dans privateConversations.
-   * Ne touche PAS à totalMessagesSent (voir incrementBroadcastMessageCount).
-   * @param {string} broadcastConversationId
-   * @param {Array<{recipientId, conversationId}>} privateConversationEntries
-   */
-  async updateBroadcastMetadata(
-    broadcastConversationId,
-    privateConversationEntries,
-  ) {
-    try {
-      const existing = await Conversation.findById(broadcastConversationId)
-        .select("broadcastMetadata")
-        .lean();
-
-      const existingIds = new Set(
-        (existing?.broadcastMetadata?.privateConversations || []).map(
-          (e) => e.recipientId,
-        ),
-      );
-
-      // ✅ Vérifier que chaque conversationId pointe bien vers une conv PRIVATE
-      const convIds = privateConversationEntries
-        .filter((e) => !existingIds.has(e.recipientId))
-        .map((e) => e.conversationId);
-
-      const validPrivateConvs =
-        convIds.length > 0
-          ? await Conversation.find({
-              _id: { $in: convIds },
-              type: "PRIVATE",
-            })
-              .select("_id")
-              .lean()
-          : [];
-
-      const validConvIdSet = new Set(
-        validPrivateConvs.map((c) => c._id.toString()),
-      );
-
-      const rejectedCount = convIds.length - validPrivateConvs.length;
-      if (rejectedCount > 0) {
-        console.warn(
-          `⚠️ updateBroadcastMetadata: ${rejectedCount} entrée(s) rejetée(s) car non PRIVATE`,
-        );
-      }
-
-      const newEntries = privateConversationEntries
-        .filter(
-          (e) =>
-            !existingIds.has(e.recipientId) &&
-            validConvIdSet.has(String(e.conversationId)),
-        )
-        .map((e) => ({
-          recipientId: e.recipientId,
-          conversationId: e.conversationId,
-        }));
-
-      if (newEntries.length > 0) {
-        const totalKnown =
-          (existing?.broadcastMetadata?.privateConversations?.length || 0) +
-          newEntries.length;
-
-        await Conversation.findByIdAndUpdate(broadcastConversationId, {
-          $push: {
-            "broadcastMetadata.privateConversations": { $each: newEntries },
-          },
-          $set: { "broadcastMetadata.totalRecipients": totalKnown },
-        });
-      }
-
-      console.log(
-        `✅ broadcastMetadata mis à jour: ${broadcastConversationId} (+${newEntries.length} conv(s) privée(s))`,
-      );
-    } catch (error) {
-      console.error("❌ Erreur updateBroadcastMetadata:", error.message);
-      throw error;
-    }
-  }
-
-  /**
-   * ✅ INCRÉMENTER le compteur de messages broadcast envoyés.
-   * À appeler UNE FOIS par envoi de message broadcast (depuis SendMessage).
-   * @param {string} broadcastConversationId
-   */
-  async incrementBroadcastMessageCount(broadcastConversationId) {
-    try {
-      await Conversation.findByIdAndUpdate(broadcastConversationId, {
-        $inc: { "broadcastMetadata.totalMessagesSent": 1 },
-        $set: { "broadcastMetadata.lastBroadcastAt": new Date() },
-      });
-      console.log(
-        `📊 totalMessagesSent incrémenté pour ${broadcastConversationId}`,
-      );
-    } catch (error) {
-      console.error("❌ Erreur incrementBroadcastMessageCount:", error.message);
     }
   }
 
@@ -989,6 +866,7 @@ class MongoConversationRepository {
         prenom: meta.prenom ? String(meta.prenom) : null,
         sexe: meta.sexe ? String(meta.sexe) : null,
         avatar: meta.avatar ? String(meta.avatar) : null,
+        departement: meta.departement ? String(meta.departement) : null,
         ministere: meta.ministere ? String(meta.ministere) : null,
       }));
     } else {
@@ -1008,6 +886,7 @@ class MongoConversationRepository {
         prenom: null,
         sexe: null,
         avatar: null,
+        departement: null,
         ministere: null,
       }));
     }
@@ -1173,7 +1052,8 @@ class MongoConversationRepository {
       let filter = {};
       if (userId) filter.participants = userId;
       if (type) filter.type = type;
-      if (!includeArchived) filter.isArchived = false;
+      if (!includeArchived)
+        filter.archivedBy = { $nin: [String(userId || "")] };
 
       if (query && typeof query === "string" && query.length >= 2) {
         filter.$text = { $search: query };
@@ -1189,7 +1069,8 @@ class MongoConversationRepository {
         filter = {};
         if (userId) filter.participants = userId;
         if (type) filter.type = type;
-        if (!includeArchived) filter.isArchived = false;
+        if (!includeArchived)
+          filter.archivedBy = { $nin: [String(userId || "")] };
         filter.$or = [
           { name: { $regex: query, $options: "i" } },
           { description: { $regex: query, $options: "i" } },
@@ -1511,6 +1392,122 @@ class MongoConversationRepository {
    * ✅ OBTENIR LE lastSeen LE PLUS RÉCENT D'UN UTILISATEUR (toutes conversations confondues)
    * Utilisé comme fallback quand Redis ne contient pas l'info
    */
+  /**
+   * ✅ ARCHIVER OU DÉSARCHIVER UNE CONVERSATION POUR UN UTILISATEUR
+   * Utilise les méthodes Mongoose archiveForUser / unarchiveForUser du modèle.
+   *
+   * @param {string} conversationId
+   * @param {string} userId
+   * @param {'archive'|'unarchive'} action
+   * @returns {object} conversation mise à jour (lean)
+   */
+  async archiveForUser(conversationId, userId, action = "archive") {
+    const startTime = Date.now();
+
+    try {
+      const conversation = await Conversation.findById(conversationId);
+
+      if (!conversation) {
+        throw new Error(`Conversation ${conversationId} introuvable`);
+      }
+
+      if (action === "archive") {
+        conversation.archiveForUser(String(userId));
+      } else {
+        conversation.unarchiveForUser(String(userId));
+      }
+
+      await conversation.save();
+
+      const processingTime = Date.now() - startTime;
+      console.log(
+        `📦 archiveForUser: ${action} — conv=${conversationId}, user=${userId} (${processingTime}ms)`,
+      );
+
+      // Invalider les caches de listes de conversations de cet utilisateur
+      if (this.cacheService) {
+        try {
+          await Promise.allSettled([
+            this.cacheService.del(`chat:cache:convs:user:${userId}:*`),
+            this.cacheService.del(`chat:cache:convs:quick:${userId}:*`),
+            this.cacheService.del(`chat:cache:convs:id:${conversationId}`),
+          ]);
+        } catch (cacheErr) {
+          console.warn(
+            "⚠️ Erreur invalidation cache archivage:",
+            cacheErr.message,
+          );
+        }
+      }
+
+      return conversation.toObject();
+    } catch (error) {
+      console.error(`❌ Erreur archiveForUser (${action}):`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ RÉCUPÉRER LES CONVERSATIONS ARCHIVÉES D'UN UTILISATEUR
+   * Retourne les conversations où userId figure dans archivedBy[].
+   *
+   * @param {string} userId
+   * @param {object} options - { page, limit, type }
+   * @returns {{ conversations, totalCount, pagination }}
+   */
+  async findArchivedByUser(userId, options = {}) {
+    const { page = 1, limit = 20, type = null } = options;
+    const startTime = Date.now();
+
+    try {
+      const filter = {
+        archivedBy: String(userId),
+        participants: {
+          $in: [
+            userId,
+            typeof userId === "string" ? Number(userId) : String(userId),
+          ],
+        },
+        isActive: true,
+      };
+
+      if (type) filter.type = type;
+
+      const skip = (page - 1) * limit;
+
+      const [conversations, totalCount] = await Promise.all([
+        Conversation.find(filter)
+          .sort({ updatedAt: -1, lastMessageAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        Conversation.countDocuments(filter),
+      ]);
+
+      const processingTime = Date.now() - startTime;
+      console.log(
+        `🗄️  findArchivedByUser: ${userId} — ${conversations.length} trouvée(s) / ${totalCount} total (${processingTime}ms)`,
+      );
+
+      return {
+        conversations: conversations.map((c) =>
+          this._sanitizeConversationData(c),
+        ),
+        totalCount,
+        pagination: {
+          currentPage: page,
+          totalPages: Math.ceil(totalCount / limit),
+          hasNext: page * limit < totalCount,
+          hasPrevious: page > 1,
+        },
+        fromCache: false,
+      };
+    } catch (error) {
+      console.error(`❌ Erreur findArchivedByUser ${userId}:`, error.message);
+      throw error;
+    }
+  }
+
   async findLastSeenForUser(userId) {
     try {
       const userIdString = String(userId);

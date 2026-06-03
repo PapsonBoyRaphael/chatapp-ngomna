@@ -244,6 +244,24 @@ const messageSchema = new mongoose.Schema(
           duration: Number, // Durée en secondes (0 si manqué/refusé)
           endReason: String, // Raison de fin ("user_hangup", "timeout", "error"...)
         },
+
+        // ✅ Métadonnées de chiffrement E2EE
+        encryptionMetadata: {
+          // Mode actif au moment de l'envoi : 'none' | 'e2ee'
+          mode: {
+            type: String,
+            enum: ["none", "e2ee"],
+            default: "none",
+          },
+          // Vecteur d'initialisation AES-256-GCM (base64, 16 bytes)
+          iv: { type: String, default: null },
+          // Auth tag GCM (base64, 16 bytes) — intégrité du contenu
+          tag: { type: String, default: null },
+          // Clé symétrique AES chiffrée avec la clé publique RSA du destinataire (base64)
+          encryptedKey: { type: String, default: null },
+          // Version de la clé RSA utilisée (pour rotation / déchiffrement des anciens messages)
+          keyVersion: { type: String, default: null },
+        },
       },
     },
 

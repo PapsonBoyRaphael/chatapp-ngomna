@@ -33,6 +33,62 @@ class CreateGroup {
       throw new Error("name, adminId et members requis");
     }
 
+    // ✅ VÉRIFIER LA PERMISSION DE CRÉER UN GROUPE (si pas autoCreated)
+    if (!autoCreated) {
+      try {
+        console.log(
+          `🔐 Vérification permission création groupe pour: ${adminId}`,
+        );
+        const visibilityResponse = await fetch(
+          `${process.env.VISIBILITY_API_URL}/api/visibility/contacts/${adminId}`,
+        );
+
+        if (!visibilityResponse.ok) {
+          throw new Error(
+            `Erreur API visibility: ${visibilityResponse.status}`,
+          );
+        }
+
+        const visibilityData = await visibilityResponse.json();
+
+        if (!visibilityData.success || !visibilityData.data?.agent) {
+          throw new Error("Impossible de récupérer les permissions");
+        }
+
+        const agent = visibilityData.data.agent;
+
+        // Vérifier la permission peut_creer_groupe
+        if (!agent.peut_creer_groupe) {
+          throw new Error(
+            `L'utilisateur ${adminId} n'a pas la permission de créer des groupes`,
+          );
+        }
+
+        // Vérifier la taille maximale du groupe
+        const totalParticipants = members.length + 1; // +1 pour l'admin
+        if (
+          agent.taille_max_groupe > 0 &&
+          totalParticipants > agent.taille_max_groupe
+        ) {
+          throw new Error(
+            `Taille maximale du groupe dépassée: ${totalParticipants}/${agent.taille_max_groupe}`,
+          );
+        }
+
+        console.log(`✅ Permission validée pour ${adminId}:`, {
+          peut_creer_groupe: agent.peut_creer_groupe,
+          taille_max_groupe: agent.taille_max_groupe,
+          totalParticipants,
+        });
+      } catch (permissionError) {
+        console.error(
+          `❌ Erreur vérification permissions:`,
+          permissionError.message,
+        );
+        throw new Error(`Permission refusée: ${permissionError.message}`);
+      }
+    }
+
     // ✅ Valider l'existence des utilisateurs via UserCacheService
     // Déclarer les variables à portée de fonction pour réutilisation
     let participants = [];

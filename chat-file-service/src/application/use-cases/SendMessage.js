@@ -7,14 +7,18 @@ class SendMessage {
     cacheService = null,
     resilientService = null,
     userCacheService = null,
-    getFileUseCase = null, // ✅ AJOUT
+    getFileUseCase = null,
+    encryptionService = null, // ✅ E2EE
+    keyManagementService = null, // ✅ E2EE
   ) {
     this.messageRepository = messageRepository;
     this.conversationRepository = conversationRepository;
     this.cacheService = cacheService;
     this.resilientService = resilientService;
     this.userCacheService = userCacheService || new UserCacheService();
-    this.getFileUseCase = getFileUseCase; // ✅ AJOUT
+    this.getFileUseCase = getFileUseCase;
+    this.encryptionService = encryptionService; // ✅ E2EE
+    this.keyManagementService = keyManagementService; // ✅ E2EE
   }
 
   // ✅ MODIFIER LA MÉTHODE execute() - RETIRER KAFKA
@@ -308,6 +312,51 @@ class SendMessage {
         }
       }
 
+      // ✅ CHIFFREMENT E2EE (si activé et destinataire connu)
+      let finalContent = content || "";
+      let encryptionMeta = {
+        mode: "none",
+        iv: null,
+        tag: null,
+        encryptedKey: null,
+        keyVersion: null,
+      };
+
+      if (
+        this.encryptionService?.isE2EEEnabled() &&
+        this.keyManagementService &&
+        receiverId
+      ) {
+        try {
+          const recipientPublicKey =
+            await this.keyManagementService.getPublicKey(String(receiverId));
+          const keyMeta = await this.keyManagementService.getKeyMetadata(
+            String(receiverId),
+          );
+          const encrypted = await this.encryptionService.encryptText(
+            finalContent,
+            recipientPublicKey,
+          );
+
+          finalContent = encrypted.encryptedContent;
+          encryptionMeta = {
+            mode: "e2ee",
+            iv: encrypted.encryptionIV,
+            tag: encrypted.encryptionTag,
+            encryptedKey: encrypted.encryptedKey,
+            keyVersion: keyMeta?.keyVersion ?? null,
+          };
+          console.log(
+            `🔐 Message chiffré E2EE pour receiverId=${receiverId} (keyVersion=${encryptionMeta.keyVersion})`,
+          );
+        } catch (encErr) {
+          // Clé publique absente → envoi en clair avec avertissement
+          console.warn(
+            `⚠️ Chiffrement E2EE ignoré pour ${receiverId}: ${encErr.message}`,
+          );
+        }
+      }
+
       // ✅ CRÉER LE MESSAGE
       const message = {
         conversationId: conversation._id || conversation.id,
@@ -320,7 +369,7 @@ class SendMessage {
             ) ||
             null,
         ),
-        content: content || "",
+        content: finalContent,
         type,
         status: "SENT",
         totalRecipients,
@@ -357,6 +406,7 @@ class SendMessage {
           contentMetadata: {
             file: fileMetadata ? fileMetadata : null,
             call: callMeta ? callMeta : null,
+            encryptionMetadata: encryptionMeta,
           },
         },
       };

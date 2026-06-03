@@ -1101,6 +1101,252 @@ Message broadcast de test 📢</textarea
           </div>
         </div>
 
+        <!-- ✅ Section Chiffrement E2EE -->
+        <div
+          class="section"
+          style="
+            border-left: 4px solid #a855f7;
+            background: linear-gradient(135deg, #1e1b2e 0%, #1a1a2e 100%);
+          "
+        >
+          <h2>🔐 Chiffrement E2EE (End-to-End)</h2>
+
+          <!-- Mode actif -->
+          <div
+            class="form-group"
+            style="
+              background: #12122a;
+              border-radius: 8px;
+              padding: 12px;
+              margin-bottom: 12px;
+            "
+          >
+            <h3>⚙️ Configuration Active</h3>
+            <div
+              style="
+                display: flex;
+                gap: 16px;
+                align-items: center;
+                flex-wrap: wrap;
+              "
+            >
+              <span
+                >Mode actuel :
+                <strong id="e2eeCurrentMode" style="color: #a855f7"
+                  >—</strong
+                ></span
+              >
+              <button
+                onclick="getEncryptionConfig()"
+                class="btn-info"
+                style="background: #7c3aed"
+              >
+                🔍 Voir Config
+              </button>
+            </div>
+            <div class="status" id="e2eeConfigStatus"></div>
+          </div>
+
+          <!-- Génération et enregistrement de clé -->
+          <div class="form-group">
+            <h3>🔑 Ma Clé Publique RSA-4096</h3>
+            <div
+              style="
+                display: flex;
+                gap: 8px;
+                flex-wrap: wrap;
+                margin-bottom: 8px;
+              "
+            >
+              <button
+                onclick="generateE2EEKeyPair()"
+                class="btn-primary"
+                style="background: #7c3aed"
+              >
+                ⚡ Générer Paire RSA-4096
+              </button>
+              <button onclick="registerE2EEKey()" class="btn-success">
+                📤 Enregistrer sur le Serveur
+              </button>
+              <button
+                onclick="testE2EEConnection()"
+                class="btn-info"
+                style="background: #ef4444"
+              >
+                🔍 DIAGNOSTIC E2EE
+              </button>
+            </div>
+            <div style="font-size: 12px; color: #888; margin-bottom: 6px">
+              Fingerprint :
+              <code id="e2eeFingerprint" style="color: #a855f7">—</code><br />
+              Version clé :
+              <code id="e2eeKeyVersion" style="color: #a855f7">—</code>
+            </div>
+            <pre
+              id="e2eePublicKeyDisplay"
+              style="
+                max-height: 120px;
+                overflow: auto;
+                font-size: 10px;
+                background: #0d0d1a;
+                padding: 8px;
+                border-radius: 6px;
+                color: #6cf;
+              "
+            >
+(aucune clé générée)</pre
+            >
+            <div class="status" id="e2eeRegisterStatus"></div>
+            <div class="form-help">
+              <small
+                >💡 La clé est
+                <strong>auto-générée et enregistrée</strong> juste après
+                l'authentification. Vous pouvez aussi le faire
+                manuellement.</small
+              >
+            </div>
+          </div>
+
+          <!-- Récupérer la clé d'un destinataire -->
+          <div class="form-group">
+            <h3>📥 Clé Publique d'un Destinataire</h3>
+            <input
+              type="text"
+              id="e2eeTargetUserId"
+              placeholder="userId du destinataire (ex: 534589D)"
+              value="534589D"
+            />
+            <button onclick="getRecipientPublicKey()" class="btn-secondary">
+              🔍 Récupérer Clé
+            </button>
+            <pre
+              id="e2eeRecipientKeyDisplay"
+              style="
+                max-height: 80px;
+                overflow: auto;
+                font-size: 10px;
+                background: #0d0d1a;
+                padding: 8px;
+                border-radius: 6px;
+                color: #6cf;
+                margin-top: 6px;
+              "
+            >
+(aucune clé récupérée)</pre
+            >
+            <div class="status" id="e2eeGetKeyStatus"></div>
+          </div>
+
+          <!-- Switch mode (admin) -->
+          <div class="form-group">
+            <h3>🔄 Changer le Mode (Admin)</h3>
+            <div
+              style="
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                flex-wrap: wrap;
+              "
+            >
+              <select
+                id="e2eeSwitchModeSelect"
+                style="flex: 1; min-width: 120px"
+              >
+                <option value="e2ee">🔒 e2ee (chiffrement actif)</option>
+                <option value="none">🔓 none (texte clair)</option>
+              </select>
+              <button onclick="switchEncryptionMode()" class="btn-warning">
+                🔄 Appliquer
+              </button>
+            </div>
+            <div class="status" id="e2eeSwitchStatus"></div>
+            <div class="form-help">
+              <small
+                >⚠️ Réservé aux admins. Le changement est broadcasté à tous les
+                clients connectés.</small
+              >
+            </div>
+          </div>
+
+          <!-- Révoquer la clé -->
+          <div class="form-group">
+            <h3>🚫 Révoquer Ma Clé</h3>
+            <button onclick="revokeE2EEKey()" class="btn-danger">
+              🚫 Révoquer Ma Clé Publique
+            </button>
+            <div class="status" id="e2eeRevokeStatus"></div>
+            <div class="form-help">
+              <small
+                >⚠️ Après révocation, les nouveaux messages ne seront plus
+                chiffrés pour vous jusqu'au prochain enregistrement de
+                clé.</small
+              >
+            </div>
+          </div>
+        </div>
+
+        <!-- ✅ SECTION ARCHIVAGE DES CONVERSATIONS -->
+        <div class="section" id="archive-section" style="border-color: #f59e0b">
+          <h2>📂 Archivage des Conversations</h2>
+
+          <!-- Archiver / Désarchiver -->
+          <div style="margin-bottom: 16px">
+            <h3 style="color: #f59e0b">📦 Archiver / Désarchiver</h3>
+            <label>ID Conversation</label>
+            <input
+              type="text"
+              id="archiveConvId"
+              placeholder="conversationId"
+            />
+            <div style="display: flex; gap: 8px; margin-top: 8px">
+              <button onclick="archiveConversation()" class="btn-warning">
+                📥 Archiver
+              </button>
+              <button onclick="unarchiveConversation()" class="btn-success">
+                📤 Désarchiver
+              </button>
+            </div>
+            <div class="status" id="archiveStatus"></div>
+          </div>
+
+          <!-- Récupérer les archivées -->
+          <div style="margin-bottom: 16px">
+            <h3 style="color: #f59e0b">📋 Mes Conversations Archivées</h3>
+            <div style="display: flex; gap: 8px; align-items: center">
+              <label>Page</label>
+              <input
+                type="number"
+                id="archivedPage"
+                value="1"
+                style="width: 60px"
+                min="1"
+              />
+              <label>Limite</label>
+              <input
+                type="number"
+                id="archivedLimit"
+                value="20"
+                style="width: 60px"
+                min="1"
+                max="50"
+              />
+              <button onclick="getArchivedConversations()" class="btn-primary">
+                🔍 Récupérer
+              </button>
+            </div>
+            <div class="status" id="archivedListStatus"></div>
+            <div
+              id="archivedConvList"
+              style="
+                margin-top: 10px;
+                max-height: 200px;
+                overflow-y: auto;
+                font-size: 12px;
+              "
+            ></div>
+          </div>
+        </div>
+
         <!-- Section réception complète des messages -->
         <div class="section all-messages-section">
           <h2>📥 Tous les messages reçus</h2>

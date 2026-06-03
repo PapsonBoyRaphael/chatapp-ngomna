@@ -46,6 +46,8 @@ const ResilientMessageService = require("./infrastructure/services/ResilientMess
 const UserCacheService = require("./infrastructure/services/UserCacheService");
 const SmartCachePrewarmer = require("./infrastructure/services/SmartCachePrewarmer");
 const ChunkedUploadService = require("./infrastructure/services/ChunkedUploadService");
+const EncryptionService = require("./infrastructure/services/EncryptionService");
+const KeyManagementService = require("./infrastructure/services/KeyManagementService");
 
 // Repositories - Cached
 const CachedMessageRepository = require("./infrastructure/repositories/CachedMessageRepository");
@@ -81,6 +83,8 @@ const DeleteFile = require("./application/use-cases/DeleteFile");
 const ForwardMessage = require("./application/use-cases/ForwardMessage");
 const ReplyMessage = require("./application/use-cases/ReplyMessage");
 const SearchOccurrences = require("./application/use-cases/SearchOccurrences");
+const ArchiveConversation = require("./application/use-cases/ArchiveConversation");
+const GetArchivedConversations = require("./application/use-cases/GetArchivedConversations");
 const AddReaction = require("./application/use-cases/AddReaction");
 const RemoveReaction = require("./application/use-cases/RemoveReaction");
 
@@ -323,6 +327,20 @@ const startServer = async () => {
     console.log("✅ Services de fichiers initialisés");
 
     // ===============================
+    // 5b. SERVICES CHIFFREMENT E2EE
+    // ===============================
+    const encryptionService = new EncryptionService({
+      mode: process.env.ENCRYPTION_MODE || "none",
+    });
+    const keyManagementService = new KeyManagementService(redisClient);
+    app.locals.encryptionService = encryptionService;
+    app.locals.keyManagementService = keyManagementService;
+    console.log(
+      `✅ EncryptionService initialisé (mode: ${encryptionService.getMode()})`,
+    );
+    console.log("✅ KeyManagementService initialisé");
+
+    // ===============================
     // 6. INITIALISATION REPOSITORIES
     // ===============================
     // Créer d'abord les repos Mongo
@@ -448,6 +466,8 @@ const startServer = async () => {
       resilientMessageService, // ← NOUVEAU
       null, // userCacheService
       getFileUseCase, // ✅ AJOUT DE getFileUseCase
+      encryptionService, // ✅ Chiffrement E2EE
+      keyManagementService, // ✅ Gestion clés publiques
     );
 
     const getMessagesUseCase = new GetMessages(
@@ -465,6 +485,14 @@ const startServer = async () => {
       messageRepository, // Cached
       cacheServiceInstance,
       onlineUserManager, // ✅ AJOUTÉ pour statuts de présence
+    );
+
+    const archiveConversationUseCase = new ArchiveConversation(
+      conversationRepository,
+    );
+    const getArchivedConversationsUseCase = new GetArchivedConversations(
+      conversationRepository,
+      onlineUserManager,
     );
 
     const updateMessageStatusUseCase = new UpdateMessageStatus(
@@ -632,6 +660,8 @@ const startServer = async () => {
       mediaProcessingService,
       null, // searchOccurrencesUseCase
       chunkedUploadService, // ✅ Upload chunké > 100 MB
+      encryptionService, // ✅ Chiffrement E2EE
+      keyManagementService, // ✅ Gestion clés publiques
     );
 
     const messageController = new MessageController(
@@ -647,6 +677,8 @@ const startServer = async () => {
       redisClient,
       null, // cacheService
       searchOccurrencesUseCase,
+      archiveConversationUseCase,
+      getArchivedConversationsUseCase,
     );
 
     const groupController = new GroupController({
@@ -718,6 +750,10 @@ const startServer = async () => {
       removeReactionUseCase,
       replyMessageUseCase,
       autoGroupSyncUseCase,
+      encryptionService, // ✅ E2EE
+      keyManagementService, // ✅ E2EE
+      archiveConversationUseCase, // ✅ Archivage
+      getArchivedConversationsUseCase, // ✅ Archivage
     );
 
     // ✅ CONFIGURER LES GESTIONNAIRES D'ÉVÉNEMENTS SOCKET.IO

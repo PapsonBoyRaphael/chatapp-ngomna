@@ -38,6 +38,10 @@ class ChatHandler {
     removeReactionUseCase = null,
     replyMessageUseCase = null,
     autoGroupSyncUseCase = null,
+    encryptionService = null, // ✅ E2EE
+    keyManagementService = null, // ✅ E2EE
+    archiveConversationUseCase = null, // ✅ Archivage
+    getArchivedConversationsUseCase = null, // ✅ Archivage
   ) {
     this.io = io;
     this.sendMessageUseCase = sendMessageUseCase;
@@ -67,8 +71,11 @@ class ChatHandler {
     this.addReactionUseCase = addReactionUseCase;
     this.removeReactionUseCase = removeReactionUseCase;
     this.replyMessageUseCase = replyMessageUseCase;
-
     this.autoGroupSyncUseCase = autoGroupSyncUseCase;
+    this.encryptionService = encryptionService; // ✅ E2EE
+    this.keyManagementService = keyManagementService; // ✅ E2EE
+    this.archiveConversationUseCase = archiveConversationUseCase; // ✅ Archivage
+    this.getArchivedConversationsUseCase = getArchivedConversationsUseCase; // ✅ Archivage
     // ✅ LOG DE DEBUG
     console.log(
       "🔍 ChatHandler reçu messageDeliveryService:",
@@ -228,6 +235,360 @@ class ChatHandler {
             this.onlineUserManager.updateLastActivity(socket.userId, socket);
           }
         });
+
+        // ──────────────────────────────────────────────────────────────────
+        // 🔐 ÉVÉNEMENTS CHIFFREMENT E2EE
+        // ──────────────────────────────────────────────────────────────────
+
+        /**
+         * Enregistre ou met à jour la clé publique RSA de l'utilisateur connecté.
+         * Le client doit émettre cet événement à chaque connexion si E2EE est actif.
+         *
+         * Émission client  : encryption:registerKey { publicKey, deviceInfo? }
+         * Réponse serveur  : encryption:keyRegistered { keyVersion, fingerprint, isRotation }
+         *                 ou encryption:error { message }
+         */
+        socket.on("encryption:registerKey", async (data) => {
+          try {
+            if (!this.keyManagementService) {
+              return socket.emit("encryption:error", {
+                event: "encryption:registerKey",
+                message: "Service de gestion des clés non disponible",
+              });
+            }
+
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("encryption:error", {
+                event: "encryption:registerKey",
+                message: "Authentification requise",
+              });
+            }
+
+            const { publicKey, deviceInfo = {} } = data || {};
+            if (!publicKey) {
+              return socket.emit("encryption:error", {
+                event: "encryption:registerKey",
+                message: "publicKey manquante",
+              });
+            }
+
+            const result = await this.keyManagementService.registerPublicKey(
+              userId,
+              publicKey,
+              deviceInfo,
+            );
+
+            socket.emit("encryption:keyRegistered", {
+              userId,
+              keyVersion: result.keyVersion,
+              fingerprint: result.fingerprint,
+              isRotation: result.isRotation,
+            });
+
+            console.log(
+              `🔐 Clé publique enregistrée pour userId=${userId} v${result.keyVersion}${result.isRotation ? " (rotation)" : ""}`,
+            );
+          } catch (err) {
+            console.error(`❌ encryption:registerKey:`, err.message);
+            socket.emit("encryption:error", {
+              event: "encryption:registerKey",
+              message: err.message,
+            });
+          }
+        });
+
+        /**
+         * Retourne la clé publique d'un utilisateur cible.
+         * Le client l'utilise pour chiffrer les messages côté client (facultatif, server-side E2EE géré par SendMessage).
+         *
+         * Émission client  : encryption:getPublicKey { targetUserId }
+         * Réponse serveur  : encryption:publicKey { userId, publicKey, fingerprint, keyVersion }
+         *                 ou encryption:error { message }
+         */
+        socket.on("encryption:getPublicKey", async (data) => {
+          try {
+            if (!this.keyManagementService) {
+              return socket.emit("encryption:error", {
+                event: "encryption:getPublicKey",
+                message: "Service de gestion des clés non disponible",
+              });
+            }
+
+            if (!socket.userId) {
+              return socket.emit("encryption:error", {
+                event: "encryption:getPublicKey",
+                message: "Authentification requise",
+              });
+            }
+
+            const { targetUserId } = data || {};
+            if (!targetUserId) {
+              return socket.emit("encryption:error", {
+                event: "encryption:getPublicKey",
+                message: "targetUserId manquant",
+              });
+            }
+
+            const publicKey = await this.keyManagementService.getPublicKey(
+              String(targetUserId),
+            );
+            const meta = await this.keyManagementService.getKeyMetadata(
+              String(targetUserId),
+            );
+
+            socket.emit("encryption:publicKey", {
+              userId: targetUserId,
+              publicKey,
+              fingerprint: meta?.fingerprint ?? null,
+              keyVersion: meta?.keyVersion ?? null,
+            });
+          } catch (err) {
+            console.error(`❌ encryption:getPublicKey:`, err.message);
+            socket.emit("encryption:error", {
+              event: "encryption:getPublicKey",
+              message: err.message,
+            });
+          }
+        });
+
+        /**
+         * Retourne le mode de chiffrement actif et la config du service.
+         *
+         * Émission client  : encryption:getConfig
+         * Réponse serveur  : encryption:config { mode, algorithm, keyLength, ... }
+         */
+        socket.on("encryption:getConfig", () => {
+          if (!this.encryptionService) {
+            return socket.emit("encryption:config", { mode: "none" });
+          }
+          socket.emit("encryption:config", this.encryptionService.getConfig());
+        });
+
+        /**
+         * Change le mode de chiffrement à chaud (admin uniquement).
+         *
+         * Émission client  : encryption:switchMode { mode: 'none' | 'e2ee' }
+         * Broadcast serveur: encryption:modeChanged { mode, changedBy, timestamp }
+         *                 ou encryption:error { message }
+         */
+        socket.on("encryption:switchMode", (data) => {
+          try {
+            if (!socket.isAdmin) {
+              return socket.emit("encryption:error", {
+                event: "encryption:switchMode",
+                message: "Accès refusé — droits administrateur requis",
+              });
+            }
+
+            if (!this.encryptionService) {
+              return socket.emit("encryption:error", {
+                event: "encryption:switchMode",
+                message: "EncryptionService non disponible",
+              });
+            }
+
+            const { mode } = data || {};
+            const result = this.encryptionService.switchMode(mode);
+
+            // Notifier tous les clients connectés du changement de mode
+            this.io.emit("encryption:modeChanged", {
+              mode: result.newMode,
+              previous: result.previousMode,
+              changedBy: socket.userId,
+              timestamp: Date.now(),
+            });
+
+            console.log(
+              `🔄 Mode E2EE changé: ${result.previousMode} → ${result.newMode} par ${socket.userId}`,
+            );
+          } catch (err) {
+            console.error(`❌ encryption:switchMode:`, err.message);
+            socket.emit("encryption:error", {
+              event: "encryption:switchMode",
+              message: err.message,
+            });
+          }
+        });
+
+        /**
+         * Révoque la clé publique de l'utilisateur connecté (cas de compromission).
+         *
+         * Émission client  : encryption:revokeKey
+         * Réponse serveur  : encryption:keyRevoked { userId, revokedCount }
+         *                 ou encryption:error { message }
+         */
+        socket.on("encryption:revokeKey", async () => {
+          try {
+            if (!this.keyManagementService) {
+              return socket.emit("encryption:error", {
+                event: "encryption:revokeKey",
+                message: "Service de gestion des clés non disponible",
+              });
+            }
+
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("encryption:error", {
+                event: "encryption:revokeKey",
+                message: "Authentification requise",
+              });
+            }
+
+            const result = await this.keyManagementService.revokeKey(userId);
+
+            socket.emit("encryption:keyRevoked", {
+              userId,
+              revokedCount: result.revokedCount,
+            });
+
+            console.warn(`🚫 Clé révoquée pour userId=${userId}`);
+          } catch (err) {
+            console.error(`❌ encryption:revokeKey:`, err.message);
+            socket.emit("encryption:error", {
+              event: "encryption:revokeKey",
+              message: err.message,
+            });
+          }
+        });
+
+        // ──────────────────────────────────────────────────────────────────
+        // 📂 ÉVÉNEMENTS ARCHIVAGE DE CONVERSATIONS
+        // ──────────────────────────────────────────────────────────────────
+
+        /**
+         * Archive une conversation pour l'utilisateur connecté.
+         * Emission client  : conversation:archive { conversationId }
+         * Réponse serveur  : conversation:archived { conversationId, archivedAt }
+         *                 ou conversation:archiveError { message }
+         */
+        socket.on("conversation:archive", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const userId = socket.userId;
+            if (!userId)
+              return socket.emit("conversation:archiveError", {
+                message: "Authentification requise",
+              });
+            if (!this.archiveConversationUseCase)
+              return socket.emit("conversation:archiveError", {
+                message: "Fonctionnalité non disponible",
+              });
+
+            const { conversationId } = data || {};
+            if (!conversationId)
+              return socket.emit("conversation:archiveError", {
+                message: "conversationId manquant",
+              });
+
+            const result = await this.archiveConversationUseCase.execute(
+              userId,
+              conversationId,
+              "archive",
+            );
+            socket.emit("conversation:archived", {
+              conversationId,
+              archivedAt: result.archivedAt,
+              alreadyArchived: result.alreadyInState || false,
+            });
+            console.log(
+              `📂 Conversation ${conversationId} archivée par ${userId}`,
+            );
+          } catch (err) {
+            console.error("❌ conversation:archive:", err.message);
+            socket.emit("conversation:archiveError", { message: err.message });
+          }
+        });
+
+        /**
+         * Désarchive une conversation pour l'utilisateur connecté.
+         * Emission client  : conversation:unarchive { conversationId }
+         * Réponse serveur  : conversation:unarchived { conversationId }
+         *                 ou conversation:archiveError { message }
+         */
+        socket.on("conversation:unarchive", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const userId = socket.userId;
+            if (!userId)
+              return socket.emit("conversation:archiveError", {
+                message: "Authentification requise",
+              });
+            if (!this.archiveConversationUseCase)
+              return socket.emit("conversation:archiveError", {
+                message: "Fonctionnalité non disponible",
+              });
+
+            const { conversationId } = data || {};
+            if (!conversationId)
+              return socket.emit("conversation:archiveError", {
+                message: "conversationId manquant",
+              });
+
+            const result = await this.archiveConversationUseCase.execute(
+              userId,
+              conversationId,
+              "unarchive",
+            );
+            socket.emit("conversation:unarchived", {
+              conversationId,
+              alreadyUnarchived: result.alreadyInState || false,
+            });
+            console.log(
+              `📂 Conversation ${conversationId} désarchivée par ${userId}`,
+            );
+          } catch (err) {
+            console.error("❌ conversation:unarchive:", err.message);
+            socket.emit("conversation:archiveError", { message: err.message });
+          }
+        });
+
+        /**
+         * Récupère les conversations archivées de l'utilisateur connecté.
+         * Emission client  : conversation:getArchived { page?, limit? }
+         * Réponse serveur  : conversation:archivedList { conversations, totalCount, pagination }
+         *                 ou conversation:archiveError { message }
+         */
+        socket.on("conversation:getArchived", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const userId = socket.userId;
+            if (!userId)
+              return socket.emit("conversation:archiveError", {
+                message: "Authentification requise",
+              });
+            if (!this.getArchivedConversationsUseCase)
+              return socket.emit("conversation:archiveError", {
+                message: "Fonctionnalité non disponible",
+              });
+
+            const { page = 1, limit = 20 } = data || {};
+            const result = await this.getArchivedConversationsUseCase.execute(
+              userId,
+              {
+                page: Math.max(1, parseInt(page) || 1),
+                limit: Math.min(50, parseInt(limit) || 20),
+              },
+            );
+
+            socket.emit("conversation:archivedList", {
+              conversations: result.conversations || [],
+              totalCount: result.totalCount || 0,
+              pagination: result.pagination || {},
+            });
+          } catch (err) {
+            console.error("❌ conversation:getArchived:", err.message);
+            socket.emit("conversation:archiveError", { message: err.message });
+          }
+        });
+
+        // ──────────────────────────────────────────────────────────────────
 
         socket.on("disconnect", (reason) => {
           this.handleDisconnection(socket, reason);

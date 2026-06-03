@@ -607,6 +607,44 @@ class CachedConversationRepository {
     return await this.primaryStore.findLastSeenForUser(userId);
   }
 
+  // ===== ARCHIVAGE =====
+
+  /**
+   * Archive ou désarchive une conversation pour un utilisateur.
+   * Invalide ensuite le cache de la liste de conversations de l'utilisateur.
+   */
+  async archiveForUser(conversationId, userId, action = "archive") {
+    const result = await this.primaryStore.archiveForUser(
+      conversationId,
+      userId,
+      action,
+    );
+
+    // Invalider le cache de liste de conversations de l'utilisateur
+    if (this.cache) {
+      try {
+        const patterns = [`${this.cacheKeyPrefix}:user:${userId}:*`];
+        for (const pattern of patterns) {
+          await this.cache.delete(pattern);
+        }
+        console.log(
+          `🗑️ Cache conversations invalidé pour userId=${userId} après ${action}`,
+        );
+      } catch (err) {
+        console.warn("⚠️ Erreur invalidation cache archivage:", err.message);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Récupère les conversations archivées d'un utilisateur (pas de cache — liste dynamique).
+   */
+  async findArchivedByUser(userId, options = {}) {
+    return await this.primaryStore.findArchivedByUser(userId, options);
+  }
+
   // ===== RECHERCHE =====
   async searchConversations(query, options = {}) {
     const { userId, useCache = false } = options;
