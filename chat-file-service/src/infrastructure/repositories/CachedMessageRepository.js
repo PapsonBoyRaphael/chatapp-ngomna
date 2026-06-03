@@ -95,9 +95,9 @@ class CachedMessageRepository {
         );
 
         result = {
-          messages,
-          nextCursor: null,
-          hasMore: messages.length === limit,
+          messages: messages.messages || messages,
+          nextCursor: messages.nextCursor || null,
+          hasMore: messages.hasMore || false,
         };
       }
 

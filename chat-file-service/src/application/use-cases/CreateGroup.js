@@ -19,88 +19,129 @@ class CreateGroup {
     members,
     finalAdmins = [],
     senderSocketId = null,
+    userInfo = null, // Optionnel: peut être fourni pour éviter un appel supplémentaire à UserCacheService
+    autoCreated = false, // Flag pour indiquer si le groupe est créé automatiquement (ex: par un workflow)
+    code_structure = null,
   }) {
-    if (!name || !adminId || !Array.isArray(members) || members.length === 0) {
+    // Autoriser la création de groupes vides si autoCreated est true
+    if (
+      !name ||
+      !adminId ||
+      !Array.isArray(members) ||
+      (members.length === 0 && !autoCreated)
+    ) {
       throw new Error("name, adminId et members requis");
     }
 
     // ✅ Valider l'existence des utilisateurs via UserCacheService
-    const participants = [adminId, ...members.filter((id) => id !== adminId)];
+    // Déclarer les variables à portée de fonction pour réutilisation
+    let participants = [];
     let usersInfo = [];
-    try {
-      console.log(
-        `🔍 Validation des ${participants.length} participants du groupe...`,
-      );
-      usersInfo = await this.userCacheService.fetchUsersInfo(participants);
+    let userMetadata = [];
+    let unreadCounts = {};
+    let totalRecipients = 0;
 
-      // Vérifier que tous les utilisateurs existent
-      const invalidUsers = usersInfo.filter(
-        (u) => u.name === "Utilisateur inconnu",
-      );
-      if (invalidUsers.length > 0) {
-        const invalidIds = invalidUsers.map((u) => u.matricule).join(", ");
-        throw new Error(`Utilisateurs invalides: ${invalidIds}`);
+    if (!autoCreated) {
+      participants = [adminId, ...members.filter((id) => id !== adminId)];
+      try {
+        console.log(
+          `🔍 Validation des ${participants.length} participants du groupe...`,
+        );
+        usersInfo = await this.userCacheService.fetchUsersInfo(participants);
+
+        // Vérifier que tous les utilisateurs existent
+        const invalidUsers = usersInfo.filter(
+          (u) => u.name === "Utilisateur inconnu",
+        );
+        if (invalidUsers.length > 0) {
+          const invalidIds = invalidUsers.map((u) => u.matricule).join(", ");
+          throw new Error(`Utilisateurs invalides: ${invalidIds}`);
+        }
+        console.log(`✅ Tous les participants du groupe sont valides`, {
+          count: usersInfo.length,
+          users: usersInfo.map((u) => ({ id: u.userId, name: u.name })),
+        });
+      } catch (validationError) {
+        console.error(
+          `❌ Erreur validation participants:`,
+          validationError.message,
+        );
+        throw new Error(
+          `Impossible de valider les participants: ${validationError.message}`,
+        );
       }
-      console.log(`✅ Tous les participants du groupe sont valides`, {
-        count: usersInfo.length,
-        users: usersInfo.map((u) => ({ id: u.userId, name: u.name })),
+
+      // ✅ CRÉER userMetadata AVEC LES INFOS UTILISATEURS
+      userMetadata = participants.map((participantId) => {
+        const userInfo = usersInfo.find((u) => u.userId === participantId) || {
+          userId: participantId,
+          nom: null,
+          prenom: null,
+          avatar: null,
+          matricule: participantId,
+          ministere: null,
+          sexe: null,
+        };
+
+        unreadCounts[participantId] = 0;
+
+        return {
+          userId: participantId,
+          unreadCount: 0,
+          lastReadAt: null,
+          isMuted: false,
+          isPinned: false,
+          customName: null,
+          notificationSettings: {
+            enabled: true,
+            sound: true,
+            vibration: true,
+          },
+          // ✅ POPULATED À PARTIR DE UserCacheService
+          nom: userInfo.nom || null,
+          prenom: userInfo.prenom || null,
+          sexe: userInfo.sexe || null,
+          avatar: userInfo.avatar || null,
+          ministere: userInfo.ministere || null,
+        };
       });
-    } catch (validationError) {
-      console.error(
-        `❌ Erreur validation participants:`,
-        validationError.message,
-      );
-      throw new Error(
-        `Impossible de valider les participants: ${validationError.message}`,
-      );
-    }
 
-    // ✅ CRÉER userMetadata AVEC LES INFOS UTILISATEURS
-    const unreadCounts = {};
-    const userMetadata = participants.map((participantId) => {
-      const userInfo = usersInfo.find((u) => u.userId === participantId) || {
-        userId: participantId,
-
-        nom: null,
-        prenom: null,
-        avatar: null,
-        matricule: participantId,
-        departement: null,
-        ministere: null,
-        sexe: null,
-      };
-
-      unreadCounts[participantId] = 0;
-
-      return {
-        userId: participantId,
-        unreadCount: 0,
-        lastReadAt: null,
-        isMuted: false,
-        isPinned: false,
-        customName: null,
-        notificationSettings: {
-          enabled: true,
-          sound: true,
-          vibration: true,
+      totalRecipients = participants.filter((id) => id !== adminId).length;
+    } else {
+      // Pour les groupes auto-créés, on initialise userMetadata et unreadCounts à vide
+      userMetadata = [
+        {
+          userId: userInfo?.userId,
+          unreadCount: 0,
+          lastReadAt: null,
+          isMuted: false,
+          isPinned: false,
+          customName: null,
+          notificationSettings: {
+            enabled: true,
+            sound: true,
+            vibration: true,
+          },
+          // ✅ POPULATED À PARTIR DE UserCacheService
+          nom: userInfo?.nom || null,
+          prenom: userInfo?.prenom || null,
+          sexe: userInfo?.sexe || null,
+          avatar: userInfo?.avatar || null,
+          ministere: userInfo?.ministere || null,
         },
-        // ✅ POPULATED À PARTIR DE UserCacheService
-        nom: userInfo.nom || null,
-        prenom: userInfo.prenom || null,
-        sexe: userInfo.sexe || null,
-        avatar: userInfo.avatar || null,
-        departement: userInfo.departement || null,
-        ministere: userInfo.ministere || null,
-      };
-    });
-
-    const totalRecipients = participants.filter((id) => id !== adminId).length;
+      ];
+      unreadCounts = {};
+      totalRecipients = 0;
+      participants = [userInfo?.userId];
+    }
 
     const conversationData = {
       name,
       type: type || "GROUP",
+      // Stocker le code_structure séparément (peut être null)
+      code_structure: code_structure || null,
       participants,
-      createdBy: adminId,
+      createdBy: adminId || "SYSTEM",
       createdAt: new Date(),
       updatedAt: new Date(),
       lastMessage: null,
@@ -109,14 +150,14 @@ class CreateGroup {
       userMetadata,
       totalRecipients,
       metadata: {
-        autoCreated: true,
+        autoCreated: autoCreated,
         createdFrom: "CreateGroup",
         version: 1,
         tags: [],
         auditLog: [
           {
             action: "CREATED",
-            userId: adminId,
+            userId: adminId || "SYSTEM",
             timestamp: new Date(),
             details: { trigger: "group_create" },
             metadata: { source: "CreateGroup-UseCase" },
@@ -158,8 +199,9 @@ class CreateGroup {
           {
             event: "conversation.created",
             conversationId: savedConversation._id.toString(),
+            conversation: savedConversation, // Inclure les détails de la conversation pour les consommateurs qui veulent plus d'infos
             type: "GROUP",
-            createdBy: adminId,
+            createdBy: adminId || "SYSTEM",
             participants: JSON.stringify(participants),
             name: name,
             participantCount: participants.length.toString(),
@@ -190,7 +232,7 @@ class CreateGroup {
     //         conversationId: String(savedConversation._id),
     //         type: "SYSTEM",
     //         subType: "GROUP_CREATED",
-    //         senderId: adminId,
+    //         senderId: adminId || "SYSTEM",
     //         senderName: "Système",
     //         content: `Le groupe "${name}" a été créé`,
     //         participants: participants,
@@ -198,7 +240,7 @@ class CreateGroup {
     //           event: "group_created",
     //           groupName: name,
     //           groupId: String(savedConversation._id),
-    //           creatorId: adminId,
+    //           creatorId: adminId || "SYSTEM" ,
     //           participantCount: participants.length,
     //           timestamp: new Date().toISOString(),
     //         },
@@ -230,7 +272,7 @@ class CreateGroup {
             conversationId: savedConversation._id.toString(),
             conversation: savedConversation, // Inclure les détails de la conversation pour les consommateurs qui veulent plus d'infos
             type: type || "GROUP",
-            createdBy: adminId,
+            createdBy: adminId || "SYSTEM",
             participants: JSON.stringify(participants),
             name: name,
             participantCount: participants.length.toString(),

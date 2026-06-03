@@ -1701,6 +1701,7 @@ class ResilientMessageService {
       const fields = {
         eventType,
         conversationId: conversationData.conversationId || conversationData._id,
+        conversation: conversationData.conversation || null, // Objet complet de la conversation (optionnel)
         senderSocketId: conversationData.senderSocketId || "", // ✅ Propager pour exclusion côté MDS
         timestamp: new Date().toISOString(),
         ts: Date.now().toString(),
@@ -1737,6 +1738,21 @@ class ResilientMessageService {
       }
 
       // ✅ AJOUTER AU STREAM
+      // Si un objet `conversation` complet est fourni, l'ajouter aussi (stringifié)
+      if (conversationData.conversation) {
+        try {
+          fields.conversation =
+            typeof conversationData.conversation === "string"
+              ? conversationData.conversation
+              : JSON.stringify(conversationData.conversation);
+        } catch (err) {
+          console.warn(
+            "⚠️ Erreur sérialisation conversation pour publication:",
+            err.message,
+          );
+        }
+      }
+
       const streamId = await this.addToStream(streamName, fields);
       console.log(
         `🏢 Événement conversation publié (${eventType}): ${streamId}`,

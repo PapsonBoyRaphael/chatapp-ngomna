@@ -21,6 +21,7 @@ class File {
     isPublic = false,
     expiresAt = null,
     tags = [],
+    isClientRecorded = false,
   }) {
     this._id = _id;
     this.originalName = originalName;
@@ -40,6 +41,8 @@ class File {
     this.isPublic = isPublic;
     this.expiresAt = expiresAt;
     this.tags = tags;
+    this.isClientRecorded =
+      isClientRecorded === true || isClientRecorded === "true";
   }
 
   // Enrichir les métadonnées
@@ -531,6 +534,7 @@ class File {
       isPublic: this.isPublic,
       expiresAt: this.expiresAt,
       tags: this.tags,
+      isClientRecorded: this.isClientRecorded,
     };
   }
 

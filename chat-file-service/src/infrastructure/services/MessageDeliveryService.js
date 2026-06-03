@@ -2047,6 +2047,23 @@ class MessageDeliveryService {
         return;
       }
 
+      // Préparer la conversation complète si fournie dans le message
+      let conversationPayload = null;
+      if (message.conversation) {
+        try {
+          conversationPayload =
+            typeof message.conversation === "string"
+              ? JSON.parse(message.conversation)
+              : message.conversation;
+        } catch (err) {
+          console.warn(
+            "⚠️ Erreur parsing conversation dans participantAdded:",
+            err.message,
+          );
+          conversationPayload = null;
+        }
+      }
+
       for (const socketId of socketIds) {
         // ✅ EXCLURE LE SOCKET SPÉCIFIQUE DE L'ÉMETTEUR (multi-device)
         if (excludeSocketId && socketId === excludeSocketId) {
@@ -2059,8 +2076,9 @@ class MessageDeliveryService {
         if (socket) {
           socket.emit("conversation:participant:added", {
             conversationId: message.conversationId,
-            participantId: message.participantId,
+            conversation: conversationPayload,
             participantName: message.participantName,
+            participantId: message.participantId,
             addedBy: message.addedBy,
             timestamp: message.timestamp,
           });

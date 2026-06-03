@@ -199,10 +199,17 @@ const conversationSchema = new Schema(
       maxlength: 500,
       default: null,
     },
+    // Ajout du code structure pour les groupes auto/structurés
+    code_structure: {
+      type: String,
+      default: null,
+      index: true,
+      description: "Code structure institutionnelle (groupes auto, etc.)",
+    },
     participants: [
       {
         type: String,
-        required: true,
+        required: false, // Permettre groupes vides
       },
     ],
     createdBy: {
@@ -246,6 +253,27 @@ const conversationSchema = new Schema(
       // Pour BROADCAST
       broadcastAdmins: [{ type: String }], // IDs des admins/envoyeurs
       broadcastRecipients: [{ type: String }], // IDs des destinataires
+    },
+
+    // ✅ MÉTADONNÉES BROADCAST (uniquement pour type === "BROADCAST")
+    // Stocke le lien entre la conversation broadcast et les conversations privées créées par destinataire
+    broadcastMetadata: {
+      // Mapping destinataire → conversation privée
+      privateConversations: [
+        {
+          recipientId: { type: String, required: true },
+          conversationId: {
+            type: Schema.Types.ObjectId,
+            ref: "Conversation",
+            required: true,
+          },
+          _id: false,
+        },
+      ],
+      // Statistiques de diffusion
+      totalRecipients: { type: Number, default: 0 },
+      totalMessagesSent: { type: Number, default: 0 },
+      lastBroadcastAt: { type: Date, default: null },
     },
 
     // ✅ MÉTADONNÉES ET AUDIT - AVEC ENUM CORRIGÉ
@@ -558,11 +586,24 @@ conversationSchema.pre("save", function (next) {
     }
 
     if (!this.participants || this.participants.length === 0) {
-      return next(new Error("Au moins un participant est requis"));
+      // Autoriser les groupes vides pour les conversations auto-créées
+      const autoCreated = (this.metadata && this.metadata.autoCreated) || false;
+      const createdBySystem = this.createdBy === "SYSTEM";
+      if (!autoCreated && !createdBySystem) {
+        return next(new Error("Au moins un participant est requis"));
+      }
+
+      // Normaliser participants en tableau vide si nécessaire
+      this.participants = this.participants || [];
     }
 
     if (!this.createdBy) {
-      return next(new Error("Le créateur de la conversation est requis"));
+      // Pour les groupes auto-créés, attribuer SYSTEM si absent
+      if (this.metadata && this.metadata.autoCreated) {
+        this.createdBy = "SYSTEM";
+      } else {
+        return next(new Error("Le créateur de la conversation est requis"));
+      }
     }
 
     console.log(

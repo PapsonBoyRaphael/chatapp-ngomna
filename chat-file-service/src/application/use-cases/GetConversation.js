@@ -10,9 +10,8 @@ class GetConversation {
         throw new Error("conversationId et userId sont requis");
       }
 
-      const conversation = await this.conversationRepository.findById(
-        conversationId
-      );
+      const conversation =
+        await this.conversationRepository.findById(conversationId);
 
       if (!conversation) {
         throw new Error("Conversation non trouvée");
@@ -20,6 +19,14 @@ class GetConversation {
 
       // Vérifier les permissions
       if (!conversation.participants.includes(userId)) {
+        throw new Error("Accès non autorisé à cette conversation");
+      }
+
+      // ✅ Un broadcast n'est accessible qu'au créateur
+      if (
+        conversation.type === "BROADCAST" &&
+        String(conversation.createdBy) !== String(userId)
+      ) {
         throw new Error("Accès non autorisé à cette conversation");
       }
 

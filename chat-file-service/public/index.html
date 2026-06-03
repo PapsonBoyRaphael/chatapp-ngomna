@@ -618,9 +618,9 @@ Message de test 🚀</textarea
           <div id="myFilesList"></div>
         </div>
 
-        <!-- Section Groupes et Diffusion -->
+        <!-- Section Groupes (legacy) -->
         <div class="section group-section">
-          <h2>👥 Test Groupes & Diffusion</h2>
+          <h2>👥 Test Groupes</h2>
           <div class="form-group">
             <input
               type="text"
@@ -632,14 +632,6 @@ Message de test 🚀</textarea
             </button>
             <input
               type="text"
-              id="broadcastId"
-              placeholder="ID Liste de diffusion (ObjectId auto)"
-            />
-            <button onclick="generateBroadcastId()" class="btn-secondary">
-              🔧 Générer ID Diffusion
-            </button>
-            <input
-              type="text"
               id="groupReceiverIds"
               placeholder="IDs utilisateurs (ex: 534589D,570479H)"
             />
@@ -648,41 +640,140 @@ Message de test 🚀</textarea
               placeholder="Message pour le groupe..."
               rows="2"
             ></textarea>
-            <textarea
-              id="broadcastMessageContent"
-              placeholder="Message pour la diffusion..."
-              rows="2"
-            ></textarea>
-            <input
-              type="text"
-              id="groupName"
-              placeholder="Nom du groupe (optionnel)"
-            />
-            <input
-              type="text"
-              id="broadcastName"
-              placeholder="Nom de la diffusion (optionnel)"
-            />
             <div class="button-grid">
-              <button onclick="createGroup()" class="btn-primary">
-                ➕ Créer Groupe
-              </button>
-              <button onclick="createBroadcast()" class="btn-primary">
-                ➕ Créer Diffusion
-              </button>
               <button onclick="sendGroupMessage()" class="btn-success">
                 📤 Envoyer au Groupe
-              </button>
-              <button onclick="sendBroadcastMessage()" class="btn-warning">
-                📤 Envoyer à la Diffusion
               </button>
               <button onclick="fetchGroupMessages()" class="btn-secondary">
                 📥 Récupérer Messages Groupe
               </button>
-              <button onclick="fetchBroadcastMessages()" class="btn-secondary">
-                📥 Récupérer Messages Diffusion
-              </button>
             </div>
+          </div>
+        </div>
+
+        <!-- ✅ SECTION BROADCAST COMPLÈTE -->
+        <div
+          class="section"
+          style="border-left: 4px solid #f59e0b; background: #1c1917"
+        >
+          <h2>📢 Broadcast (Liste de Diffusion)</h2>
+
+          <!-- Créer une diffusion -->
+          <div class="form-group">
+            <h3>➕ Créer une Diffusion</h3>
+            <input
+              type="text"
+              id="broadcastId"
+              placeholder="ID Diffusion (généré automatiquement si vide)"
+            />
+            <button
+              onclick="generateBroadcastId()"
+              class="btn-secondary"
+              style="margin-bottom: 6px"
+            >
+              🔧 Générer ID
+            </button>
+            <input
+              type="text"
+              id="broadcastName"
+              placeholder="Nom de la diffusion (ex: Communiqué DRH)"
+              value=""
+            />
+            <input
+              type="text"
+              id="broadcastRecipientIds"
+              placeholder="IDs destinataires séparés par virgule (ex: 534589D,570479H)"
+              value=""
+            />
+            <div class="form-help">
+              <small>
+                📌 <strong>Seul le créateur</strong> peut envoyer dans une
+                diffusion.<br />
+                🔗 Les conversations privées avec chaque destinataire seront
+                créées <strong>automatiquement</strong> lors de la création.
+              </small>
+            </div>
+            <button onclick="createBroadcast()" class="btn-primary">
+              📢 Créer la Diffusion
+            </button>
+            <div class="status" id="createBroadcastStatus"></div>
+          </div>
+
+          <!-- Envoyer un message broadcast -->
+          <div class="form-group">
+            <h3>📤 Envoyer un Message Broadcast</h3>
+            <input
+              type="text"
+              id="broadcastConversationId"
+              placeholder="ID Conversation Broadcast (auto-rempli après création)"
+            />
+            <textarea
+              id="broadcastMessageContent"
+              placeholder="Message à diffuser..."
+              rows="3"
+            >
+Message broadcast de test 📢</textarea
+            >
+            <select id="broadcastMessageType">
+              <option value="TEXT">📝 TEXT</option>
+              <option value="IMAGE">🖼️ IMAGE</option>
+              <option value="FILE">📎 FILE</option>
+            </select>
+            <div class="form-help">
+              <small>
+                ⚡ Le message sera envoyé dans
+                <strong>chaque conv privée</strong> des destinataires via le
+                mapping <code>broadcastMetadata</code>.
+              </small>
+            </div>
+            <button onclick="sendBroadcastMessage()" class="btn-warning">
+              📤 Envoyer le Broadcast
+            </button>
+            <div class="status" id="sendBroadcastStatus"></div>
+          </div>
+
+          <!-- Récupérer les messages broadcast -->
+          <div class="form-group">
+            <h3>📥 Récupérer Messages de la Diffusion</h3>
+            <input
+              type="text"
+              id="broadcastFetchConversationId"
+              placeholder="ID Conversation Broadcast"
+            />
+            <input
+              type="number"
+              id="broadcastFetchLimit"
+              placeholder="Limite (défaut: 20)"
+              value="20"
+              min="1"
+              max="100"
+            />
+            <button onclick="fetchBroadcastMessages()" class="btn-secondary">
+              📥 Récupérer Messages
+            </button>
+            <div class="status" id="fetchBroadcastStatus"></div>
+            <pre
+              id="broadcastMessagesOutput"
+              style="max-height: 300px; overflow: auto; font-size: 12px"
+            ></pre>
+          </div>
+
+          <!-- Vérifier broadcastMetadata -->
+          <div class="form-group">
+            <h3>🔍 Vérifier broadcastMetadata</h3>
+            <input
+              type="text"
+              id="broadcastMetaConvId"
+              placeholder="ID Conversation Broadcast"
+            />
+            <button onclick="fetchBroadcastMetadata()" class="btn-info">
+              🔍 Voir Mapping Conv Privées
+            </button>
+            <div class="status" id="broadcastMetaStatus"></div>
+            <pre
+              id="broadcastMetaOutput"
+              style="max-height: 300px; overflow: auto; font-size: 12px"
+            ></pre>
           </div>
         </div>
 

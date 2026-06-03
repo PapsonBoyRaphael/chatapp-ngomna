@@ -5,6 +5,7 @@
  */
 const AuthMiddleware = require("../../interfaces/http/middleware/authMiddleware");
 const UserCacheService = require("../../infrastructure/services/UserCacheService");
+// AutoGroupSyncService est injecté depuis l'index.js via app.locals
 
 class ChatHandler {
   constructor(
@@ -36,6 +37,7 @@ class ChatHandler {
     addReactionUseCase = null,
     removeReactionUseCase = null,
     replyMessageUseCase = null,
+    autoGroupSyncUseCase = null,
   ) {
     this.io = io;
     this.sendMessageUseCase = sendMessageUseCase;
@@ -66,10 +68,15 @@ class ChatHandler {
     this.removeReactionUseCase = removeReactionUseCase;
     this.replyMessageUseCase = replyMessageUseCase;
 
+    this.autoGroupSyncUseCase = autoGroupSyncUseCase;
     // ✅ LOG DE DEBUG
     console.log(
       "🔍 ChatHandler reçu messageDeliveryService:",
       this.messageDeliveryService ? "✅ OUI" : "❌ NON",
+    );
+    console.log(
+      "🔍 ChatHandler reçu autoGroupSyncUseCase:",
+      this.autoGroupSyncUseCase ? "✅ OUI" : "❌ NON",
     );
   }
 
@@ -88,6 +95,46 @@ class ChatHandler {
             socket.emit("auth_error", {
               message: "Erreur lors de l'authentification",
               code: "AUTH_ERROR",
+            });
+          }
+        });
+
+        // Événement on-demand pour synchroniser les groupes auto (appel explicite par le client)
+        socket.on("syncAutoGroups", async (data) => {
+          try {
+            if (!socket.userId) {
+              socket.emit("autoGroupsSyncError", {
+                success: false,
+                message: "Utilisateur non authentifié",
+              });
+              return;
+            }
+
+            if (!this.autoGroupSyncUseCase) {
+              socket.emit("autoGroupsSyncError", {
+                success: false,
+                message: "Service de synchronisation non disponible",
+              });
+              return;
+            }
+
+            const result = await this.autoGroupSyncUseCase.execute(
+              socket.userId,
+            );
+
+            socket.emit("autoGroupsSynced", { success: true, result });
+            console.log(
+              `[AutoGroupSync] Groupes synchronisés pour ${socket.userId}:`,
+              result,
+            );
+          } catch (err) {
+            console.warn(
+              `[AutoGroupSync] Erreur sync groupes (socket request): ${socket.userId}:`,
+              err.message,
+            );
+            socket.emit("autoGroupsSyncError", {
+              success: false,
+              message: err.message || "Erreur synchronisation",
             });
           }
         });
@@ -212,6 +259,7 @@ class ChatHandler {
             const result = await this.getMessagesUseCase.execute(
               conversationId,
               {
+                cursor: null, // Toujours à null pour quick load
                 limit,
                 userId,
                 useCache: true, // Le repository décide du cache
@@ -378,10 +426,8 @@ class ChatHandler {
             // ✅ APPEL DIRECT AU USE CASE (cache géré par le repository)
             const result = await this.getConversationUseCase.execute(
               conversationId,
-              {
-                userId,
-                useCache: true, // Le repository décide du cache
-              },
+              userId,
+              true,
             );
 
             socket.emit("conversation:loaded", {
@@ -456,10 +502,8 @@ class ChatHandler {
             // ✅ APPEL DIRECT AU USE CASE (SANS cache controller)
             const result = await this.getConversationUseCase.execute(
               conversationId,
-              {
-                userId,
-                useCache: true, // Le repository décide du cache
-              },
+              userId,
+              true, // Le repository décide du cache
             );
 
             socket.emit("conversationLoaded", {
@@ -2195,6 +2239,11 @@ class ChatHandler {
               replyId: String(result.message?.id || result.message?._id),
               conversationId: result.conversationId,
               userId: String(userId),
+              senderName:
+                [socket.prenom, socket.nom].filter(Boolean).join(" ") ||
+                socket.matricule ||
+                String(userId),
+              senderMatricule: socket.matricule || null,
               content: content.substring(0, 200),
               replyTo: result.replyTo,
               timestamp: new Date().toISOString(),
@@ -2449,7 +2498,6 @@ class ChatHandler {
           nom: data.nom || "",
           prenom: data.prenom || "",
           ministere: data.ministere || "",
-          departement: data.departement || "",
         };
       }
 
@@ -2468,7 +2516,6 @@ class ChatHandler {
       socket.fullName = resolvedFullName || "";
       socket.avatar = userPayload.avatar || null;
       socket.ministere = userPayload.ministere || "";
-      socket.departement = userPayload.departement || "";
       socket.isAuthenticated = true;
 
       const userIdString = socket.matricule;
@@ -2689,6 +2736,23 @@ class ChatHandler {
       console.log(
         `\n✅ [${new Date().toISOString()}] ⏱️ AUTHENTIFICATION COMPLÈTE (⏱️ TOTAL: ${totalDuration}ms)\n`,
       );
+
+      // if (this.autoGroupSyncUseCase) {
+      //   this.autoGroupSyncUseCase
+      //     .execute(userIdString)
+      //     .then((result) => {
+      //       console.log(
+      //         `[AutoGroupSync] Groupes synchronisés pour ${userIdString}:`,
+      //         result,
+      //       );
+      //     })
+      //     .catch((err) => {
+      //       console.warn(
+      //         `[AutoGroupSync] Erreur sync groupes pour ${userIdString}:`,
+      //         err.message,
+      //       );
+      //     });
+      // }
     } catch (error) {
       console.error("❌ Erreur authentification WebSocket:", error);
       socket.emit("auth_error", {
@@ -2805,7 +2869,7 @@ class ChatHandler {
   async handleSendMessage(socket, data) {
     try {
       const {
-        content,
+        content = "",
         conversationId = "",
         type = "TEXT",
         receiverId = null,
@@ -2840,6 +2904,7 @@ class ChatHandler {
 
       if (
         !isCallType &&
+        type === "TEXT" &&
         (!content || typeof content !== "string" || content.trim().length === 0)
       ) {
         socket.emit("message_error", {
@@ -2849,18 +2914,10 @@ class ChatHandler {
         return;
       }
 
-      if (!isCallType && content.trim().length > 10000) {
+      if (!isCallType && type === "TEXT" && content.trim().length > 10000) {
         socket.emit("message_error", {
           message: "Le message ne peut pas dépasser 10000 caractères",
           code: "CONTENT_TOO_LONG",
-        });
-        return;
-      }
-
-      if (!normalizedConversationId && !receiverId) {
-        socket.emit("message_error", {
-          message: "ID de conversation requis",
-          code: "MISSING_CONVERSATION_ID",
         });
         return;
       }
@@ -2915,6 +2972,7 @@ class ChatHandler {
               fileId,
               conversationName,
               callMetadata: isCallType ? callMetadata : null,
+              temporaryId,
             }),
           );
         } else {
@@ -2928,6 +2986,7 @@ class ChatHandler {
             fileId,
             conversationName,
             callMetadata: isCallType ? callMetadata : null,
+            temporaryId,
           });
         }
       } catch (saveError) {
@@ -3290,7 +3349,12 @@ class ChatHandler {
 
   async handleGetMessages(socket, data) {
     try {
-      const { conversationId, page = 1, limit = 50 } = data;
+      const {
+        conversationId,
+        page = data.page || 1,
+        limit = data.limit || 50,
+        cursor = data.cursor,
+      } = data;
       const userId = socket.userId;
 
       const normalizedConversationId = this.normalizeMongoId(conversationId);
@@ -3333,6 +3397,7 @@ class ChatHandler {
       const result = await this.getMessagesUseCase.execute(
         normalizedConversationId,
         {
+          cursor: cursor, // Toujours à null pour quick load
           page: parseInt(page),
           limit: parseInt(limit),
           userId,

@@ -59,7 +59,13 @@ class GetConversations {
         throw new Error("Format de données invalide depuis le repository");
       }
 
-      const conversations = result.conversations || [];
+      // ✅ EXCLURE LES BROADCAST POUR LES NON-CRÉATEURS
+      // Un broadcast n'est visible que par son créateur
+      const allConversations = result.conversations || [];
+      const conversations = allConversations.filter((c) => {
+        if (c.type !== "BROADCAST") return true;
+        return String(c.createdBy) === String(userId);
+      });
       const totalCount =
         result.totalCount || result.pagination?.totalCount || 0;
 
@@ -100,30 +106,12 @@ class GetConversations {
         (c) => c.type === "BROADCAST",
       );
 
-      // Conversations du département (PRIVATE où tous les participants ont le même département)
-      const departementConversations = enrichedConversations.filter((c) => {
-        if (c.type !== "PRIVATE") return false;
-        if (!userDepartement) return false;
-
-        // userMetadata est un TABLEAU de participants
-        if (!Array.isArray(c.userMetadata) || c.userMetadata.length === 0) {
-          return false;
-        }
-
-        // Vérifier que TOUS les participants ont un département ET que c'est le même que l'utilisateur
-        const allSameDepartement = c.userMetadata.every(
-          (meta) => meta.departement && meta.departement === userDepartement,
-        );
-
-        return allSameDepartement;
-      });
-
-      // Conversations privées (autres)
+      // Conversations privées
       const privateConversations = enrichedConversations.filter(
-        (c) =>
-          c.type === "PRIVATE" &&
-          !departementConversations.some((dc) => dc._id === c._id),
+        (c) => c.type === "PRIVATE",
       );
+
+      const departementConversations = [];
 
       // ✅ CALCULS DE PAGINATION CORRECTS
       const totalPages = Math.ceil(totalCount / limit);
@@ -148,7 +136,7 @@ class GetConversations {
           unread: unreadConversations.length,
           groups: groupConversations.length,
           broadcasts: broadcastConversations.length,
-          departement: departementConversations.length,
+          departement: 0,
           private: privateConversations.length,
           unreadMessagesInGroups: groupConversations.reduce(
             (sum, c) => sum + this._getUnreadCountFromUserMetadata(c, userId),
@@ -158,10 +146,7 @@ class GetConversations {
             (sum, c) => sum + this._getUnreadCountFromUserMetadata(c, userId),
             0,
           ),
-          unreadMessagesInDepartement: departementConversations.reduce(
-            (sum, c) => sum + this._getUnreadCountFromUserMetadata(c, userId),
-            0,
-          ),
+          unreadMessagesInDepartement: 0,
           unreadMessagesInPrivate: privateConversations.reduce(
             (sum, c) => sum + this._getUnreadCountFromUserMetadata(c, userId),
             0,
@@ -171,7 +156,6 @@ class GetConversations {
         // ✅ CONTEXTE UTILISATEUR
         userContext: {
           userId,
-          departement: userDepartement,
           ministere: userMinistere,
         },
 

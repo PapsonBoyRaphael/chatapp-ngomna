@@ -224,6 +224,9 @@ class FileController {
         tags: req.body.tags
           ? req.body.tags.split(",").map((tag) => tag.trim())
           : [],
+        isClientRecorded:
+          req.body.isClientRecorded === true ||
+          req.body.isClientRecorded === "true",
       };
 
       let result;
@@ -743,8 +746,7 @@ class FileController {
    */
   async initChunkedUpload(req, res) {
     try {
-      const userId =
-        req.user?.id || req.user?.userId || req.headers["user-id"];
+      const userId = req.user?.id || req.user?.userId || req.headers["user-id"];
       if (!userId) {
         return res.status(401).json({
           success: false,
@@ -856,8 +858,7 @@ class FileController {
     const startTime = Date.now();
     try {
       const { uploadId } = req.params;
-      const userId =
-        req.user?.id || req.user?.userId || req.headers["user-id"];
+      const userId = req.user?.id || req.user?.userId || req.headers["user-id"];
 
       if (!userId) {
         return res.status(401).json({
@@ -898,10 +899,11 @@ class FileController {
         fileMetadata = {
           technical: {
             extension: path.extname(session.fileName).toLowerCase(),
-            fileType: this.mediaProcessingService?.getFileType?.(
-              session.mimeType,
-              session.fileName,
-            ) || "OTHER",
+            fileType:
+              this.mediaProcessingService?.getFileType?.(
+                session.mimeType,
+                session.fileName,
+              ) || "OTHER",
             category: "other",
             encoding: "binary",
           },
@@ -972,6 +974,9 @@ class FileController {
         downloadCount: 0,
         isPublic: false,
         tags: [],
+        isClientRecorded:
+          req.body.isClientRecorded === true ||
+          req.body.isClientRecorded === "true",
       };
 
       // ✅ ENREGISTRER EN DB

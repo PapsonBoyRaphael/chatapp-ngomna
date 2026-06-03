@@ -1,6 +1,25 @@
 const Conversation = require("../mongodb/models/ConversationModel");
 
 class MongoConversationRepository {
+  /**
+   * Recherche une conversation par un champ arbitraire (ex: code_structure)
+   * @param {Object} query - Objet de requête MongoDB (ex: { code_structure: '...' })
+   * @returns {Promise<Object|null>} Conversation trouvée ou null
+   */
+  async findOne(query = {}) {
+    if (!query || typeof query !== "object") {
+      throw new Error("Query object requis pour findOne");
+    }
+    try {
+      return await Conversation.findOne(query);
+    } catch (error) {
+      console.error(
+        "❌ Erreur MongoConversationRepository.findOne:",
+        error.message,
+      );
+      return null;
+    }
+  }
   constructor(kafkaProducer = null, resilientMessageService = null) {
     this.kafkaProducer = kafkaProducer;
     this.resilientMessageService = resilientMessageService;
@@ -404,6 +423,122 @@ class MongoConversationRepository {
       this.metrics.errors++;
       console.error(`❌ Erreur conversations participant ${userId}:`, error);
       throw error;
+    }
+  }
+
+  /**
+   * ✅ TROUVER UNE CONVERSATION PRIVÉE ENTRE DEUX UTILISATEURS
+   */
+  async findPrivateConversation(participant1, participant2) {
+    try {
+      return await Conversation.findOne({
+        type: "PRIVATE",
+        participants: { $all: [String(participant1), String(participant2)] },
+        isActive: true,
+      }).lean();
+    } catch (error) {
+      console.error("\u274c Erreur findPrivateConversation:", error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ METTRE À JOUR broadcastMetadata sur une conversation BROADCAST
+   * Ajoute les nouvelles entrées (recipientId → conversationId) dans privateConversations.
+   * Ne touche PAS à totalMessagesSent (voir incrementBroadcastMessageCount).
+   * @param {string} broadcastConversationId
+   * @param {Array<{recipientId, conversationId}>} privateConversationEntries
+   */
+  async updateBroadcastMetadata(
+    broadcastConversationId,
+    privateConversationEntries,
+  ) {
+    try {
+      const existing = await Conversation.findById(broadcastConversationId)
+        .select("broadcastMetadata")
+        .lean();
+
+      const existingIds = new Set(
+        (existing?.broadcastMetadata?.privateConversations || []).map(
+          (e) => e.recipientId,
+        ),
+      );
+
+      // ✅ Vérifier que chaque conversationId pointe bien vers une conv PRIVATE
+      const convIds = privateConversationEntries
+        .filter((e) => !existingIds.has(e.recipientId))
+        .map((e) => e.conversationId);
+
+      const validPrivateConvs =
+        convIds.length > 0
+          ? await Conversation.find({
+              _id: { $in: convIds },
+              type: "PRIVATE",
+            })
+              .select("_id")
+              .lean()
+          : [];
+
+      const validConvIdSet = new Set(
+        validPrivateConvs.map((c) => c._id.toString()),
+      );
+
+      const rejectedCount = convIds.length - validPrivateConvs.length;
+      if (rejectedCount > 0) {
+        console.warn(
+          `⚠️ updateBroadcastMetadata: ${rejectedCount} entrée(s) rejetée(s) car non PRIVATE`,
+        );
+      }
+
+      const newEntries = privateConversationEntries
+        .filter(
+          (e) =>
+            !existingIds.has(e.recipientId) &&
+            validConvIdSet.has(String(e.conversationId)),
+        )
+        .map((e) => ({
+          recipientId: e.recipientId,
+          conversationId: e.conversationId,
+        }));
+
+      if (newEntries.length > 0) {
+        const totalKnown =
+          (existing?.broadcastMetadata?.privateConversations?.length || 0) +
+          newEntries.length;
+
+        await Conversation.findByIdAndUpdate(broadcastConversationId, {
+          $push: {
+            "broadcastMetadata.privateConversations": { $each: newEntries },
+          },
+          $set: { "broadcastMetadata.totalRecipients": totalKnown },
+        });
+      }
+
+      console.log(
+        `✅ broadcastMetadata mis à jour: ${broadcastConversationId} (+${newEntries.length} conv(s) privée(s))`,
+      );
+    } catch (error) {
+      console.error("❌ Erreur updateBroadcastMetadata:", error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ INCRÉMENTER le compteur de messages broadcast envoyés.
+   * À appeler UNE FOIS par envoi de message broadcast (depuis SendMessage).
+   * @param {string} broadcastConversationId
+   */
+  async incrementBroadcastMessageCount(broadcastConversationId) {
+    try {
+      await Conversation.findByIdAndUpdate(broadcastConversationId, {
+        $inc: { "broadcastMetadata.totalMessagesSent": 1 },
+        $set: { "broadcastMetadata.lastBroadcastAt": new Date() },
+      });
+      console.log(
+        `📊 totalMessagesSent incrémenté pour ${broadcastConversationId}`,
+      );
+    } catch (error) {
+      console.error("❌ Erreur incrementBroadcastMessageCount:", error.message);
     }
   }
 
@@ -854,7 +989,6 @@ class MongoConversationRepository {
         prenom: meta.prenom ? String(meta.prenom) : null,
         sexe: meta.sexe ? String(meta.sexe) : null,
         avatar: meta.avatar ? String(meta.avatar) : null,
-        departement: meta.departement ? String(meta.departement) : null,
         ministere: meta.ministere ? String(meta.ministere) : null,
       }));
     } else {
@@ -874,7 +1008,6 @@ class MongoConversationRepository {
         prenom: null,
         sexe: null,
         avatar: null,
-        departement: null,
         ministere: null,
       }));
     }

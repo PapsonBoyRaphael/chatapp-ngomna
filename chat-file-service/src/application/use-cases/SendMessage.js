@@ -23,7 +23,7 @@ class SendMessage {
 
     try {
       const {
-        content,
+        content = "",
         senderId,
         senderSocketId = null,
         conversationId = null,
@@ -38,20 +38,21 @@ class SendMessage {
         isForwarded = false,
         forwardedFrom = null,
         originalSenderId = null,
+        temporaryId = null, // ID temporaire fourni par le client pour corréler l'ACK
       } = messageData;
 
       // ✅ Pour les appels, le contenu est auto-généré si absent
       const isCallType = type === "CALL" || type === "VIDEO_CALL";
-      const finalContent =
-        isCallType && !content
-          ? type === "CALL"
-            ? "📞 Appel audio"
-            : "📹 Appel vidéo"
-          : content;
+      // const finalContent =
+      //   isCallType && !content
+      //     ? type === "CALL"
+      //       ? "📞 Appel audio"
+      //       : "📹 Appel vidéo"
+      //     : content;
 
-      if (!finalContent || !senderId) {
-        throw new Error("Données de message incomplètes");
-      }
+      // if (!finalContent || !senderId) {
+      //   throw new Error("Données de message incomplètes");
+      // }
 
       // ✅ RÉCUPÉRER LES INFOS DU FICHIER SI fileId EST FOURNI
       let fileMetadata = null;
@@ -61,19 +62,19 @@ class SendMessage {
           const file = await this.getFileUseCase.execute(fileId, senderId);
 
           if (file) {
-            // ✅ La durée est dans file.metadata.content.duration (audio/vidéo)
             const fileDuration = file.metadata?.content?.duration || null;
 
             fileMetadata = {
               fileId: file._id,
               fileName: file.originalName,
               fileSize: file.size,
-              duration: fileDuration, // ✅ Correspond au schéma MessageModel
-              mimeType: file.mimeType, // ✅ Type MIME du fichier
+              duration: fileDuration,
+              mimeType: file.mimeType,
               url: file.url,
               thumbnailUrl: file.metadata?.processing?.thumbnailUrl || null,
               uploadedAt: file.createdAt,
               status: file.status,
+              isClientRecorded: file.isClientRecorded || false, // Ajout de la propriété
             };
             console.log(`✅ Métadonnées fichier récupérées:`, fileMetadata);
           }
@@ -109,7 +110,7 @@ class SendMessage {
 
       console.log(`💬 Traitement message: ${senderId} → ${conversationId}`, {
         hasReceiverId: !!receiverId,
-        contentLength: finalContent.length,
+        contentLength: content.length,
         type,
         fileId,
         isCall: isCallType,
@@ -138,6 +139,14 @@ class SendMessage {
               if (!conversation.settings.broadcastAdmins.includes(senderId)) {
                 throw new Error(
                   `L'utilisateur ${senderId} n'est pas autorisé à envoyer des messages dans ce canal`,
+                );
+              }
+            }
+
+            if (conversation.type === "BROADCAST") {
+              if (conversation.createdBy !== senderId) {
+                throw new Error(
+                  `Seul le créateur peut envoyer des messages dans un broadcast`,
                 );
               }
             }
@@ -197,6 +206,7 @@ class SendMessage {
                     createdBy: senderId,
                     participants: JSON.stringify(conversation.participants),
                     name: conversation.name || "Conversation privée",
+                    temporaryId: temporaryId || null,
                     participantCount:
                       conversation.participants.length.toString(),
                     timestamp: Date.now().toString(),
@@ -262,6 +272,26 @@ class SendMessage {
         participants: conversation.participants,
       });
 
+      // ✅ DÉLÉGUER À LA MÉTHODE DÉDIÉE SI BROADCAST
+      if (conversation.type === "BROADCAST") {
+        return await this._executeBroadcast(
+          {
+            senderId,
+            senderSocketId,
+            content,
+            type,
+            fileMetadata,
+            callMeta,
+            replyTo,
+            isForwarded,
+            forwardedFrom,
+            originalSenderId,
+            conversationName,
+          },
+          conversation,
+        );
+      }
+
       // ✅ CALCULER totalRecipients SELON LE TYPE DE CONVERSATION
       // Utiliser la valeur stockée si disponible, sinon recalculer
       let totalRecipients = conversation.totalRecipients || 1; // Par défaut pour PRIVATE
@@ -290,7 +320,7 @@ class SendMessage {
             ) ||
             null,
         ),
-        content: finalContent,
+        content: content || "",
         type,
         status: "SENT",
         totalRecipients,
@@ -340,105 +370,12 @@ class SendMessage {
         hasCallMeta: !!callMeta,
       });
 
-      // ✅ ÉTAPE 1 : LOG PRE-WRITE (Write-Ahead Logging)
-      let walId = null;
-      if (this.resilientService) {
-        walId = await this.resilientService.logPreWrite(message);
-      }
-
-      // ✅ ÉTAPE 2 : SAUVEGARDER AVEC CIRCUIT BREAKER
-      let savedMessage;
-      try {
-        if (this.resilientService) {
-          savedMessage = await this.resilientService.circuitBreaker.execute(
-            () => this.messageRepository.save(message),
-          );
-        } else {
-          savedMessage = await this.messageRepository.save(message);
-        }
-
-        // ✅ MÉTRIQUES (PROTÉGÉ)
-        if (this.resilientService && this.resilientService.metrics) {
-          this.resilientService.metrics.totalMessages++;
-          this.resilientService.metrics.successfulSaves++;
-        }
-
-        console.log(`✅ Message sauvegardé: ${savedMessage._id}`);
-      } catch (saveError) {
-        console.error(`❌ Erreur sauvegarde message:`, saveError.message);
-
-        // ✅ RETRY AUTOMATIQUE
-        if (this.resilientService && saveError.retryable !== false) {
-          await this.resilientService.addRetry(message, 1, saveError);
-        }
-
-        // ✅ FALLBACK REDIS SI DISPONIBLE
-        if (this.resilientService) {
-          try {
-            savedMessage = await this.resilientService.redisFallback(message);
-            console.log(`✅ Message stocké en fallback Redis`);
-          } catch (fallbackError) {
-            // ✅ DEAD LETTER QUEUE EN DERNIER RECOURS
-            await this.resilientService.addToDLQ(message, saveError, 1, {
-              operation: "SendMessage.save",
-              walId,
-            });
-            throw new Error(
-              `Impossible de sauvegarder le message: ${saveError.message}`,
-            );
-          }
-        } else {
-          throw new Error(
-            `Impossible de sauvegarder le message: ${saveError.message}`,
-          );
-        }
-      }
-
-      // ✅ ÉTAPE 3 : LOG POST-WRITE
-      if (this.resilientService && walId) {
-        await this.resilientService.logPostWrite(savedMessage._id, walId);
-      }
-
-      // ✅ ÉTAPE 4 : METTRE À JOUR lastMessage AVANT la publication Redis
-      // Cela évite la race condition où MarkMessageDelivered essaie de
-      // mettre à jour lastMessage.status avant que lastMessage._id soit à jour
-      try {
-        await this.conversationRepository.updateLastMessage(conversation._id, {
-          _id: savedMessage._id || savedMessage.id,
-          content: message.content,
-          type: message.type,
-          timestamp: message.timestamp,
-          senderId: message.senderId,
-          messageId: savedMessage._id || savedMessage.id,
-          fileId: message.fileId,
-        });
-        console.log(`🔄 Conversation mise à jour: ${conversation._id}`);
-      } catch (updateError) {
-        console.warn(
-          "⚠️ Erreur mise à jour conversation:",
-          updateError.message,
-        );
-        // ✅ NE PAS FAIRE ÉCHOUER LE MESSAGE SI LA MISE À JOUR ÉCHOUE
-      }
-
-      // ✅ ÉTAPE 5 : PUBLIER DANS LE STREAM REDIS (APRÈS updateLastMessage)
-      // Le consumer pourra désormais mettre à jour lastMessage.status correctement
-      if (this.resilientService && savedMessage && conversation) {
-        // ✅ Publication non-bloquante pour l'ACK
-        this.resilientService
-          .publishToMessageStream(savedMessage, {
-            event: "NEW_MESSAGE",
-            source: "SendMessage-UseCase",
-            conversationParticipants: conversation.participants,
-            senderSocketId,
-          })
-          .catch((err) => {
-            console.error(
-              `❌ Erreur publication stream (non-bloquant):`,
-              err.message,
-            );
-          });
-      }
+      // ✅ ÉTAPES 1-5 : SAUVEGARDER, LOG WAL ET PUBLIER (via helper partagé)
+      const savedMessage = await this._saveAndPublishMessage(
+        message,
+        conversation,
+        senderSocketId,
+      );
 
       // ✅ CONSTRUIRE LE RÉSULTAT IMMÉDIATEMENT (ACK RAPIDE)
       const messageTimestamp =
@@ -450,6 +387,7 @@ class SendMessage {
           content: savedMessage.content,
           senderId: savedMessage.senderId,
           conversationId: savedMessage.conversationId,
+          temporaryId: temporaryId || null, // Inclure le temporaryId pour corrélation côté client
           type: savedMessage.type,
           status: savedMessage.status,
           timestamp: messageTimestamp,
@@ -468,6 +406,7 @@ class SendMessage {
           name: conversation.name,
           type: conversation.type,
           participants: conversation.participants,
+          temporaryId: temporaryId || null, // Inclure le temporaryId pour corrélation côté client
         },
       };
 
@@ -500,6 +439,375 @@ class SendMessage {
       // ✅ KAFKA COMPLÈTEMENT SUPPRIMÉ
       throw error;
     }
+  }
+
+  /**
+   * ✅ HELPER PARTAGÉ : Sauvegarde un message avec WAL, circuit breaker, updateLastMessage et publication Redis.
+   * Utilisé par execute() et _executeBroadcast() pour éviter la duplication.
+   */
+  async _saveAndPublishMessage(message, conversation, senderSocketId) {
+    // ÉTAPE 1 : LOG PRE-WRITE (Write-Ahead Logging)
+    let walId = null;
+    if (this.resilientService) {
+      walId = await this.resilientService.logPreWrite(message);
+    }
+
+    // ÉTAPE 2 : SAUVEGARDER AVEC CIRCUIT BREAKER
+    let savedMessage;
+    try {
+      if (this.resilientService) {
+        savedMessage = await this.resilientService.circuitBreaker.execute(() =>
+          this.messageRepository.save(message),
+        );
+      } else {
+        savedMessage = await this.messageRepository.save(message);
+      }
+      if (this.resilientService?.metrics) {
+        this.resilientService.metrics.totalMessages++;
+        this.resilientService.metrics.successfulSaves++;
+      }
+      console.log(`✅ Message sauvegardé: ${savedMessage._id}`);
+    } catch (saveError) {
+      console.error(`❌ Erreur sauvegarde message:`, saveError.message);
+      if (this.resilientService && saveError.retryable !== false) {
+        await this.resilientService.addRetry(message, 1, saveError);
+      }
+      if (this.resilientService) {
+        try {
+          savedMessage = await this.resilientService.redisFallback(message);
+          console.log(`✅ Message stocké en fallback Redis`);
+        } catch {
+          await this.resilientService.addToDLQ(message, saveError, 1, {
+            operation: "SendMessage.save",
+            walId,
+          });
+          throw new Error(
+            `Impossible de sauvegarder le message: ${saveError.message}`,
+          );
+        }
+      } else {
+        throw new Error(
+          `Impossible de sauvegarder le message: ${saveError.message}`,
+        );
+      }
+    }
+
+    // ÉTAPE 3 : LOG POST-WRITE
+    if (this.resilientService && walId) {
+      await this.resilientService.logPostWrite(savedMessage._id, walId);
+    }
+
+    // ÉTAPE 4 : METTRE À JOUR lastMessage AVANT la publication Redis
+    try {
+      await this.conversationRepository.updateLastMessage(conversation._id, {
+        _id: savedMessage._id || savedMessage.id,
+        content: message.content,
+        type: message.type,
+        timestamp: message.timestamp,
+        senderId: message.senderId,
+        messageId: savedMessage._id || savedMessage.id,
+        fileId: message.fileId || null,
+      });
+      console.log(`🔄 Conversation mise à jour: ${conversation._id}`);
+    } catch (updateError) {
+      console.warn("⚠️ Erreur mise à jour conversation:", updateError.message);
+    }
+
+    // ÉTAPE 5 : PUBLIER DANS LE STREAM REDIS (non-bloquant)
+    if (this.resilientService && savedMessage) {
+      this.resilientService
+        .publishToMessageStream(savedMessage, {
+          event: "NEW_MESSAGE",
+          source: "SendMessage-UseCase",
+          conversationParticipants: conversation.participants,
+          senderSocketId,
+        })
+        .catch((err) =>
+          console.error(`❌ Erreur publication stream:`, err.message),
+        );
+    }
+
+    return savedMessage;
+  }
+
+  /**
+   * ✅ MÉTHODE DÉDIÉE AUX BROADCASTS
+   * Appelée automatiquement par execute() quand conversation.type === "BROADCAST".
+   * Pour chaque destinataire :
+   *   - Trouve ou crée la conversation privée sender↔destinataire
+   *   - Sauvegarde le message dans cette conv privée (via _saveAndPublishMessage)
+   *   - Stocke les IDs des convs privées dans contentMetadata.broadcast du message broadcast
+   * Le message broadcast (côté expéditeur) contient la liste complète dans contentMetadata.broadcast.
+   * Les messages privés (côté destinataires) référencent le broadcast via contentMetadata.broadcast.broadcastConversationId.
+   */
+  async _executeBroadcast(params, broadcastConversation) {
+    const {
+      senderId,
+      senderSocketId,
+      content,
+      type,
+      fileMetadata,
+      callMeta,
+      replyTo,
+      isForwarded,
+      forwardedFrom,
+      originalSenderId,
+      conversationName,
+    } = params;
+
+    const recipients = (
+      broadcastConversation.settings?.broadcastRecipients?.length > 0
+        ? broadcastConversation.settings.broadcastRecipients
+        : broadcastConversation.participants
+    ).filter((p) => String(p) !== String(senderId));
+
+    console.log(
+      `📡 Broadcast: dispatch vers ${recipients.length} conv(s) privée(s)`,
+    );
+
+    // ✅ Lire le mapping stocké par CreateBroadcast dans broadcastMetadata
+    const existingMap = new Map(
+      (broadcastConversation.broadcastMetadata?.privateConversations || []).map(
+        (e) => [String(e.recipientId), String(e.conversationId)],
+      ),
+    );
+
+    const privateConversationEntries = [];
+    const newEntries = []; // convs créées à la volée (cas limite)
+    const broadcastConvId = broadcastConversation._id.toString();
+
+    for (const recipientId of recipients) {
+      try {
+        // 1. Trouver la conversation privée via le mapping
+        let privateConv;
+        const knownConvId = existingMap.get(String(recipientId));
+
+        if (knownConvId) {
+          privateConv = await this.conversationRepository.findById(knownConvId);
+        }
+
+        if (!privateConv) {
+          // Cas limite : chercher ou créer la conv privée
+          privateConv =
+            await this.conversationRepository.findPrivateConversation(
+              senderId,
+              recipientId,
+            );
+
+          if (!privateConv) {
+            privateConv = await this.createConversationIfNotExists(
+              null,
+              senderId,
+              recipientId,
+              null,
+            );
+            if (this.resilientService) {
+              this.resilientService
+                .addToStream("chat:stream:events:conversation:created", {
+                  event: "conversation.created",
+                  conversationId: privateConv._id.toString(),
+                  type: "PRIVATE",
+                  createdBy: senderId,
+                  participants: JSON.stringify(privateConv.participants),
+                  name: privateConv.name || "Conversation privée",
+                  participantCount: privateConv.participants.length.toString(),
+                  timestamp: Date.now().toString(),
+                })
+                .catch((err) =>
+                  console.warn(
+                    `⚠️ Erreur publication conv privée broadcast:`,
+                    err.message,
+                  ),
+                );
+            }
+          }
+
+          newEntries.push({
+            recipientId: String(recipientId),
+            conversationId: (privateConv._id || privateConv.id).toString(),
+          });
+        }
+
+        // 2. Construire et sauvegarder le message dans la conv privée
+        const privateMsg = {
+          conversationId: privateConv._id || privateConv.id,
+          senderId,
+          receiverId: String(recipientId),
+          content: content || "",
+          type,
+          status: "SENT",
+          totalRecipients: 1,
+          deliveredCount: 0,
+          readCount: 0,
+          deliveredBy: [],
+          readBy: [],
+          timestamp: new Date(),
+          ...(replyTo ? { replyTo } : {}),
+          ...(isForwarded
+            ? { isForwarded: true, forwardedFrom, originalSenderId }
+            : {}),
+          metadata: {
+            conversationName,
+            technical: {
+              source: "SendMessage-UseCase-BroadcastDispatch",
+              clientTimestamp: new Date().toISOString(),
+            },
+            contentMetadata: {
+              file: fileMetadata || null,
+              call: callMeta || null,
+              broadcast: { broadcastConversationId: broadcastConvId },
+            },
+          },
+        };
+
+        const savedPrivate = await this._saveAndPublishMessage(
+          privateMsg,
+          privateConv,
+          senderSocketId,
+        );
+
+        // Incrémenter non-lu du destinataire (non-bloquant)
+        this.conversationRepository
+          .incrementUnreadCountInUserMetadata(
+            privateConv._id || privateConv.id,
+            recipientId,
+            1,
+          )
+          .catch(() => {});
+
+        privateConversationEntries.push({
+          recipientId: String(recipientId),
+          conversationId: (privateConv._id || privateConv.id).toString(),
+          messageId: (savedPrivate._id || savedPrivate.id).toString(),
+        });
+
+        console.log(
+          `✅ Broadcast dispatché → conv privée ${privateConv._id} (dest: ${recipientId})`,
+        );
+      } catch (err) {
+        console.error(
+          `❌ Erreur dispatch broadcast → ${recipientId}:`,
+          err.message,
+        );
+      }
+    }
+
+    // Persister les nouvelles convs privées créées à la volée dans broadcastMetadata
+    if (newEntries.length > 0) {
+      this.conversationRepository
+        .updateBroadcastMetadata(broadcastConvId, newEntries)
+        .catch((err) =>
+          console.warn(
+            `⚠️ Erreur mise à jour broadcastMetadata (fallback):`,
+            err.message,
+          ),
+        );
+    }
+
+    // 3. Sauvegarder le message dans la conv broadcast (historique expéditeur uniquement)
+    //    ⚠️ PAS de publication stream : ce message est privé à l'expéditeur
+    //       et ne doit jamais être livré aux destinataires
+    const broadcastMsg = {
+      conversationId: broadcastConversation._id || broadcastConversation.id,
+      senderId,
+      receiverId: null,
+      content: content || "",
+      type,
+      status: "SENT",
+      totalRecipients: recipients.length,
+      deliveredCount: 0,
+      readCount: 0,
+      deliveredBy: [],
+      readBy: [],
+      timestamp: new Date(),
+      ...(replyTo ? { replyTo } : {}),
+      ...(isForwarded
+        ? { isForwarded: true, forwardedFrom, originalSenderId }
+        : {}),
+      metadata: {
+        conversationName,
+        technical: {
+          source: "SendMessage-UseCase-Broadcast",
+          clientTimestamp: new Date().toISOString(),
+        },
+        contentMetadata: {
+          file: fileMetadata || null,
+          call: callMeta || null,
+          broadcast: { privateConversations: privateConversationEntries },
+        },
+      },
+    };
+
+    let savedBroadcast;
+    try {
+      if (this.resilientService) {
+        savedBroadcast = await this.resilientService.circuitBreaker.execute(
+          () => this.messageRepository.save(broadcastMsg),
+        );
+      } else {
+        savedBroadcast = await this.messageRepository.save(broadcastMsg);
+      }
+      console.log(`✅ Message sauvegardé: ${savedBroadcast._id}`);
+
+      // Mettre à jour lastMessage de la conv broadcast
+      await this.conversationRepository.updateLastMessage(
+        broadcastConversation._id,
+        {
+          _id: savedBroadcast._id,
+          content: broadcastMsg.content,
+          type: broadcastMsg.type,
+          timestamp: broadcastMsg.timestamp,
+          senderId: broadcastMsg.senderId,
+          messageId: savedBroadcast._id,
+          fileId: null,
+        },
+      );
+    } catch (err) {
+      console.error(`❌ Erreur sauvegarde historique broadcast:`, err.message);
+      savedBroadcast = {
+        _id: null,
+        content: broadcastMsg.content,
+        senderId: broadcastMsg.senderId,
+        conversationId: broadcastMsg.conversationId,
+        type: broadcastMsg.type,
+        status: "SENT",
+        createdAt: broadcastMsg.timestamp,
+      };
+    }
+
+    // ✅ Incrémenter totalMessagesSent UNE FOIS par message broadcast envoyé
+    this.conversationRepository
+      .incrementBroadcastMessageCount(
+        broadcastConversation._id || broadcastConversation.id,
+      )
+      .catch((err) =>
+        console.warn(`⚠️ Erreur incrementBroadcastMessageCount:`, err.message),
+      );
+
+    console.log(
+      `✅ Message broadcast sauvegardé: ${savedBroadcast._id} (${privateConversationEntries.length} conv(s) privée(s) sync)`,
+    );
+
+    return {
+      success: true,
+      message: {
+        id: savedBroadcast._id || savedBroadcast.id,
+        content: savedBroadcast.content,
+        senderId: savedBroadcast.senderId,
+        conversationId: savedBroadcast.conversationId,
+        type: savedBroadcast.type,
+        status: savedBroadcast.status,
+        timestamp: savedBroadcast.createdAt || savedBroadcast.timestamp,
+        createdAt: savedBroadcast.createdAt,
+        broadcastDispatched: privateConversationEntries.length,
+      },
+      conversation: {
+        id: broadcastConversation._id || broadcastConversation.id,
+        name: broadcastConversation.name,
+        type: broadcastConversation.type,
+        participants: broadcastConversation.participants,
+      },
+    };
   }
 
   // ✅ MÉTHODE CORRIGÉE POUR CRÉER LA CONVERSATION
@@ -553,7 +861,6 @@ class SendMessage {
           sexe: null,
           avatar: null,
           matricule: participantId,
-          departement: null,
           ministere: null,
         };
 
@@ -574,7 +881,6 @@ class SendMessage {
           prenom: userInfo.prenom || null,
           sexe: userInfo.sexe || null,
           avatar: userInfo.avatar || null,
-          departement: userInfo.departement || null,
           ministere: userInfo.ministere || null,
         };
       });

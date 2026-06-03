@@ -50,6 +50,9 @@ class UploadFile {
           storage: fileData.metadata?.storage,
           usage: fileData.metadata?.usage,
         },
+        isClientRecorded:
+          fileData.isClientRecorded === true ||
+          fileData.isClientRecorded === "true",
       });
 
       // ✅ SAUVEGARDER VIA LE REPOSITORY

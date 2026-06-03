@@ -30,6 +30,15 @@ class CachedConversationRepository {
     this.cacheKeyPrefix = "chat:cache:convs";
   }
 
+  // ===== TROUVER UNE CONVERSATION PAR UN CHAMP (ex: code_structure) =====
+  async findOne(query = {}) {
+    // Pas de cache ici, accès direct au primaryStore (MongoDB)
+    if (!query || typeof query !== "object") {
+      throw new Error("Query object requis pour findOne");
+    }
+    return this.primaryStore.findOne(query);
+  }
+
   // ===== LIRE LES CONVERSATIONS D'UN UTILISATEUR (CACHE INTELLIGENT) =====
   async findByParticipant(userId, options = {}) {
     const {
@@ -473,6 +482,29 @@ class CachedConversationRepository {
       console.error("❌ Erreur updateLastMessageStatus:", error.message);
       throw error;
     }
+  }
+
+  async findPrivateConversation(participant1, participant2) {
+    return this.primaryStore.findPrivateConversation(
+      participant1,
+      participant2,
+    );
+  }
+
+  async incrementBroadcastMessageCount(broadcastConversationId) {
+    return this.primaryStore.incrementBroadcastMessageCount(
+      broadcastConversationId,
+    );
+  }
+
+  async updateBroadcastMetadata(
+    broadcastConversationId,
+    privateConversationEntries,
+  ) {
+    return this.primaryStore.updateBroadcastMetadata(
+      broadcastConversationId,
+      privateConversationEntries,
+    );
   }
 
   async incrementUnreadCountInUserMetadata(conversationId, userId, amount = 1) {

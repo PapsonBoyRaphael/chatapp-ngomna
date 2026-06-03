@@ -22,7 +22,9 @@ const messageSchema = new mongoose.Schema(
     },
     content: {
       type: String,
-      required: true,
+      required: function () {
+        return this.type === "TEXT";
+      },
       maxlength: 10000,
       trim: true,
     },
@@ -191,6 +193,27 @@ const messageSchema = new mongoose.Schema(
           thumbnailUrl: String,
           uploadedAt: Date,
           status: String,
+          isClientRecorded: {
+            type: Boolean,
+            default: false,
+          },
+        },
+
+        // ✅ Métadonnées pour les messages broadcast (lien vers les conversations privées)
+        broadcast: {
+          // ID de la conversation broadcast source (présent dans les messages des conv privées)
+          broadcastConversationId: {
+            type: String,
+            default: null,
+          },
+          // Liste des conversations privées créées/utilisées pour dispatch (présent dans le message broadcast)
+          privateConversations: [
+            {
+              recipientId: String,
+              conversationId: String,
+              messageId: String,
+            },
+          ],
         },
 
         // ✅ Métadonnées pour les appels (CALL / VIDEO_CALL)

@@ -947,6 +947,16 @@ class OnlineUserManager {
         }
       } while (cursor !== "0");
 
+      // ✅ NETTOYAGE DES SOCKETS FANTÔMES
+      if (this.io) {
+        const { totalRemoved } = await this.cleanupAllGhostSockets();
+        if (totalRemoved > 0) {
+          console.log(
+            `🧹 [cleanupInactiveUsers] ${totalRemoved} socket(s) fantôme(s) supprimé(s)`,
+          );
+        }
+      }
+
       return cleanedCount;
     } catch (error) {
       console.error("❌ Erreur cleanupInactiveUsers:", error);

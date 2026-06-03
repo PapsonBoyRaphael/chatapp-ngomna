@@ -310,6 +310,11 @@ const fileSchema = new mongoose.Schema(
 
     // Tags
     tags: [String],
+
+    isClientRecorded: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

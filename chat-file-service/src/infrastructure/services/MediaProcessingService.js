@@ -758,30 +758,23 @@ class MediaProcessingService {
    * Vérifie si un type MIME est supporté
    */
   isSupportedMimeType(mimeType) {
-    const supportedTypes = [
-      "image/jpeg",
-      "image/png",
-      "image/gif",
-      "image/webp",
-      "audio/mpeg",
-      "audio/wav",
-      "audio/ogg",
-      "audio/flac",
-      "audio/aac",
-      "video/mp4",
-      "video/avi",
-      "video/quicktime",
-      "video/webm",
-      "application/pdf",
-      "text/plain",
-      "text/rtf",
-      "application/msword",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      "application/vnd.ms-excel",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ];
-
-    return supportedTypes.includes(mimeType);
+    // Vérification par préfixe — cohérente avec getFileType()
+    if (mimeType.startsWith("image/")) return true;
+    if (mimeType.startsWith("audio/")) return true;
+    if (mimeType.startsWith("video/")) return true;
+    if (mimeType.startsWith("text/")) return true;
+    if (mimeType.includes("pdf")) return true;
+    if (
+      mimeType.includes("word") ||
+      mimeType.includes("excel") ||
+      mimeType.includes("powerpoint") ||
+      mimeType.includes("document") ||
+      mimeType.includes("spreadsheet") ||
+      mimeType.includes("presentation")
+    ) {
+      return true;
+    }
+    return false;
   }
 
   /**

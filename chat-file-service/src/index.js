@@ -38,6 +38,7 @@ const {
 } = require("../shared");
 
 // Services
+const AutoGroupSyncService = require("./infrastructure/services/AutoGroupSyncService");
 const ThumbnailService = require("./infrastructure/services/ThumbnailService");
 const FileStorageService = require("./infrastructure/services/FileStorageService");
 const MediaProcessingService = require("./infrastructure/services/MediaProcessingService");
@@ -589,6 +590,21 @@ const startServer = async () => {
       resilientMessageService,
     );
 
+    // ===============================
+    // INITIALISATION AutoGroupSyncService
+    // ===============================
+    const autoGroupSyncService = new AutoGroupSyncService({
+      conversationRepository,
+      createGroupUseCase,
+      addParticipantUseCase,
+      userCacheService,
+      // visibilityServiceUrl: par défaut via .env
+    });
+    app.locals.autoGroupSyncService = autoGroupSyncService;
+
+    const AutoGroupSyncUseCase = require("./application/use-cases/AutoGroupSync");
+    const autoGroupSyncUseCase = new AutoGroupSyncUseCase(autoGroupSyncService);
+
     // Rendre disponibles globalement (injection simple pour controllers / handlers)
     app.locals.useCases = app.locals.useCases || {};
     app.locals.useCases.markMessageDelivered = markMessageDeliveredUseCase;
@@ -701,6 +717,7 @@ const startServer = async () => {
       addReactionUseCase,
       removeReactionUseCase,
       replyMessageUseCase,
+      autoGroupSyncUseCase,
     );
 
     // ✅ CONFIGURER LES GESTIONNAIRES D'ÉVÉNEMENTS SOCKET.IO

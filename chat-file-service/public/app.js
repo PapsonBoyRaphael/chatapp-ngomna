@@ -616,12 +616,41 @@ function setupSocketEvents() {
   // ✅ ÉVÉNEMENTS DIFFUSION
   socket.on("broadcast:created", (data) => {
     log("✅ Liste de diffusion créée", "success", data);
+
+    const broadcastId = data.broadcast?.id || data.conversationId;
+    const broadcastName = data.broadcast?.name;
+    const recipientCount = data.broadcast?.recipientCount;
+    const privateConvs =
+      data.broadcast?.broadcastMetadata?.privateConversations || [];
+
     addReceivedMessage("broadcast", "📢 Diffusion Créée", data, {
-      broadcastId: data.broadcast?.id,
-      broadcastName: data.broadcast?.name,
-      recipients: data.broadcast?.recipientCount,
+      broadcastId,
+      broadcastName,
+      recipients: recipientCount,
+      privateConvsLinked: privateConvs.length,
     });
-    alert(`Liste de diffusion "${data.broadcast?.name}" créée avec succès !`);
+
+    // ✅ Auto-remplir les champs pour les tests suivants
+    const convIdEl = document.getElementById("broadcastConversationId");
+    const fetchEl = document.getElementById("broadcastFetchConversationId");
+    const metaEl = document.getElementById("broadcastMetaConvId");
+    if (broadcastId) {
+      if (convIdEl) convIdEl.value = broadcastId;
+      if (fetchEl) fetchEl.value = broadcastId;
+      if (metaEl) metaEl.value = broadcastId;
+    }
+
+    const statusDiv = document.getElementById("createBroadcastStatus");
+    if (statusDiv) {
+      statusDiv.textContent = `✅ Diffusion "${broadcastName}" créée ! ${privateConvs.length} conv(s) privée(s) liée(s). ID: ${broadcastId}`;
+      statusDiv.className = "status success";
+    }
+
+    log(
+      `📢 broadcastMetadata: ${privateConvs.length} conv(s) privée(s)`,
+      "success",
+      privateConvs,
+    );
   });
 
   socket.on("broadcast:error", (data) => {
@@ -1167,40 +1196,198 @@ function createGroup() {
 
 function createBroadcast() {
   const name = document.getElementById("broadcastName")?.value?.trim();
-  const receiverIds = document
-    .getElementById("groupReceiverIds")
-    ?.value?.trim();
+  const receiverIdsStr =
+    document.getElementById("broadcastRecipientIds")?.value?.trim() ||
+    document.getElementById("groupReceiverIds")?.value?.trim();
   const broadcastId =
     document.getElementById("broadcastId")?.value?.trim() || undefined;
+  const statusDiv = document.getElementById("createBroadcastStatus");
+
+  const setStatus = (msg, type) => {
+    if (statusDiv) {
+      statusDiv.textContent = msg;
+      statusDiv.className = `status ${type}`;
+    }
+  };
 
   if (!name) {
-    alert("Veuillez saisir un nom de diffusion");
+    setStatus("❌ Nom de diffusion requis", "error");
+    return;
+  }
+  if (!receiverIdsStr) {
+    setStatus("❌ IDs destinataires requis", "error");
     return;
   }
 
-  if (!receiverIds) {
-    alert("Veuillez saisir les IDs des destinataires (séparés par virgule)");
-    return;
-  }
-
-  const recipients = receiverIds
+  const recipients = receiverIdsStr
     .split(",")
     .map((id) => id.trim())
     .filter((id) => id);
 
   if (recipients.length === 0) {
-    alert("Aucun destinataire valide");
+    setStatus("❌ Aucun destinataire valide", "error");
     return;
   }
 
-  const data = {
-    name,
-    recipients,
-    broadcastId,
-  };
-
+  const data = { name, recipients, broadcastId };
+  setStatus(
+    `⏳ Création de la diffusion (${recipients.length} destinataires)…`,
+    "info",
+  );
   log("📤 Émission createBroadcast", "info", data);
   socket.emit("createBroadcast", data);
+}
+
+// ========================================
+// ✅ FONCTIONS BROADCAST
+// ========================================
+
+function generateBroadcastId() {
+  const id = generateMongoObjectId();
+  const el = document.getElementById("broadcastId");
+  if (el) el.value = id;
+  log(`🔧 ID diffusion généré: ${id}`, "info");
+}
+
+function sendBroadcastMessage() {
+  if (!socket || !socket.connected) {
+    log("❌ Socket non connecté", "error");
+    return;
+  }
+
+  const conversationId = document
+    .getElementById("broadcastConversationId")
+    ?.value?.trim();
+  const content = document
+    .getElementById("broadcastMessageContent")
+    ?.value?.trim();
+  const type = document.getElementById("broadcastMessageType")?.value || "TEXT";
+  const statusDiv = document.getElementById("sendBroadcastStatus");
+
+  const setStatus = (msg, cls) => {
+    if (statusDiv) {
+      statusDiv.textContent = msg;
+      statusDiv.className = `status ${cls}`;
+    }
+  };
+
+  if (!conversationId) {
+    setStatus("❌ ID conversation broadcast requis", "error");
+    return;
+  }
+  if (!content && type === "TEXT") {
+    setStatus("❌ Contenu requis pour un message TEXT", "error");
+    return;
+  }
+
+  const payload = {
+    conversationId,
+    content,
+    type,
+    senderId: currentUser?.userId,
+  };
+
+  setStatus("⏳ Envoi en cours…", "info");
+  log("📤 Envoi message broadcast", "info", payload);
+  socket.emit("sendMessage", payload, (ack) => {
+    if (ack?.success) {
+      setStatus(
+        `✅ Message envoyé (id: ${ack.data?.messageId || "?"})`,
+        "success",
+      );
+      log("✅ Broadcast message envoyé", "success", ack.data);
+    } else {
+      setStatus(`❌ ${ack?.message || "Erreur"}`, "error");
+      log("❌ Erreur envoi broadcast", "error", ack);
+    }
+  });
+}
+
+async function fetchBroadcastMessages() {
+  const conversationId = document
+    .getElementById("broadcastFetchConversationId")
+    ?.value?.trim();
+  const limit = document.getElementById("broadcastFetchLimit")?.value || 20;
+  const statusDiv = document.getElementById("fetchBroadcastStatus");
+  const outputEl = document.getElementById("broadcastMessagesOutput");
+
+  const setStatus = (msg, cls) => {
+    if (statusDiv) {
+      statusDiv.textContent = msg;
+      statusDiv.className = `status ${cls}`;
+    }
+  };
+
+  if (!conversationId) {
+    setStatus("❌ ID conversation requis", "error");
+    return;
+  }
+
+  setStatus("⏳ Récupération…", "info");
+  try {
+    const res = await fetch(
+      `/conversations/${conversationId}/messages?limit=${limit}`,
+      { headers: { "user-id": currentUser?.userId || "" } },
+    );
+    const data = await res.json();
+    if (data.success) {
+      const msgs = data.data?.messages || [];
+      setStatus(`✅ ${msgs.length} message(s) récupéré(s)`, "success");
+      if (outputEl) outputEl.textContent = JSON.stringify(msgs, null, 2);
+      log("✅ Messages broadcast récupérés", "success", { count: msgs.length });
+    } else {
+      setStatus(`❌ ${data.message || "Erreur"}`, "error");
+      if (outputEl) outputEl.textContent = JSON.stringify(data, null, 2);
+    }
+  } catch (err) {
+    setStatus(`❌ ${err.message}`, "error");
+    log("❌ Erreur fetchBroadcastMessages", "error", err);
+  }
+}
+
+async function fetchBroadcastMetadata() {
+  const conversationId = document
+    .getElementById("broadcastMetaConvId")
+    ?.value?.trim();
+  const statusDiv = document.getElementById("broadcastMetaStatus");
+  const outputEl = document.getElementById("broadcastMetaOutput");
+
+  const setStatus = (msg, cls) => {
+    if (statusDiv) {
+      statusDiv.textContent = msg;
+      statusDiv.className = `status ${cls}`;
+    }
+  };
+
+  if (!conversationId) {
+    setStatus("❌ ID conversation requis", "error");
+    return;
+  }
+
+  setStatus("⏳ Récupération du mapping…", "info");
+  try {
+    const res = await fetch(`/conversations/${conversationId}`, {
+      headers: { "user-id": currentUser?.userId || "" },
+    });
+    const data = await res.json();
+    if (data.success) {
+      const conv = data.data;
+      const meta = conv?.broadcastMetadata || null;
+      const privateConvs = meta?.privateConversations || [];
+      setStatus(
+        `✅ ${privateConvs.length} conv(s) privée(s) liée(s) | totalMessagesSent: ${meta?.totalMessagesSent ?? 0}`,
+        "success",
+      );
+      if (outputEl) outputEl.textContent = JSON.stringify(meta, null, 2);
+      log("✅ broadcastMetadata récupéré", "success", meta);
+    } else {
+      setStatus(`❌ ${data.message || "Erreur"}`, "error");
+      if (outputEl) outputEl.textContent = JSON.stringify(data, null, 2);
+    }
+  } catch (err) {
+    setStatus(`❌ ${err.message}`, "error");
+    log("❌ Erreur fetchBroadcastMetadata", "error", err);
+  }
 }
 
 // ========================================

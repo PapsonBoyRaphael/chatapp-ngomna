@@ -73,7 +73,6 @@ class CreateBroadcast {
         name: "Utilisateur inconnu",
         avatar: null,
         matricule: participantId,
-        departement: null,
         ministere: null,
       };
 
@@ -94,7 +93,6 @@ class CreateBroadcast {
         // ✅ POPULATED À PARTIR DE UserCacheService
         name: userInfo.name,
         avatar: userInfo.avatar,
-        departement: userInfo.departement || null,
         ministere: userInfo.ministere || null,
       };
     });
@@ -151,68 +149,134 @@ class CreateBroadcast {
     const savedConversation =
       await this.conversationRepository.save(conversationData);
 
-    // ✅ PUBLIER NOTIFICATION SYSTÈME VIA RESILIENT MESSAGE SERVICE
-    if (this.resilientMessageService) {
+    // ✅ CRÉER LES CONVERSATIONS PRIVÉES (admin↔chaque destinataire)
+    // et stocker le mapping dans broadcastMetadata
+    const senderId = adminIds[0];
+    const senderInfo = usersInfo.find((u) => u.userId === senderId) || {};
+    const privateConversationEntries = [];
+
+    for (const recipientId of recipientIds) {
       try {
-        console.log(
-          `📢 Publication notification système BROADCAST_CREATED pour: ${savedConversation._id}`,
-        );
+        // Vérifier si une conv privée existe déjà
+        let privateConv =
+          await this.conversationRepository.findPrivateConversation(
+            senderId,
+            recipientId,
+          );
 
-        // await this.resilientMessageService.publishSystemMessage(
-        //   {
-        //     conversationId: String(savedConversation._id),
-        //     type: "SYSTEM",
-        //     subType: "BROADCAST_CREATED",
-        //     senderId: adminIds[0],
-        //     senderName: "Système",
-        //     content: `La liste de diffusion "${name}" a été créée`,
-        //     participants: participants,
-        //     metadata: {
-        //       event: "broadcast_created",
-        //       broadcastName: name,
-        //       broadcastId: String(savedConversation._id),
-        //       creatorId: adminIds[0],
-        //       adminIds: adminIds,
-        //       recipientIds: recipientIds,
-        //       participantCount: participants.length,
-        //       timestamp: new Date().toISOString(),
-        //     },
-        //   },
-        //   {
-        //     eventType: "BROADCAST_CREATED",
-        //     stream: "chat:stream:messages:group", // Utilise le même stream que groupe
-        //   },
-        // );
-        // console.log(
-        //   `✅ Notification système BROADCAST_CREATED publiée pour: ${savedConversation._id}`,
-        // );
+        if (!privateConv) {
+          const recipientInfo =
+            usersInfo.find((u) => u.userId === recipientId) || {};
+          const privateConvData = {
+            name: `Conversation ${senderId} - ${recipientId}`,
+            type: "PRIVATE",
+            participants: [senderId, recipientId],
+            createdBy: senderId,
+            settings: {
+              allowInvites: false,
+              isPublic: false,
+              maxParticipants: 2,
+              messageRetention: 0,
+              autoDeleteAfter: 0,
+            },
+            userMetadata: [
+              {
+                userId: senderId,
+                unreadCount: 0,
+                lastReadAt: null,
+                isMuted: false,
+                isPinned: false,
+                customName: null,
+                notificationSettings: {
+                  enabled: true,
+                  sound: true,
+                  vibration: true,
+                },
+                nom: senderInfo.nom || null,
+                prenom: senderInfo.prenom || null,
+                sexe: senderInfo.sexe || null,
+                avatar: senderInfo.avatar || null,
+                ministere: senderInfo.ministere || null,
+              },
+              {
+                userId: recipientId,
+                unreadCount: 0,
+                lastReadAt: null,
+                isMuted: false,
+                isPinned: false,
+                customName: null,
+                notificationSettings: {
+                  enabled: true,
+                  sound: true,
+                  vibration: true,
+                },
+                nom: recipientInfo.nom || null,
+                prenom: recipientInfo.prenom || null,
+                sexe: recipientInfo.sexe || null,
+                avatar: recipientInfo.avatar || null,
+                ministere: recipientInfo.ministere || null,
+              },
+            ],
+          };
 
-        await this.resilientMessageService.addToStream(
-          "chat:stream:events:conversation:created", // Nouveau stream pour les événements de diffusion
-          {
-            event: "broadcast.created",
-            conversationId: savedConversation._id.toString(),
-            conversation: savedConversation,
-            type: "BROADCAST",
-            createdBy: adminIds[0],
-            participants: JSON.stringify(participants),
-            name: name,
-            participantCount: participants.length.toString(),
-            senderSocketId: senderSocketId || "", // ✅ Propager pour exclusion MDS
-            timestamp: Date.now().toString(),
-          },
+          privateConv = await this.conversationRepository.save(privateConvData);
+
+          // Publier événement de création de la conv privée
+          if (this.resilientMessageService) {
+            this.resilientMessageService
+              .addToStream("chat:stream:events:conversation:created", {
+                event: "conversation.created",
+                conversationId: privateConv._id.toString(),
+                type: "PRIVATE",
+                createdBy: senderId,
+                participants: JSON.stringify([senderId, recipientId]),
+                name: privateConvData.name,
+                participantCount: "2",
+                senderSocketId: senderSocketId || "",
+                timestamp: Date.now().toString(),
+              })
+              .catch((err) =>
+                console.warn(
+                  `⚠️ Erreur publication conv privée broadcast:`,
+                  err.message,
+                ),
+              );
+          }
+
+          console.log(
+            `✅ Conv privée créée: ${senderId}↔${recipientId} (${privateConv._id})`,
+          );
+        } else {
+          console.log(
+            `ℹ️ Conv privée existante réutilisée: ${senderId}↔${recipientId} (${privateConv._id})`,
+          );
+        }
+
+        privateConversationEntries.push({
+          recipientId: String(recipientId),
+          conversationId: (privateConv._id || privateConv.id).toString(),
+        });
+      } catch (err) {
+        console.error(
+          `❌ Erreur création conv privée broadcast pour ${recipientId}:`,
+          err.message,
         );
-        console.log(
-          `📤 [broadcast.created] publié dans chat:stream:events:conversation:created`,
-        );
-      } catch (notifError) {
-        console.warn(
-          "⚠️ Erreur publication notification BROADCAST_CREATED:",
-          notifError.message,
-        );
-        // Ne pas bloquer la création si la notification échoue
       }
     }
+
+    // Stocker le mapping dans broadcastMetadata
+    if (privateConversationEntries.length > 0) {
+      try {
+        await this.conversationRepository.updateBroadcastMetadata(
+          savedConversation._id,
+          privateConversationEntries,
+        );
+      } catch (err) {
+        console.warn(`⚠️ Erreur stockage broadcastMetadata:`, err.message);
+      }
+    }
+    // ✅ Confirmation envoyée directement via socket.emit("broadcast:created") dans chatHandler
+    // Pas de publication stream nécessaire : les destinataires ne sont pas notifiés de la création
 
     return savedConversation;
   }

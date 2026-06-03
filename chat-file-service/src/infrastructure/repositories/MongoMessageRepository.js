@@ -188,7 +188,21 @@ class MongoMessageRepository {
 
       console.log("🔍 Messages trouvés (page-based):", messages.length);
 
-      return messages;
+      let nextCursor = null;
+      if (messages.length > 0) {
+        const lastMessage = messages[messages.length - 1];
+        nextCursor = lastMessage.createdAt.toISOString();
+      }
+
+      console.log("✅ Messages trouvés avec cursor:", {
+        count: messages.length,
+        nextCursor: nextCursor ? nextCursor.substring(0, 19) : null,
+      });
+
+      return {
+        messages: messages,
+        nextCursor,
+      };
     } catch (error) {
       console.error("❌ Erreur findByConversation:", error);
       return [];

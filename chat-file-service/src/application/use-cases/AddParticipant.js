@@ -37,8 +37,12 @@ class AddParticipant {
       );
     }
 
-    // Vérifier que l'utilisateur qui ajoute est membre
-    if (!conversation.participants.includes(addedBy)) {
+    // Vérifier que l'utilisateur qui ajoute est membre, sauf si ajout système (SYSTEM ou autoAdded)
+    if (
+      addedBy !== "SYSTEM" &&
+      !(typeof autoAdded !== "undefined" && autoAdded === true) &&
+      !conversation.participants.includes(addedBy)
+    ) {
       throw new Error("Seul un membre peut ajouter des participants");
     }
 
@@ -97,7 +101,6 @@ class AddParticipant {
       prenom: participantInfo?.prenom || null,
       sexe: participantInfo?.sexe || null,
       avatar: participantInfo?.avatar || null,
-      departement: participantInfo?.departement || null,
       ministere: participantInfo?.ministere || null,
     });
 
@@ -130,6 +133,7 @@ class AddParticipant {
           "PARTICIPANT_ADDED",
           {
             conversationId: conversationId.toString(),
+            conversation: conversation, // Inclure les détails de la conversation pour les consommateurs qui veulent plus d'infos
             participantId,
             participantName: participantInfo?.name,
             addedBy,
