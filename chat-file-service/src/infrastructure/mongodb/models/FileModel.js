@@ -115,7 +115,18 @@ const fileSchema = new mongoose.Schema(
         aspectRatio: String,
         videoCodec: String,
         audioCodec: String,
+        audioChannels: Number,
+        audioSampleRate: Number,
         hasSubtitles: Boolean,
+
+        // ✅ Miniature vidéo (frame extraite par MediaProcessingService)
+        thumbnail: {
+          generated: { type: Boolean, default: false },
+          extractedAtSecond: Number,
+          frameWidth: Number,
+          frameHeight: Number,
+          error: String,
+        },
 
         // Pour audio
         artist: String,
@@ -299,6 +310,11 @@ const fileSchema = new mongoose.Schema(
 
     // Tags
     tags: [String],
+
+    isClientRecorded: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,

@@ -50,6 +50,9 @@ class UploadFile {
           storage: fileData.metadata?.storage,
           usage: fileData.metadata?.usage,
         },
+        isClientRecorded:
+          fileData.isClientRecorded === true ||
+          fileData.isClientRecorded === "true",
       });
 
       // ✅ SAUVEGARDER VIA LE REPOSITORY
@@ -75,6 +78,7 @@ class UploadFile {
               conversationId: savedFile.conversationId?.toString() || "unknown",
               originalName: savedFile.originalName,
               mimeType: savedFile.mimeType,
+              metadata: JSON.stringify(savedFile.metadata || {}),
               url: savedFile.url,
               timestamp: Date.now().toString(),
             },
@@ -101,6 +105,7 @@ class UploadFile {
         fileName: savedFile.fileName,
         size: savedFile.size,
         mimeType: savedFile.mimeType,
+        metadata: savedFile.metadata,
         uploadedAt: savedFile.createdAt,
         url: savedFile.url,
         status: savedFile.status,

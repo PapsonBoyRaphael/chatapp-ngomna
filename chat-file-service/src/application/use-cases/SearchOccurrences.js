@@ -14,7 +14,7 @@ class SearchOccurrences {
   async execute(query, options = {}) {
     if (!query || typeof query !== "string" || query.length < 2) {
       throw new Error(
-        "Le mot-clé de recherche doit contenir au moins 2 caractères"
+        "Le mot-clé de recherche doit contenir au moins 2 caractères",
       );
     }
 
@@ -33,12 +33,26 @@ class SearchOccurrences {
     if (typeof scope === "string") {
       scopes =
         scope === "all"
-          ? ["messages", "conversations", "files", "groups", "broadcast"]
+          ? [
+              "messages",
+              "conversations",
+              "files",
+              "groups",
+              "broadcast",
+              "channels",
+            ]
           : scope.split(",").map((s) => s.trim().toLowerCase());
     } else if (Array.isArray(scope)) {
       scopes = scope;
     } else {
-      scopes = ["messages", "conversations", "files", "groups", "broadcast"];
+      scopes = [
+        "messages",
+        "conversations",
+        "files",
+        "groups",
+        "broadcast",
+        "channels",
+      ];
     }
 
     let filesResult = { files: [], totalFound: 0, searchTime: 0 };
@@ -49,6 +63,7 @@ class SearchOccurrences {
     };
     let groupsResult = { conversations: [], totalFound: 0, searchTime: 0 };
     let broadcastResult = { conversations: [], totalFound: 0, searchTime: 0 };
+    let channelsResult = { conversations: [], totalFound: 0, searchTime: 0 };
     let messagesResult = { messages: [], totalFound: 0, searchTime: 0 };
 
     if (scopes.includes("files")) {
@@ -62,7 +77,8 @@ class SearchOccurrences {
     if (
       scopes.includes("conversations") ||
       scopes.includes("groups") ||
-      scopes.includes("broadcast")
+      scopes.includes("broadcast") ||
+      scopes.includes("channels")
     ) {
       // Recherche toutes les conversations, puis filtre par type si demandé
       const convResult = await this.conversationRepository.searchConversations(
@@ -73,12 +89,12 @@ class SearchOccurrences {
           useCache,
           useLike,
           includeArchived,
-        }
+        },
       );
 
       if (scopes.includes("conversations")) {
         conversationsResult.conversations = convResult.conversations.filter(
-          (c) => c.type === "PRIVATE"
+          (c) => c.type === "PRIVATE",
         );
         conversationsResult.totalFound =
           conversationsResult.conversations.length;
@@ -86,17 +102,24 @@ class SearchOccurrences {
       }
       if (scopes.includes("groups")) {
         groupsResult.conversations = convResult.conversations.filter(
-          (c) => c.type === "GROUP"
+          (c) => c.type === "GROUP",
         );
         groupsResult.totalFound = groupsResult.conversations.length;
         groupsResult.searchTime = convResult.searchTime;
       }
       if (scopes.includes("broadcast")) {
         broadcastResult.conversations = convResult.conversations.filter(
-          (c) => c.type === "BROADCAST"
+          (c) => c.type === "BROADCAST",
         );
         broadcastResult.totalFound = broadcastResult.conversations.length;
         broadcastResult.searchTime = convResult.searchTime;
+      }
+      if (scopes.includes("channels")) {
+        channelsResult.conversations = convResult.conversations.filter(
+          (c) => c.type === "CHANNEL",
+        );
+        channelsResult.totalFound = channelsResult.conversations.length;
+        channelsResult.searchTime = convResult.searchTime;
       }
     }
     if (scopes.includes("messages")) {
@@ -119,13 +142,15 @@ class SearchOccurrences {
       broadcast: broadcastResult.conversations || [],
       totalBroadcast: broadcastResult.totalFound || 0,
       messages: messagesResult.messages || [],
+      totalChannels: channelsResult.totalFound || 0,
       totalMessages: messagesResult.totalFound || 0,
       searchTime: Math.max(
         filesResult.searchTime || 0,
         conversationsResult.searchTime || 0,
         groupsResult.searchTime || 0,
         broadcastResult.searchTime || 0,
-        messagesResult.searchTime || 0
+        channelsResult.searchTime || 0,
+        messagesResult.searchTime || 0,
       ),
       scope: scopes,
     };

@@ -115,10 +115,14 @@ class TypingIndicatorService {
   async processTypingEvent(msg) {
     const {
       conversationId,
-      userId,
+      userId: rawUserId,
+      senderId,
       event, // "typing:start", "typing:refresh", "typing:stop"
       timestamp,
     } = msg.message;
+
+    // ✅ Accepter userId OU senderId (compatibilité chatHandler qui publie senderId)
+    const userId = rawUserId || senderId;
 
     console.log(`📝 Événement typing reçu:`, {
       conversationId,

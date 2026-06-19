@@ -155,7 +155,7 @@ class UserCacheService {
 
       cachedResults.forEach((cached, i) => {
         const mapped = this._mapCacheToResponse(cached, userIds[i]);
-        if (mapped && mapped.nom !== "Utilisateur inconnu") {
+        if (mapped && mapped.name && mapped.name !== "Utilisateur inconnu") {
           results.push(mapped); // Cache hit
         } else {
           missingIds.push(userIds[i]);
@@ -194,6 +194,31 @@ class UserCacheService {
           // Repopulate le cache partagé
           if (fetchedUser.nom) {
             await this.userCache.set(this._buildCachePayload(fetchedUser));
+          }
+        }
+
+        // Si la route /batch ne renvoie pas tous les users, fallback individuel
+        const unresolvedIds = results
+          .filter((r) => missingIds.includes(r.userId))
+          .filter((r) => !r.name || r.name === "Utilisateur inconnu")
+          .map((r) => r.userId);
+
+        if (unresolvedIds.length > 0) {
+          const individualUsers = await Promise.all(
+            unresolvedIds.map((id) => this._fetchFromAuthService(id)),
+          );
+
+          for (const fetchedUser of individualUsers) {
+            const index = results.findIndex(
+              (r) => r.userId === fetchedUser.userId,
+            );
+            if (index !== -1) {
+              results[index] = fetchedUser;
+            }
+
+            if (fetchedUser.nom) {
+              await this.userCache.set(this._buildCachePayload(fetchedUser));
+            }
           }
         }
       }

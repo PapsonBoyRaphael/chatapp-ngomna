@@ -14,6 +14,17 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
+  limits: {
+    fileSize: 100 * 1024 * 1024, // ✅ 100 MB max pour upload monolithique
+  },
+});
+
+// ✅ Multer séparé pour les chunks (5 MB + marge)
+const chunkUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 6 * 1024 * 1024, // 6 MB max par chunk
+  },
 });
 
 function createFileRoutes(fileController) {
@@ -75,12 +86,81 @@ function createFileRoutes(fileController) {
     // POST /files/upload - Upload d'un fichier
     router.post("/upload", upload.single("file"), async (req, res) => {
       try {
+        console.log("🔍 Requête reçue dans la route /files/upload:", {
+          headers: req.headers,
+          body: req.body,
+          file: req.file,
+        });
         await fileController.uploadFile(req, res);
       } catch (error) {
         console.error("❌ Erreur route POST /files/upload:", error);
         res.status(500).json({
           success: false,
           message: "Erreur lors de l'upload du fichier",
+          error: error.message,
+        });
+      }
+    });
+
+    // =============================================
+    // ✅ ROUTES UPLOAD CHUNKÉ (fichiers > 100 MB)
+    // =============================================
+
+    // GET /files/upload/status?token=xxx - Vérifier le statut d'un upload
+    router.get("/upload/status", async (req, res) => {
+      try {
+        await fileController.checkUploadStatus(req, res);
+      } catch (error) {
+        console.error("❌ Erreur route GET /files/upload/status:", error);
+        res.status(500).json({
+          success: false,
+          message: "Erreur lors de la vérification du statut",
+          error: error.message,
+        });
+      }
+    });
+
+    // POST /files/upload/init - Initialiser un upload chunké
+    router.post("/upload/init", async (req, res) => {
+      try {
+        await fileController.initChunkedUpload(req, res);
+      } catch (error) {
+        console.error("❌ Erreur route POST /files/upload/init:", error);
+        res.status(500).json({
+          success: false,
+          message: "Erreur lors de l'initialisation de l'upload chunké",
+          error: error.message,
+        });
+      }
+    });
+
+    // POST /files/upload/chunk/:uploadId - Envoyer un chunk
+    router.post(
+      "/upload/chunk/:uploadId",
+      chunkUpload.single("chunk"),
+      async (req, res) => {
+        try {
+          await fileController.uploadChunk(req, res);
+        } catch (error) {
+          console.error("❌ Erreur route POST /files/upload/chunk:", error);
+          res.status(500).json({
+            success: false,
+            message: "Erreur lors de l'upload du chunk",
+            error: error.message,
+          });
+        }
+      },
+    );
+
+    // POST /files/upload/complete/:uploadId - Finaliser l'upload chunké
+    router.post("/upload/complete/:uploadId", async (req, res) => {
+      try {
+        await fileController.completeChunkedUpload(req, res);
+      } catch (error) {
+        console.error("❌ Erreur route POST /files/upload/complete:", error);
+        res.status(500).json({
+          success: false,
+          message: "Erreur lors de la finalisation de l'upload chunké",
           error: error.message,
         });
       }

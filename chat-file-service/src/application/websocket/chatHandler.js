@@ -5,6 +5,7 @@
  */
 const AuthMiddleware = require("../../interfaces/http/middleware/authMiddleware");
 const UserCacheService = require("../../infrastructure/services/UserCacheService");
+// AutoGroupSyncService est injecté depuis l'index.js via app.locals
 
 class ChatHandler {
   constructor(
@@ -31,6 +32,16 @@ class ChatHandler {
     leaveConversationUseCase = null,
     deleteMessageUseCase = null,
     deleteFileUseCase = null,
+    updateCallStatusUseCase = null,
+    forwardMessageUseCase = null,
+    addReactionUseCase = null,
+    removeReactionUseCase = null,
+    replyMessageUseCase = null,
+    autoGroupSyncUseCase = null,
+    encryptionService = null, // ✅ E2EE
+    keyManagementService = null, // ✅ E2EE
+    archiveConversationUseCase = null, // ✅ Archivage
+    getArchivedConversationsUseCase = null, // ✅ Archivage
   ) {
     this.io = io;
     this.sendMessageUseCase = sendMessageUseCase;
@@ -55,11 +66,24 @@ class ChatHandler {
     this.leaveConversationUseCase = leaveConversationUseCase;
     this.deleteMessageUseCase = deleteMessageUseCase;
     this.deleteFileUseCase = deleteFileUseCase;
-
+    this.updateCallStatusUseCase = updateCallStatusUseCase;
+    this.forwardMessageUseCase = forwardMessageUseCase;
+    this.addReactionUseCase = addReactionUseCase;
+    this.removeReactionUseCase = removeReactionUseCase;
+    this.replyMessageUseCase = replyMessageUseCase;
+    this.autoGroupSyncUseCase = autoGroupSyncUseCase;
+    this.encryptionService = encryptionService; // ✅ E2EE
+    this.keyManagementService = keyManagementService; // ✅ E2EE
+    this.archiveConversationUseCase = archiveConversationUseCase; // ✅ Archivage
+    this.getArchivedConversationsUseCase = getArchivedConversationsUseCase; // ✅ Archivage
     // ✅ LOG DE DEBUG
     console.log(
       "🔍 ChatHandler reçu messageDeliveryService:",
       this.messageDeliveryService ? "✅ OUI" : "❌ NON",
+    );
+    console.log(
+      "🔍 ChatHandler reçu autoGroupSyncUseCase:",
+      this.autoGroupSyncUseCase ? "✅ OUI" : "❌ NON",
     );
   }
 
@@ -78,6 +102,46 @@ class ChatHandler {
             socket.emit("auth_error", {
               message: "Erreur lors de l'authentification",
               code: "AUTH_ERROR",
+            });
+          }
+        });
+
+        // Événement on-demand pour synchroniser les groupes auto (appel explicite par le client)
+        socket.on("syncAutoGroups", async (data) => {
+          try {
+            if (!socket.userId) {
+              socket.emit("autoGroupsSyncError", {
+                success: false,
+                message: "Utilisateur non authentifié",
+              });
+              return;
+            }
+
+            if (!this.autoGroupSyncUseCase) {
+              socket.emit("autoGroupsSyncError", {
+                success: false,
+                message: "Service de synchronisation non disponible",
+              });
+              return;
+            }
+
+            const result = await this.autoGroupSyncUseCase.execute(
+              socket.userId,
+            );
+
+            socket.emit("autoGroupsSynced", { success: true, result });
+            console.log(
+              `[AutoGroupSync] Groupes synchronisés pour ${socket.userId}:`,
+              result,
+            );
+          } catch (err) {
+            console.warn(
+              `[AutoGroupSync] Erreur sync groupes (socket request): ${socket.userId}:`,
+              err.message,
+            );
+            socket.emit("autoGroupsSyncError", {
+              success: false,
+              message: err.message || "Erreur synchronisation",
             });
           }
         });
@@ -172,6 +236,360 @@ class ChatHandler {
           }
         });
 
+        // ──────────────────────────────────────────────────────────────────
+        // 🔐 ÉVÉNEMENTS CHIFFREMENT E2EE
+        // ──────────────────────────────────────────────────────────────────
+
+        /**
+         * Enregistre ou met à jour la clé publique RSA de l'utilisateur connecté.
+         * Le client doit émettre cet événement à chaque connexion si E2EE est actif.
+         *
+         * Émission client  : encryption:registerKey { publicKey, deviceInfo? }
+         * Réponse serveur  : encryption:keyRegistered { keyVersion, fingerprint, isRotation }
+         *                 ou encryption:error { message }
+         */
+        socket.on("encryption:registerKey", async (data) => {
+          try {
+            if (!this.keyManagementService) {
+              return socket.emit("encryption:error", {
+                event: "encryption:registerKey",
+                message: "Service de gestion des clés non disponible",
+              });
+            }
+
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("encryption:error", {
+                event: "encryption:registerKey",
+                message: "Authentification requise",
+              });
+            }
+
+            const { publicKey, deviceInfo = {} } = data || {};
+            if (!publicKey) {
+              return socket.emit("encryption:error", {
+                event: "encryption:registerKey",
+                message: "publicKey manquante",
+              });
+            }
+
+            const result = await this.keyManagementService.registerPublicKey(
+              userId,
+              publicKey,
+              deviceInfo,
+            );
+
+            socket.emit("encryption:keyRegistered", {
+              userId,
+              keyVersion: result.keyVersion,
+              fingerprint: result.fingerprint,
+              isRotation: result.isRotation,
+            });
+
+            console.log(
+              `🔐 Clé publique enregistrée pour userId=${userId} v${result.keyVersion}${result.isRotation ? " (rotation)" : ""}`,
+            );
+          } catch (err) {
+            console.error(`❌ encryption:registerKey:`, err.message);
+            socket.emit("encryption:error", {
+              event: "encryption:registerKey",
+              message: err.message,
+            });
+          }
+        });
+
+        /**
+         * Retourne la clé publique d'un utilisateur cible.
+         * Le client l'utilise pour chiffrer les messages côté client (facultatif, server-side E2EE géré par SendMessage).
+         *
+         * Émission client  : encryption:getPublicKey { targetUserId }
+         * Réponse serveur  : encryption:publicKey { userId, publicKey, fingerprint, keyVersion }
+         *                 ou encryption:error { message }
+         */
+        socket.on("encryption:getPublicKey", async (data) => {
+          try {
+            if (!this.keyManagementService) {
+              return socket.emit("encryption:error", {
+                event: "encryption:getPublicKey",
+                message: "Service de gestion des clés non disponible",
+              });
+            }
+
+            if (!socket.userId) {
+              return socket.emit("encryption:error", {
+                event: "encryption:getPublicKey",
+                message: "Authentification requise",
+              });
+            }
+
+            const { targetUserId } = data || {};
+            if (!targetUserId) {
+              return socket.emit("encryption:error", {
+                event: "encryption:getPublicKey",
+                message: "targetUserId manquant",
+              });
+            }
+
+            const publicKey = await this.keyManagementService.getPublicKey(
+              String(targetUserId),
+            );
+            const meta = await this.keyManagementService.getKeyMetadata(
+              String(targetUserId),
+            );
+
+            socket.emit("encryption:publicKey", {
+              userId: targetUserId,
+              publicKey,
+              fingerprint: meta?.fingerprint ?? null,
+              keyVersion: meta?.keyVersion ?? null,
+            });
+          } catch (err) {
+            console.error(`❌ encryption:getPublicKey:`, err.message);
+            socket.emit("encryption:error", {
+              event: "encryption:getPublicKey",
+              message: err.message,
+            });
+          }
+        });
+
+        /**
+         * Retourne le mode de chiffrement actif et la config du service.
+         *
+         * Émission client  : encryption:getConfig
+         * Réponse serveur  : encryption:config { mode, algorithm, keyLength, ... }
+         */
+        socket.on("encryption:getConfig", () => {
+          if (!this.encryptionService) {
+            return socket.emit("encryption:config", { mode: "none" });
+          }
+          socket.emit("encryption:config", this.encryptionService.getConfig());
+        });
+
+        /**
+         * Change le mode de chiffrement à chaud (admin uniquement).
+         *
+         * Émission client  : encryption:switchMode { mode: 'none' | 'e2ee' }
+         * Broadcast serveur: encryption:modeChanged { mode, changedBy, timestamp }
+         *                 ou encryption:error { message }
+         */
+        socket.on("encryption:switchMode", (data) => {
+          try {
+            if (!socket.isAdmin) {
+              return socket.emit("encryption:error", {
+                event: "encryption:switchMode",
+                message: "Accès refusé — droits administrateur requis",
+              });
+            }
+
+            if (!this.encryptionService) {
+              return socket.emit("encryption:error", {
+                event: "encryption:switchMode",
+                message: "EncryptionService non disponible",
+              });
+            }
+
+            const { mode } = data || {};
+            const result = this.encryptionService.switchMode(mode);
+
+            // Notifier tous les clients connectés du changement de mode
+            this.io.emit("encryption:modeChanged", {
+              mode: result.newMode,
+              previous: result.previousMode,
+              changedBy: socket.userId,
+              timestamp: Date.now(),
+            });
+
+            console.log(
+              `🔄 Mode E2EE changé: ${result.previousMode} → ${result.newMode} par ${socket.userId}`,
+            );
+          } catch (err) {
+            console.error(`❌ encryption:switchMode:`, err.message);
+            socket.emit("encryption:error", {
+              event: "encryption:switchMode",
+              message: err.message,
+            });
+          }
+        });
+
+        /**
+         * Révoque la clé publique de l'utilisateur connecté (cas de compromission).
+         *
+         * Émission client  : encryption:revokeKey
+         * Réponse serveur  : encryption:keyRevoked { userId, revokedCount }
+         *                 ou encryption:error { message }
+         */
+        socket.on("encryption:revokeKey", async () => {
+          try {
+            if (!this.keyManagementService) {
+              return socket.emit("encryption:error", {
+                event: "encryption:revokeKey",
+                message: "Service de gestion des clés non disponible",
+              });
+            }
+
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("encryption:error", {
+                event: "encryption:revokeKey",
+                message: "Authentification requise",
+              });
+            }
+
+            const result = await this.keyManagementService.revokeKey(userId);
+
+            socket.emit("encryption:keyRevoked", {
+              userId,
+              revokedCount: result.revokedCount,
+            });
+
+            console.warn(`🚫 Clé révoquée pour userId=${userId}`);
+          } catch (err) {
+            console.error(`❌ encryption:revokeKey:`, err.message);
+            socket.emit("encryption:error", {
+              event: "encryption:revokeKey",
+              message: err.message,
+            });
+          }
+        });
+
+        // ──────────────────────────────────────────────────────────────────
+        // 📂 ÉVÉNEMENTS ARCHIVAGE DE CONVERSATIONS
+        // ──────────────────────────────────────────────────────────────────
+
+        /**
+         * Archive une conversation pour l'utilisateur connecté.
+         * Emission client  : conversation:archive { conversationId }
+         * Réponse serveur  : conversation:archived { conversationId, archivedAt }
+         *                 ou conversation:archiveError { message }
+         */
+        socket.on("conversation:archive", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const userId = socket.userId;
+            if (!userId)
+              return socket.emit("conversation:archiveError", {
+                message: "Authentification requise",
+              });
+            if (!this.archiveConversationUseCase)
+              return socket.emit("conversation:archiveError", {
+                message: "Fonctionnalité non disponible",
+              });
+
+            const { conversationId } = data || {};
+            if (!conversationId)
+              return socket.emit("conversation:archiveError", {
+                message: "conversationId manquant",
+              });
+
+            const result = await this.archiveConversationUseCase.execute(
+              userId,
+              conversationId,
+              "archive",
+            );
+            socket.emit("conversation:archived", {
+              conversationId,
+              archivedAt: result.archivedAt,
+              alreadyArchived: result.alreadyInState || false,
+            });
+            console.log(
+              `📂 Conversation ${conversationId} archivée par ${userId}`,
+            );
+          } catch (err) {
+            console.error("❌ conversation:archive:", err.message);
+            socket.emit("conversation:archiveError", { message: err.message });
+          }
+        });
+
+        /**
+         * Désarchive une conversation pour l'utilisateur connecté.
+         * Emission client  : conversation:unarchive { conversationId }
+         * Réponse serveur  : conversation:unarchived { conversationId }
+         *                 ou conversation:archiveError { message }
+         */
+        socket.on("conversation:unarchive", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const userId = socket.userId;
+            if (!userId)
+              return socket.emit("conversation:archiveError", {
+                message: "Authentification requise",
+              });
+            if (!this.archiveConversationUseCase)
+              return socket.emit("conversation:archiveError", {
+                message: "Fonctionnalité non disponible",
+              });
+
+            const { conversationId } = data || {};
+            if (!conversationId)
+              return socket.emit("conversation:archiveError", {
+                message: "conversationId manquant",
+              });
+
+            const result = await this.archiveConversationUseCase.execute(
+              userId,
+              conversationId,
+              "unarchive",
+            );
+            socket.emit("conversation:unarchived", {
+              conversationId,
+              alreadyUnarchived: result.alreadyInState || false,
+            });
+            console.log(
+              `📂 Conversation ${conversationId} désarchivée par ${userId}`,
+            );
+          } catch (err) {
+            console.error("❌ conversation:unarchive:", err.message);
+            socket.emit("conversation:archiveError", { message: err.message });
+          }
+        });
+
+        /**
+         * Récupère les conversations archivées de l'utilisateur connecté.
+         * Emission client  : conversation:getArchived { page?, limit? }
+         * Réponse serveur  : conversation:archivedList { conversations, totalCount, pagination }
+         *                 ou conversation:archiveError { message }
+         */
+        socket.on("conversation:getArchived", async (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const userId = socket.userId;
+            if (!userId)
+              return socket.emit("conversation:archiveError", {
+                message: "Authentification requise",
+              });
+            if (!this.getArchivedConversationsUseCase)
+              return socket.emit("conversation:archiveError", {
+                message: "Fonctionnalité non disponible",
+              });
+
+            const { page = 1, limit = 20 } = data || {};
+            const result = await this.getArchivedConversationsUseCase.execute(
+              userId,
+              {
+                page: Math.max(1, parseInt(page) || 1),
+                limit: Math.min(50, parseInt(limit) || 20),
+              },
+            );
+
+            socket.emit("conversation:archivedList", {
+              conversations: result.conversations || [],
+              totalCount: result.totalCount || 0,
+              pagination: result.pagination || {},
+            });
+          } catch (err) {
+            console.error("❌ conversation:getArchived:", err.message);
+            socket.emit("conversation:archiveError", { message: err.message });
+          }
+        });
+
+        // ──────────────────────────────────────────────────────────────────
+
         socket.on("disconnect", (reason) => {
           this.handleDisconnection(socket, reason);
         });
@@ -202,6 +620,7 @@ class ChatHandler {
             const result = await this.getMessagesUseCase.execute(
               conversationId,
               {
+                cursor: null, // Toujours à null pour quick load
                 limit,
                 userId,
                 useCache: true, // Le repository décide du cache
@@ -368,10 +787,8 @@ class ChatHandler {
             // ✅ APPEL DIRECT AU USE CASE (cache géré par le repository)
             const result = await this.getConversationUseCase.execute(
               conversationId,
-              {
-                userId,
-                useCache: true, // Le repository décide du cache
-              },
+              userId,
+              true,
             );
 
             socket.emit("conversation:loaded", {
@@ -446,10 +863,8 @@ class ChatHandler {
             // ✅ APPEL DIRECT AU USE CASE (SANS cache controller)
             const result = await this.getConversationUseCase.execute(
               conversationId,
-              {
-                userId,
-                useCache: true, // Le repository décide du cache
-              },
+              userId,
+              true, // Le repository décide du cache
             );
 
             socket.emit("conversationLoaded", {
@@ -487,7 +902,7 @@ class ChatHandler {
               });
             }
 
-            const { name, members, groupId } = data;
+            const { name, type, members, groupId, admins = [] } = data;
 
             // ✅ VALIDATION
             if (!name || typeof name !== "string" || name.trim().length === 0) {
@@ -516,6 +931,16 @@ class ChatHandler {
               `👥 Création groupe "${name}" par ${userId} avec ${members.length} membre(s)`,
             );
 
+            const finalAdmins =
+              Array.isArray(admins) && admins.length > 0
+                ? [
+                    ...new Set([
+                      userId,
+                      ...admins.filter((id) => id !== userId),
+                    ]),
+                  ]
+                : [userId];
+
             // ✅ GÉNÉRER ID SI NON FOURNI
             const finalGroupId = groupId || this.generateObjectId();
 
@@ -523,8 +948,11 @@ class ChatHandler {
             const group = await this.createGroupUseCase.execute({
               groupId: finalGroupId,
               name: name.trim(),
+              type: type,
               adminId: userId,
               members: members.filter((id) => id !== userId), // S'assurer que admin n'est pas dans members
+              finalAdmins: finalAdmins, // Passer les admins pour les groupes de diffusion
+              senderSocketId: socket.id,
             });
 
             // ✅ RÉPONSE SUCCÈS À L'ADMIN
@@ -542,26 +970,7 @@ class ChatHandler {
               timestamp: new Date().toISOString(),
             });
 
-            // ✅ NOTIFIER TOUS LES PARTICIPANTS
-            const allParticipants = [userId, ...members];
-            for (const participantId of allParticipants) {
-              const participantRoom = `user_${participantId}`;
-
-              socket.to(participantRoom).emit("group:invitation", {
-                group: {
-                  id: group._id,
-                  name: group.name,
-                  type: group.type,
-                  createdBy: group.createdBy,
-                  createdAt: group.createdAt,
-                },
-                invitedBy: {
-                  userId: userId,
-                  matricule: socket.matricule,
-                },
-                timestamp: new Date().toISOString(),
-              });
-            }
+            // 🔄 Notification participants supprimée — distribution via MDS (stream → conversation:created)
 
             // ✅ JOINDRE AUTOMATIQUEMENT LA ROOM DU GROUPE
             const groupRoom = `conversation_${group._id}`;
@@ -648,6 +1057,7 @@ class ChatHandler {
               recipientIds: recipients.filter(
                 (id) => !finalAdmins.includes(id),
               ),
+              senderSocketId: socket.id,
             });
 
             // ✅ RÉPONSE SUCCÈS À L'ADMIN
@@ -667,46 +1077,8 @@ class ChatHandler {
               timestamp: new Date().toISOString(),
             });
 
-            // ✅ NOTIFIER TOUS LES ADMINS (sauf le créateur)
-            for (const adminId of finalAdmins) {
-              if (adminId !== userId) {
-                const adminRoom = `user_${adminId}`;
-                socket.to(adminRoom).emit("broadcast:admin_added", {
-                  broadcast: {
-                    id: broadcast._id,
-                    name: broadcast.name,
-                    type: broadcast.type,
-                    createdBy: broadcast.createdBy,
-                    createdAt: broadcast.createdAt,
-                  },
-                  addedBy: {
-                    userId: userId,
-                    matricule: socket.matricule,
-                  },
-                  timestamp: new Date().toISOString(),
-                });
-              }
-            }
-
-            // ✅ NOTIFIER TOUS LES DESTINATAIRES
-            for (const recipientId of recipients) {
-              const recipientRoom = `user_${recipientId}`;
-
-              socket.to(recipientRoom).emit("broadcast:subscription", {
-                broadcast: {
-                  id: broadcast._id,
-                  name: broadcast.name,
-                  type: broadcast.type,
-                  createdBy: broadcast.createdBy,
-                  createdAt: broadcast.createdAt,
-                },
-                subscribedBy: {
-                  userId: userId,
-                  matricule: socket.matricule,
-                },
-                timestamp: new Date().toISOString(),
-              });
-            }
+            // 🔄 Notification admins supprimée — distribution via MDS (stream → conversation:created)
+            // 🔄 Notification destinataires supprimée — distribution via MDS (stream → conversation:created)
 
             // ✅ JOINDRE AUTOMATIQUEMENT LA ROOM DE LA DIFFUSION
             const broadcastRoom = `conversation_${broadcast._id}`;
@@ -900,6 +1272,493 @@ class ChatHandler {
               error: "Erreur lors de la récupération des informations",
               code: "GET_GROUP_INFO_FAILED",
             });
+          }
+        });
+
+        // ========================================
+        // ✅ ÉVÉNEMENTS APPELS (CALL / VIDEO_CALL)
+        // ========================================
+
+        // ✅ INITIER UN APPEL
+        socket.on("initiateCall", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("call:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { conversationId, receiverId, callType = "AUDIO" } = data;
+            if (!conversationId && !receiverId) {
+              return socket.emit("call:error", {
+                error: "conversationId ou receiverId requis",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            const callId = data.callId || this.generateObjectId();
+            const messageType = callType === "VIDEO" ? "VIDEO_CALL" : "CALL";
+            const receiverIds = receiverId
+              ? Array.isArray(receiverId)
+                ? receiverId
+                : [receiverId]
+              : [];
+
+            console.log(`📞 ${socket.matricule} lance un appel ${callType}:`, {
+              callId,
+              conversationId,
+              receiverIds,
+            });
+
+            // ✅ Créer le message d'appel via SendMessage
+            const callMetadata = {
+              callId,
+              callType,
+              status: "INITIATED",
+              initiatorId: userId,
+              receiverIds,
+              startedAt: null,
+              endedAt: null,
+              duration: 0,
+              endReason: null,
+            };
+
+            let result;
+            try {
+              result = await this.sendMessageUseCase.execute({
+                content:
+                  callType === "VIDEO" ? "📹 Appel vidéo" : "📞 Appel audio",
+                senderId: userId,
+                conversationId: conversationId
+                  ? this.normalizeMongoId(conversationId)
+                  : null,
+                type: messageType,
+                receiverId: receiverIds.length === 1 ? receiverIds[0] : null,
+                callMetadata,
+              });
+            } catch (sendError) {
+              console.error(
+                "❌ Erreur création message appel:",
+                sendError.message,
+              );
+              return socket.emit("call:error", {
+                error: "Erreur lors de l'initiation de l'appel",
+                code: "CALL_INIT_FAILED",
+              });
+            }
+
+            const messageId = result.message.id;
+            const createdConvId = result.conversation.id;
+
+            // ✅ Rejoindre la room de la conversation (peut être nouvellement créée)
+            socket.join(`conversation_${createdConvId}`);
+            console.log(
+              `🚪 Appelant ${socket.matricule} a rejoint conversation_${createdConvId}`,
+            );
+
+            // ✅ ACK à l'appelant
+            socket.emit("call:initiated", {
+              success: true,
+              callId,
+              messageId,
+              callType,
+              conversationId: result.conversation.id,
+              participants: receiverIds,
+              timestamp: new Date().toISOString(),
+            });
+
+            // ✅ Notifier les destinataires (sonnerie)
+            for (const rid of receiverIds) {
+              this.io.to(`user_${rid}`).emit("call:incoming", {
+                callId,
+                messageId,
+                callType,
+                conversationId: result.conversation.id,
+                caller: {
+                  userId,
+                  matricule: socket.matricule,
+                  nom: socket.nom,
+                  prenom: socket.prenom,
+                  avatar: socket.avatar,
+                },
+                timestamp: new Date().toISOString(),
+              });
+            }
+
+            console.log(`✅ Appel ${callType} initié: ${callId}`);
+          } catch (error) {
+            console.error("❌ Erreur initiateCall:", error);
+            socket.emit("call:error", {
+              error: error.message,
+              code: "CALL_INIT_ERROR",
+            });
+          }
+        });
+
+        // ✅ RÉPONDRE À UN APPEL (DÉCROCHER)
+        socket.on("answerCall", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("call:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { callId, messageId, conversationId } = data;
+            if (!callId || !messageId) {
+              return socket.emit("call:error", {
+                error: "callId et messageId requis",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            console.log(`📞 ${socket.matricule} répond à l'appel ${callId}`);
+
+            // ✅ Récupérer les participants pour la publication stream
+            let participants = [];
+            if (conversationId && this.getConversationUseCase) {
+              try {
+                const conv = await this.getConversationUseCase.execute(
+                  conversationId,
+                  userId,
+                );
+                participants = conv?.participants || [];
+              } catch (e) {
+                /* ignore */
+              }
+            }
+
+            // ✅ Mettre à jour le message en base + publier via stream
+            try {
+              if (this.updateCallStatusUseCase) {
+                await this.updateCallStatusUseCase.execute({
+                  messageId,
+                  updates: { status: "ANSWERED", startedAt: new Date() },
+                  conversationId,
+                  userId,
+                  callId,
+                  participants,
+                  senderSocketId: socket.id,
+                });
+              }
+            } catch (updateErr) {
+              console.warn(
+                "⚠️ Erreur mise à jour status appel:",
+                updateErr.message,
+              );
+            }
+
+            // ✅ Rejoindre la room de la conversation (au cas où pas encore dedans)
+            if (conversationId) {
+              socket.join(`conversation_${conversationId}`);
+              console.log(
+                `🚪 Répondant ${socket.matricule} a rejoint conversation_${conversationId}`,
+              );
+            }
+
+            // ✅ ACK au décrocheur
+            socket.emit("call:answered", {
+              success: true,
+              callId,
+              messageId,
+              conversationId,
+              answeredBy: userId,
+              answeredByMatricule: socket.matricule,
+              timestamp: new Date().toISOString(),
+            });
+
+            // 🔄 Broadcast supprimé — distribution via MDS (stream → call:statusUpdated)
+
+            console.log(`✅ Appel ${callId} décroché par ${socket.matricule}`);
+          } catch (error) {
+            console.error("❌ Erreur answerCall:", error);
+            socket.emit("call:error", {
+              error: error.message,
+              code: "CALL_ANSWER_ERROR",
+            });
+          }
+        });
+
+        // ✅ REFUSER UN APPEL
+        socket.on("declineCall", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("call:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { callId, messageId, conversationId } = data;
+            if (!callId) {
+              return socket.emit("call:error", {
+                error: "callId requis",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            console.log(`📞 ${socket.matricule} refuse l'appel ${callId}`);
+
+            // ✅ Récupérer les participants pour la publication stream
+            let participants = [];
+            if (conversationId && this.getConversationUseCase) {
+              try {
+                const conv = await this.getConversationUseCase.execute(
+                  conversationId,
+                  userId,
+                );
+                participants = conv?.participants || [];
+              } catch (e) {
+                /* ignore */
+              }
+            }
+
+            // ✅ Mettre à jour le message en base + publier via stream
+            if (messageId) {
+              try {
+                if (this.updateCallStatusUseCase) {
+                  await this.updateCallStatusUseCase.execute({
+                    messageId,
+                    updates: {
+                      status: "DECLINED",
+                      endedAt: new Date(),
+                      endReason: "user_declined",
+                    },
+                    conversationId,
+                    userId,
+                    callId,
+                    participants,
+                    senderSocketId: socket.id,
+                  });
+                }
+              } catch (updateErr) {
+                console.warn(
+                  "⚠️ Erreur mise à jour status appel:",
+                  updateErr.message,
+                );
+              }
+            }
+
+            // ✅ ACK
+            socket.emit("call:declined", {
+              success: true,
+              callId,
+              messageId,
+              conversationId,
+              declinedBy: userId,
+              declinedByMatricule: socket.matricule,
+              timestamp: new Date().toISOString(),
+            });
+
+            // 🔄 Broadcast supprimé — distribution via MDS (stream → call:statusUpdated)
+
+            console.log(`✅ Appel ${callId} refusé par ${socket.matricule}`);
+          } catch (error) {
+            console.error("❌ Erreur declineCall:", error);
+            socket.emit("call:error", {
+              error: error.message,
+              code: "CALL_DECLINE_ERROR",
+            });
+          }
+        });
+
+        // ✅ TERMINER UN APPEL
+        socket.on("endCall", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("call:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const {
+              callId,
+              messageId,
+              conversationId,
+              reason = "user_hangup",
+            } = data;
+            if (!callId) {
+              return socket.emit("call:error", {
+                error: "callId requis",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            console.log(`📞 ${socket.matricule} termine l'appel ${callId}`);
+
+            const endedAt = new Date();
+
+            // ✅ Mettre à jour le message en base avec durée
+            if (messageId) {
+              try {
+                // Récupérer le message pour calculer la durée
+                let duration = 0;
+                if (this.getMessageByIdUseCase) {
+                  try {
+                    const msg =
+                      await this.getMessageByIdUseCase.execute(messageId);
+                    const startedAt =
+                      msg?.metadata?.contentMetadata?.call?.startedAt;
+                    if (startedAt) {
+                      duration = Math.round(
+                        (endedAt - new Date(startedAt)) / 1000,
+                      );
+                    }
+                  } catch (e) {
+                    console.warn(
+                      "⚠️ Impossible de calculer la durée:",
+                      e.message,
+                    );
+                  }
+                }
+
+                // ✅ Récupérer les participants pour la publication stream
+                let participants = [];
+                if (conversationId && this.getConversationUseCase) {
+                  try {
+                    const conv = await this.getConversationUseCase.execute(
+                      conversationId,
+                      userId,
+                    );
+                    participants = conv?.participants || [];
+                  } catch (e) {
+                    /* ignore */
+                  }
+                }
+
+                if (this.updateCallStatusUseCase) {
+                  await this.updateCallStatusUseCase.execute({
+                    messageId,
+                    updates: {
+                      status: "ENDED",
+                      endedAt,
+                      duration,
+                      endReason: reason,
+                    },
+                    conversationId,
+                    userId,
+                    callId,
+                    participants,
+                    senderSocketId: socket.id,
+                  });
+                }
+
+                // ✅ Mettre à jour le contenu du message avec la durée
+                const durationStr =
+                  duration > 0
+                    ? `${Math.floor(duration / 60)}:${String(duration % 60).padStart(2, "0")}`
+                    : "0:00";
+                try {
+                  if (this.updateMessageContentUseCase) {
+                    await this.updateMessageContentUseCase.execute({
+                      messageId,
+                      newContent: `📞 Appel terminé (${durationStr})`,
+                      userId,
+                    });
+                  }
+                } catch (e) {
+                  console.warn(
+                    "⚠️ Erreur mise à jour contenu appel:",
+                    e.message,
+                  );
+                }
+              } catch (updateErr) {
+                console.warn(
+                  "⚠️ Erreur mise à jour status appel:",
+                  updateErr.message,
+                );
+              }
+            }
+
+            // ✅ ACK
+            socket.emit("call:ended", {
+              success: true,
+              callId,
+              messageId,
+              conversationId,
+              endedBy: userId,
+              endedByMatricule: socket.matricule,
+              reason,
+              duration: messageId
+                ? typeof duration !== "undefined"
+                  ? duration
+                  : 0
+                : 0,
+              timestamp: endedAt.toISOString(),
+            });
+
+            // 🔄 Broadcast supprimé — distribution via MDS (stream → call:statusUpdated)
+
+            console.log(`✅ Appel ${callId} terminé par ${socket.matricule}`);
+          } catch (error) {
+            console.error("❌ Erreur endCall:", error);
+            socket.emit("call:error", {
+              error: error.message,
+              code: "CALL_END_ERROR",
+            });
+          }
+        });
+
+        // ✅ APPEL MANQUÉ (timeout côté client ou serveur)
+        socket.on("missedCall", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) return;
+
+            const { callId, messageId, conversationId } = data;
+            if (!callId) return;
+
+            console.log(`📞 Appel manqué: ${callId}`);
+
+            // ✅ Récupérer les participants pour la publication stream
+            let participants = [];
+            if (conversationId && this.getConversationUseCase) {
+              try {
+                const conv = await this.getConversationUseCase.execute(
+                  conversationId,
+                  userId,
+                );
+                participants = conv?.participants || [];
+              } catch (e) {
+                /* ignore */
+              }
+            }
+
+            if (messageId) {
+              try {
+                if (this.updateCallStatusUseCase) {
+                  await this.updateCallStatusUseCase.execute({
+                    messageId,
+                    updates: {
+                      status: "MISSED",
+                      endedAt: new Date(),
+                      endReason: "no_answer",
+                    },
+                    conversationId,
+                    userId,
+                    callId,
+                    participants,
+                    senderSocketId: socket.id,
+                  });
+                }
+              } catch (updateErr) {
+                console.warn(
+                  "⚠️ Erreur mise à jour appel manqué:",
+                  updateErr.message,
+                );
+              }
+            }
+
+            // 🔄 Broadcast supprimé — distribution via MDS (stream → call:statusUpdated)
+          } catch (error) {
+            console.error("❌ Erreur missedCall:", error);
           }
         });
 
@@ -1297,6 +2156,7 @@ class ChatHandler {
                   conversationId,
                   participantId: pid,
                   addedBy: userId,
+                  senderSocketId: socket.id,
                 });
                 results.added.push(pid);
               } catch (err) {
@@ -1316,18 +2176,7 @@ class ChatHandler {
               timestamp: new Date().toISOString(),
             });
 
-            // Notifier la room
-            if (results.added.length > 0) {
-              socket
-                .to(`conversation_${conversationId}`)
-                .emit("participant:added", {
-                  conversationId,
-                  participantIds: results.added,
-                  addedBy: userId,
-                  addedByMatricule: socket.matricule,
-                  timestamp: new Date().toISOString(),
-                });
-            }
+            // 🔄 Broadcast supprimé — distribution via MDS (stream → conversation:participant:added)
 
             console.log(
               `✅ ${socket.matricule} a ajouté ${results.added.length}/${validIds.length} participant(s) à ${conversationId}`,
@@ -1392,6 +2241,7 @@ class ChatHandler {
                   conversationId,
                   participantId: pid,
                   removedBy: userId,
+                  senderSocketId: socket.id,
                 });
                 results.removed.push(pid);
               } catch (err) {
@@ -1411,18 +2261,7 @@ class ChatHandler {
               timestamp: new Date().toISOString(),
             });
 
-            // Notifier la room
-            if (results.removed.length > 0) {
-              socket
-                .to(`conversation_${conversationId}`)
-                .emit("participant:removed", {
-                  conversationId,
-                  participantIds: results.removed,
-                  removedBy: userId,
-                  removedByMatricule: socket.matricule,
-                  timestamp: new Date().toISOString(),
-                });
-            }
+            // 🔄 Broadcast supprimé — distribution via MDS (stream → conversation:participant:removed)
 
             console.log(
               `✅ ${socket.matricule} a retiré ${results.removed.length}/${validIds.length} participant(s) de ${conversationId}`,
@@ -1542,30 +2381,23 @@ class ChatHandler {
               messageId,
               newContent,
               userId,
+              senderSocketId: socket.id,
             });
 
             socket.emit("message:edited", {
               success: true,
               messageId,
+              conversationId: result.conversationId
+                ? String(result.conversationId)
+                : undefined,
+              userId: String(userId),
+              status: "EDITED",
               newContent,
               editedAt: result.editedAt || new Date().toISOString(),
               timestamp: new Date().toISOString(),
             });
 
-            // Notifier la room de la conversation
-            if (result.conversationId) {
-              socket
-                .to(`conversation_${result.conversationId}`)
-                .emit("message:edited", {
-                  messageId,
-                  conversationId: result.conversationId,
-                  newContent,
-                  editedBy: userId,
-                  editedByMatricule: socket.matricule,
-                  editedAt: result.editedAt || new Date().toISOString(),
-                  timestamp: new Date().toISOString(),
-                });
-            }
+            // 🔄 Broadcast supprimé — distribution via MDS (stream → message:status EDITED)
 
             console.log(
               `✏️ ${socket.matricule} a modifié le message ${messageId}`,
@@ -1609,32 +2441,23 @@ class ChatHandler {
               messageId,
               userId,
               deleteType: deleteType || "FOR_ME",
+              senderSocketId: socket.id,
             });
 
             socket.emit("message:deleted", {
               success: true,
               messageId,
+              conversationId: result.conversationId
+                ? String(result.conversationId)
+                : undefined,
+              userId: String(userId),
+              status: "DELETED",
               deleteType: result.deleteType,
               deletedAt: result.deletedAt,
-              message: result.message,
               timestamp: new Date().toISOString(),
             });
 
-            // Si supprimé pour tous, notifier la room
-            if (result.deleteType === "FOR_EVERYONE") {
-              if (data.conversationId) {
-                socket
-                  .to(`conversation_${data.conversationId}`)
-                  .emit("message:deleted", {
-                    messageId,
-                    conversationId: data.conversationId,
-                    deleteType: "FOR_EVERYONE",
-                    deletedBy: userId,
-                    deletedByMatricule: socket.matricule,
-                    timestamp: new Date().toISOString(),
-                  });
-              }
-            }
+            // 🔄 Broadcast supprimé — distribution via MDS (stream → message:status DELETED)
 
             console.log(
               `🗑️ ${socket.matricule} a supprimé le message ${messageId} (${result.deleteType})`,
@@ -1644,6 +2467,227 @@ class ChatHandler {
             socket.emit("message:error", {
               error: error.message,
               code: "DELETE_MESSAGE_FAILED",
+            });
+          }
+        });
+
+        // ✅ SUPPRIMER UN FICHIER
+        // ✅ AJOUTER UNE RÉACTION À UN MESSAGE
+        socket.on("addReaction", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("reaction:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { messageId, emoji, conversationId } = data;
+            if (!messageId || !emoji) {
+              return socket.emit("reaction:error", {
+                error: "messageId et emoji requis",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            // ✅ DÉLÉGUER AU USE CASE
+            const result = await this.addReactionUseCase.execute({
+              messageId,
+              userId: String(userId),
+              emoji,
+              conversationId,
+              senderSocketId: socket.id,
+            });
+
+            // ✅ ACK IMMÉDIAT À L'ÉMETTEUR
+            socket.emit("reaction:added", result);
+
+            console.log(
+              `😀 ${socket.matricule} a réagi ${emoji} au message ${messageId}`,
+            );
+          } catch (error) {
+            console.error("❌ Erreur addReaction:", error);
+            socket.emit("reaction:error", {
+              error: error.message,
+              code: "ADD_REACTION_FAILED",
+            });
+          }
+        });
+
+        // ✅ SUPPRIMER UNE RÉACTION D'UN MESSAGE
+        socket.on("removeReaction", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("reaction:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { messageId, conversationId } = data;
+            if (!messageId) {
+              return socket.emit("reaction:error", {
+                error: "messageId requis",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            // ✅ DÉLÉGUER AU USE CASE
+            const result = await this.removeReactionUseCase.execute({
+              messageId,
+              userId: String(userId),
+              conversationId,
+              senderSocketId: socket.id,
+            });
+
+            // ✅ ACK IMMÉDIAT
+            socket.emit("reaction:removed", result);
+
+            console.log(
+              `🚫 ${socket.matricule} a retiré sa réaction du message ${messageId}`,
+            );
+          } catch (error) {
+            console.error("❌ Erreur removeReaction:", error);
+            socket.emit("reaction:error", {
+              error: error.message,
+              code: "REMOVE_REACTION_FAILED",
+            });
+          }
+        });
+
+        // ✅ RÉPONDRE À UN MESSAGE (via ReplyMessage use case)
+        socket.on("replyToMessage", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("reply:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { messageId, content, conversationId, type } = data;
+            if (!messageId || !content) {
+              return socket.emit("reply:error", {
+                error: "messageId et content requis",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            if (!this.replyMessageUseCase) {
+              return socket.emit("reply:error", {
+                error: "Service de réponse non disponible",
+                code: "SERVICE_UNAVAILABLE",
+              });
+            }
+
+            // ✅ DÉLÉGUER AU USE CASE ReplyMessage
+            const result = await this.replyMessageUseCase.execute({
+              messageId,
+              content,
+              senderId: userId,
+              conversationId,
+              senderSocketId: socket.id,
+              type: type || "TEXT",
+            });
+
+            // ✅ ACK IMMÉDIAT (le message envoyé + info reply)
+            socket.emit("reply:sent", {
+              success: true,
+              messageId: String(messageId),
+              replyId: String(result.message?.id || result.message?._id),
+              conversationId: result.conversationId,
+              userId: String(userId),
+              senderName:
+                [socket.prenom, socket.nom].filter(Boolean).join(" ") ||
+                socket.matricule ||
+                String(userId),
+              senderMatricule: socket.matricule || null,
+              content: content.substring(0, 200),
+              replyTo: result.replyTo,
+              timestamp: new Date().toISOString(),
+            });
+
+            // ✅ Le message de réponse est publié dans le stream par SendMessage (via replyTo)
+            console.log(
+              `💬 ${socket.matricule} a répondu au message ${messageId}`,
+            );
+          } catch (error) {
+            console.error("❌ Erreur replyToMessage:", error);
+            socket.emit("reply:error", {
+              error: error.message,
+              code: "REPLY_FAILED",
+            });
+          }
+        });
+
+        // ✅ TRANSFÉRER UN MESSAGE VERS UNE OU PLUSIEURS CONVERSATIONS
+        socket.on("forwardMessage", async (data) => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("forward:error", {
+                error: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+
+            const { messageId, targetConversationIds } = data;
+            if (!messageId) {
+              return socket.emit("forward:error", {
+                error: "messageId est requis",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            if (
+              !targetConversationIds ||
+              (Array.isArray(targetConversationIds) &&
+                targetConversationIds.length === 0)
+            ) {
+              return socket.emit("forward:error", {
+                error: "targetConversationIds est requis (string ou array)",
+                code: "MISSING_PARAMS",
+              });
+            }
+
+            if (!this.forwardMessageUseCase) {
+              return socket.emit("forward:error", {
+                error: "Service de transfert non disponible",
+                code: "SERVICE_UNAVAILABLE",
+              });
+            }
+
+            // ✅ EXÉCUTER LE USE CASE
+            const result = await this.forwardMessageUseCase.execute({
+              originalMessageId: messageId,
+              targetConversationIds,
+              senderId: userId,
+              senderSocketId: socket.id,
+            });
+
+            // ✅ ACK IMMÉDIAT
+            socket.emit("forward:sent", {
+              success: true,
+              originalMessageId: String(messageId),
+              forwarded: result.forwarded,
+              errors: result.errors,
+              count: result.count,
+              userId: String(userId),
+              timestamp: new Date().toISOString(),
+            });
+
+            // ✅ Chaque message transféré est publié dans le stream par SendMessage (via ForwardMessage)
+            console.log(
+              `📤 ${socket.matricule} a transféré le message ${messageId} vers ${result.count} conversation(s)`,
+            );
+          } catch (error) {
+            console.error("❌ Erreur forwardMessage:", error);
+            socket.emit("forward:error", {
+              error: error.message,
+              code: "FORWARD_FAILED",
             });
           }
         });
@@ -1815,7 +2859,6 @@ class ChatHandler {
           nom: data.nom || "",
           prenom: data.prenom || "",
           ministere: data.ministere || "",
-          departement: data.departement || "",
         };
       }
 
@@ -1834,7 +2877,6 @@ class ChatHandler {
       socket.fullName = resolvedFullName || "";
       socket.avatar = userPayload.avatar || null;
       socket.ministere = userPayload.ministere || "";
-      socket.departement = userPayload.departement || "";
       socket.isAuthenticated = true;
 
       const userIdString = socket.matricule;
@@ -1979,6 +3021,39 @@ class ChatHandler {
         }
       }
 
+      // ✅ ENREGISTRER LE SOCKET DANS MessageDeliveryService AVANT l'ACK
+      // Pour que le client ne reçoive pas d'événements avant que MDS soit prêt
+      console.log(
+        `🔍 [${new Date().toISOString()}] messageDeliveryService disponible? ${
+          this.messageDeliveryService ? "✅ OUI" : "❌ NON"
+        }`,
+      );
+
+      if (this.messageDeliveryService) {
+        try {
+          console.log(
+            `📤 [${new Date().toISOString()}] Enregistrement socket pour ${userIdString}...`,
+          );
+          this.messageDeliveryService.registerUserSocket(
+            userIdString,
+            socket,
+            conversationIds,
+          );
+          console.log(
+            `✅ [${new Date().toISOString()}] Socket enregistré pour ${userIdString}`,
+          );
+        } catch (mdsError) {
+          console.error(
+            `❌ Erreur enregistrement MessageDeliveryService: ${mdsError.message}`,
+          );
+        }
+      } else {
+        console.warn(
+          `⚠️ [${new Date().toISOString()}] messageDeliveryService est NULL/UNDEFINED!`,
+        );
+      }
+
+      // ✅ ENVOYER L'ACK AUTHENTICATED (après enregistrement MDS)
       const emitStartTime = Date.now();
       console.log(
         `📤 [${new Date().toISOString()}] Avant socket.emit('authenticated')...`,
@@ -2007,43 +3082,38 @@ class ChatHandler {
         `✅ [${new Date().toISOString()}] Utilisateur authentifié: ${matriculeString} (${userIdString})`,
       );
 
-      // ✅ ENREGISTRER LE SOCKET DANS MessageDeliveryService
-      console.log(
-        `🔍 [${new Date().toISOString()}] messageDeliveryService disponible? ${
-          this.messageDeliveryService ? "✅ OUI" : "❌ NON"
-        }`,
-      );
-
+      // ✅ LIVRER LES MESSAGES EN ATTENTE (NON-BLOQUANT, après l'ACK)
       if (this.messageDeliveryService) {
-        const mdsStartTime = Date.now();
-        try {
-          console.log(
-            `📤 [${new Date().toISOString()}] Enregistrement socket pour ${userIdString}...`,
-          );
-          this.messageDeliveryService.registerUserSocket(userIdString, socket);
-          console.log(
-            `✅ [${new Date().toISOString()}] Socket enregistré pour ${userIdString}`,
-          );
-
-          await this.messageDeliveryService.deliverPendingMessagesOnConnect(
-            userIdString,
-            socket,
-          );
-        } catch (mdsError) {
-          console.error(
-            `❌ Erreur MessageDeliveryService: ${mdsError.message}`,
-          );
-        }
-      } else {
-        console.warn(
-          `⚠️ [${new Date().toISOString()}] messageDeliveryService est NULL/UNDEFINED!`,
-        );
+        this.messageDeliveryService
+          .deliverPendingMessagesOnConnect(userIdString, socket)
+          .catch((mdsError) => {
+            console.error(
+              `❌ Erreur livraison messages en attente: ${mdsError.message}`,
+            );
+          });
       }
 
       const totalDuration = Date.now() - authStartTime;
       console.log(
         `\n✅ [${new Date().toISOString()}] ⏱️ AUTHENTIFICATION COMPLÈTE (⏱️ TOTAL: ${totalDuration}ms)\n`,
       );
+
+      // if (this.autoGroupSyncUseCase) {
+      //   this.autoGroupSyncUseCase
+      //     .execute(userIdString)
+      //     .then((result) => {
+      //       console.log(
+      //         `[AutoGroupSync] Groupes synchronisés pour ${userIdString}:`,
+      //         result,
+      //       );
+      //     })
+      //     .catch((err) => {
+      //       console.warn(
+      //         `[AutoGroupSync] Erreur sync groupes pour ${userIdString}:`,
+      //         err.message,
+      //       );
+      //     });
+      // }
     } catch (error) {
       console.error("❌ Erreur authentification WebSocket:", error);
       socket.emit("auth_error", {
@@ -2160,30 +3230,28 @@ class ChatHandler {
   async handleSendMessage(socket, data) {
     try {
       const {
-        content,
+        content = "",
         conversationId = "",
         type = "TEXT",
         receiverId = null,
         conversationName = null,
-        duration,
-        fileId,
-        fileUrl,
-        fileName,
-        fileSize,
-        mimeType,
-        broadcast = false,
+        temporaryId = null,
+        fileId = null,
+        callMetadata = null,
       } = data;
 
       const userId = socket.userId;
       const matricule = socket.matricule;
 
       const normalizedConversationId = this.normalizeMongoId(conversationId);
+      const isCallType = type === "CALL" || type === "VIDEO_CALL";
 
       console.log("💬 Traitement envoi message:", {
         userId,
         conversationId: normalizedConversationId,
         contentLength: content ? content.length : 0,
         type,
+        isCall: isCallType,
       });
 
       // ✅ VALIDATION
@@ -2196,9 +3264,9 @@ class ChatHandler {
       }
 
       if (
-        !content ||
-        typeof content !== "string" ||
-        content.trim().length === 0
+        !isCallType &&
+        type === "TEXT" &&
+        (!content || typeof content !== "string" || content.trim().length === 0)
       ) {
         socket.emit("message_error", {
           message: "Le contenu du message est requis",
@@ -2207,18 +3275,10 @@ class ChatHandler {
         return;
       }
 
-      if (content.trim().length > 10000) {
+      if (!isCallType && type === "TEXT" && content.trim().length > 10000) {
         socket.emit("message_error", {
           message: "Le message ne peut pas dépasser 10000 caractères",
           code: "CONTENT_TOO_LONG",
-        });
-        return;
-      }
-
-      if (!normalizedConversationId && !receiverId) {
-        socket.emit("message_error", {
-          message: "ID de conversation requis",
-          code: "MISSING_CONVERSATION_ID",
         });
         return;
       }
@@ -2264,36 +3324,30 @@ class ChatHandler {
         if (this.resilientService) {
           result = await this.resilientService.circuitBreaker.execute(() =>
             this.sendMessageUseCase.execute({
-              content: content.trim(),
+              content: isCallType ? content || "" : content.trim(),
               senderId: userId,
+              senderSocketId: socket.id,
               conversationId: normalizedConversationId,
               type,
               receiverId,
-              duration,
               fileId,
-              fileName,
-              fileUrl,
-              fileSize,
-              mimeType,
               conversationName,
-              broadcast,
+              callMetadata: isCallType ? callMetadata : null,
+              temporaryId,
             }),
           );
         } else {
           result = await this.sendMessageUseCase.execute({
-            content: content.trim(),
+            content: isCallType ? content || "" : content.trim(),
             senderId: userId,
+            senderSocketId: socket.id,
             conversationId: normalizedConversationId,
             type,
             receiverId,
-            duration,
             fileId,
-            fileName,
-            fileUrl,
-            fileSize,
-            mimeType,
             conversationName,
-            broadcast,
+            callMetadata: isCallType ? callMetadata : null,
+            temporaryId,
           });
         }
       } catch (saveError) {
@@ -2315,12 +3369,12 @@ class ChatHandler {
 
       const messageId = result.message._id || result.message.id;
 
-      console.log(result);
-
       // ✅ ÉTAPE 2 : RÉPONDRE À L'EXPÉDITEUR (ACK IMMÉDIAT)
       socket.emit("message_sent", {
+        success: true,
         messageId,
-        result: result,
+        message: result.message,
+        conversation: result.conversation,
         temporaryId: data.temporaryId,
         status: "sent",
         timestamp: new Date().toISOString(),
@@ -2392,17 +3446,32 @@ class ChatHandler {
 
       if (!conversationId || !userId) return;
 
-      const roomName = `conversation_${conversationId}`;
+      // ✅ ACK IMMÉDIAT - ne pas bloquer le client
+      socket.emit("conversation_joined", {
+        conversationId,
+        timestamp: new Date().toISOString(),
+      });
 
+      console.log(
+        `✅ ${socket.matricule} a rejoint conversation ${conversationId}`,
+      );
+
+      // ✅ SYNCHRONISER LA MAP userConversations DANS LE MDS
+      if (this.messageDeliveryService) {
+        this.messageDeliveryService.addUserConversation(userId, conversationId);
+      }
+
+      // ✅ Opérations post-ACK (non-bloquantes pour le client)
+      // Marquage des messages comme lus (fire-and-forget)
       if (this.markMessageReadUseCase) {
-        try {
-          await this.markMessageReadUseCase.execute({
+        this.markMessageReadUseCase
+          .execute({
             conversationId,
             userId,
+          })
+          .catch((err) => {
+            console.warn("⚠️ Erreur marquage read:", err.message);
           });
-        } catch (err) {
-          console.warn("⚠️ Erreur marquage read:", err.message);
-        }
       }
 
       if (this.onlineUserManager) {
@@ -2420,19 +3489,14 @@ class ChatHandler {
             matricule: socket.matricule,
             conversationId: conversationId,
           });
+
+          // ✅ Mise à jour présence (intégrée ici au lieu d'un override séparé)
+          await this.roomManager.updateRoomActivity(roomName);
+          await this.roomManager.broadcastPresenceUpdate(roomName);
         } catch (err) {
           console.warn("⚠️ Erreur ajout room Redis:", err.message);
         }
       }
-
-      socket.emit("conversation_joined", {
-        conversationId,
-        timestamp: new Date().toISOString(),
-      });
-
-      console.log(
-        `✅ ${socket.matricule} a rejoint conversation ${conversationId}`,
-      );
     } catch (error) {
       console.error("❌ Erreur handleJoinConversation:", error);
       socket.emit("conversation_error", {
@@ -2450,6 +3514,14 @@ class ChatHandler {
       if (!conversationId || !userId) return;
 
       socket.leave(`conversation_${conversationId}`);
+
+      // ✅ SYNCHRONISER LA MAP userConversations DANS LE MDS
+      if (this.messageDeliveryService) {
+        this.messageDeliveryService.removeUserConversation(
+          userId,
+          conversationId,
+        );
+      }
 
       socket
         .to(`conversation_${conversationId}`)
@@ -2500,7 +3572,8 @@ class ChatHandler {
         resilientService.redis
           .xAdd("chat:stream:events:typing", "*", {
             conversationId: String(conversationId),
-            userId: String(userId),
+            senderId: String(userId),
+            senderSocketId: String(socket.id),
             event: finalEvent,
             timestamp: String(Date.now()),
           })
@@ -2514,14 +3587,7 @@ class ChatHandler {
         });
       }
 
-      // ✅ FALLBACK: Broadcast immédiat (pour clients Socket.IO classiques)
-      socket.to(`conversation_${conversationId}`).emit("userTyping", {
-        userId,
-        matricule: socket.matricule,
-        conversationId,
-        event: finalEvent,
-        timestamp: new Date().toISOString(),
-      });
+      // 🔄 Broadcast supprimé — distribution via MDS (stream → typing:event)
     } catch (error) {
       console.error("❌ Erreur handleTyping:", error);
     }
@@ -2541,7 +3607,8 @@ class ChatHandler {
         resilientService.redis
           .xAdd("chat:stream:events:typing", "*", {
             conversationId: String(conversationId),
-            userId: String(userId),
+            senderId: String(userId),
+            senderSocketId: String(socket.id),
             event: "typing:stop",
             timestamp: String(Date.now()),
           })
@@ -2555,13 +3622,7 @@ class ChatHandler {
         });
       }
 
-      // ✅ FALLBACK: Broadcast immédiat
-      socket.to(`conversation_${conversationId}`).emit("userStoppedTyping", {
-        userId,
-        matricule: socket.matricule,
-        conversationId,
-        timestamp: new Date().toISOString(),
-      });
+      // 🔄 Broadcast supprimé — distribution via MDS (stream → typing:event)
     } catch (error) {
       console.error("❌ Erreur handleStopTyping:", error);
     }
@@ -2580,28 +3641,15 @@ class ChatHandler {
       }
 
       try {
-        const result = await this.markMessageDeliveredUseCase.execute({
+        await this.markMessageDeliveredUseCase.execute({
           messageId,
           userId,
           conversationId,
         });
-
-        if (result && result.modifiedCount > 0) {
-          this.io
-            .to(`conversation_${conversationId}`)
-            .emit("messageStatusChanged", {
-              messageId,
-              status: "DELIVERED",
-              userId,
-              timestamp: new Date().toISOString(),
-            });
-
-          socket.emit("messageDelivered", {
-            messageId,
-            status: "DELIVERED",
-            timestamp: new Date().toISOString(),
-          });
-        }
+        // ✅ PAS D'ÉMISSION ICI
+        // Le use case publie déjà le statut DELIVERED dans Redis Streams
+        // → Le consumer MessageDeliveryService distribue via 'message:status'
+        // → Évite la triple émission (messageStatusChanged + messageDelivered + message:status)
       } catch (err) {
         console.warn("⚠️ Erreur marquage delivered:", err.message);
       }
@@ -2612,11 +3660,8 @@ class ChatHandler {
 
   async handleMarkMessageRead(socket, data) {
     try {
-      console.log("📖 Marquage message lu demandé:", data);
-      const { messageId, conversationId } = data;
+      const { messageId, conversationId, messageIds } = data;
       const userId = socket.userId;
-
-      console.log("📖 Utilisateur:", userId, "Message ID:", messageId);
 
       if (!userId) return;
 
@@ -2625,30 +3670,35 @@ class ChatHandler {
         return;
       }
 
+      // ✅ Validation : il faut au moins messageId OU (conversationId + messageIds)
+      if (
+        !messageId &&
+        !(conversationId && Array.isArray(messageIds) && messageIds.length > 0)
+      ) {
+        console.warn("⚠️ markMessageRead: données insuffisantes", {
+          messageId,
+          conversationId,
+          messageIdsCount: messageIds?.length,
+        });
+        return;
+      }
+
       try {
-        const result = await this.markMessageReadUseCase.execute({
+        await this.markMessageReadUseCase.execute({
           messageId,
           userId,
           conversationId,
+          messageIds: Array.isArray(messageIds) ? messageIds : null,
         });
+        // ✅ PAS D'ÉMISSION ICI
+        // Le use case publie déjà le statut READ dans Redis Streams
+        // → Le consumer MessageDeliveryService distribue via 'message:status'
+        // → Évite la triple émission (messageStatusChanged + messageRead + message:status)
 
-        console.log("Résultat marquage lu:", result);
-
-        if (result && result.modifiedCount > 0) {
-          this.io
-            .to(`conversation_${conversationId}`)
-            .emit("messageStatusChanged", {
-              messageId,
-              status: "READ",
-              userId,
-              timestamp: new Date().toISOString(),
-            });
-
-          socket.emit("messageRead", {
-            messageId,
-            status: "READ",
-            timestamp: new Date().toISOString(),
-          });
+        if (Array.isArray(messageIds) && messageIds.length > 1) {
+          console.log(
+            `📖 Batch markRead: ${messageIds.length} messages marqués lus par ${socket.matricule || userId}`,
+          );
         }
       } catch (err) {
         console.warn("⚠️ Erreur marquage read:", err.message);
@@ -2660,7 +3710,12 @@ class ChatHandler {
 
   async handleGetMessages(socket, data) {
     try {
-      const { conversationId, page = 1, limit = 50 } = data;
+      const {
+        conversationId,
+        page = data.page || 1,
+        limit = data.limit || 50,
+        cursor = data.cursor,
+      } = data;
       const userId = socket.userId;
 
       const normalizedConversationId = this.normalizeMongoId(conversationId);
@@ -2703,6 +3758,7 @@ class ChatHandler {
       const result = await this.getMessagesUseCase.execute(
         normalizedConversationId,
         {
+          cursor: cursor, // Toujours à null pour quick load
           page: parseInt(page),
           limit: parseInt(limit),
           userId,

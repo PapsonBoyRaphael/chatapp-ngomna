@@ -22,21 +22,21 @@
             <input
               type="text"
               id="userId"
-              placeholder="ID Utilisateur (ex: 3)"
-              value="1"
+              placeholder="ID Utilisateur (ex: 570479H)"
+              value="570479H"
             />
             <input
               type="text"
               id="matricule"
-              placeholder="Matricule (ex: 1)"
-              value="1"
+              placeholder="Matricule (ex: 570479H)"
+              value="570479H"
             />
             <input type="text" id="token" placeholder="Token JWT (optionnel)" />
             <!-- ✅ Ajout receiverId -->
             <input
               type="text"
               id="receiverIdAuth"
-              placeholder="ID Destinataire (optionnel)"
+              placeholder="ID Destinataire (ex: 534589D)"
               value=""
             />
             <!-- ✅ Ajout statut -->
@@ -79,26 +79,28 @@
             <input
               type="text"
               id="conversationId"
-              placeholder="ID Conversation (24 caractères hexa)"
-              value="60f7b3b3b3b3b3b3b3b3b3b6"
+              placeholder="ID Conversation MongoDB (ex: 60f7b3b3b3b3b3b3b3b3b3b6)"
+              value=""
             />
             <input
               type="text"
               id="receiverId"
-              placeholder="ID Destinataire (REQUIS pour nouvelles conversations)"
-              value="2"
+              placeholder="ID Destinataire (ex: 534589D)"
+              value="534589D"
             />
             <textarea
               id="messageContent"
-              placeholder="Contenu du message..."
+              placeholder="Contenu du message (texte, emoji autorisés)..."
               rows="3"
             >
-Message de test depuis le testeur Socket.IO 🚀</textarea
+Message de test 🚀</textarea
             >
             <select id="messageType">
-              <option value="TEXT">TEXT</option>
-              <option value="IMAGE">IMAGE</option>
-              <option value="FILE">FILE</option>
+              <option value="TEXT">📝 TEXT</option>
+              <option value="IMAGE">🖼️ IMAGE</option>
+              <option value="FILE">📎 FILE</option>
+              <option value="VIDEO">🎬 VIDEO</option>
+              <option value="AUDIO">🎵 AUDIO</option>
             </select>
             <div class="button-grid">
               <button
@@ -110,11 +112,16 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
               <button onclick="generateTestIds()" class="btn-secondary">
                 🔧 Générer IDs Test
               </button>
+              <button onclick="validateMessageData()" class="btn-info">
+                ✅ Valider
+              </button>
             </div>
             <div class="form-help">
               <small>
-                💡 Pour une nouvelle conversation privée, le receiverId est
-                obligatoire
+                💡 Conversation privée: entrez un conversationId OU un
+                receiverId<br />
+                💡 Message dans groupe: entrez uniquement le conversationId<br />
+                💡 Le type par défaut est TEXT
               </small>
             </div>
           </div>
@@ -136,6 +143,54 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
             <button onclick="stopTyping()" class="btn-secondary">
               ⏹️ Arrêter de taper
             </button>
+          </div>
+        </div>
+
+        <!-- ✅ NOUVELLE SECTION: Récupération Messages -->
+        <div class="section get-messages-section">
+          <h2>📥 Récupération Messages</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="messagesConversationId"
+              placeholder="ID Conversation (requis)"
+              value=""
+            />
+            <input
+              type="number"
+              id="messagesLimit"
+              placeholder="Limite (défaut: 20)"
+              value="20"
+              min="1"
+              max="100"
+            />
+            <input
+              type="text"
+              id="messagesCursor"
+              placeholder="Cursor pour pagination (optionnel)"
+              value=""
+            />
+            <div class="button-grid">
+              <button onclick="getMessages()" class="btn-primary">
+                📥 Récupérer Messages
+              </button>
+              <button onclick="getMessagesQuickload()" class="btn-success">
+                ⚡ Quick Load
+              </button>
+              <button onclick="getMessagesFullload()" class="btn-secondary">
+                📚 Full Load
+              </button>
+            </div>
+          </div>
+
+          <!-- Affichage des résultats des messages -->
+          <div
+            class="messages-results"
+            id="messagesResults"
+            style="display: none"
+          >
+            <div class="messages-stats" id="messagesStats"></div>
+            <div class="messages-list" id="messagesList"></div>
           </div>
         </div>
 
@@ -240,6 +295,134 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
               class="conversations-pagination"
               id="conversationsPagination"
             ></div>
+          </div>
+        </div>
+
+        <!-- ✅ SECTION GROUPES ET ADMINS -->
+        <div class="section group-section">
+          <h2>👥 Gestion des Groupes & Admins</h2>
+          <div class="form-group">
+            <h3>Créer un Groupe</h3>
+            <input
+              type="text"
+              id="groupName"
+              placeholder="Nom du groupe (ex: Équipe Dev)"
+              value="Groupe de test"
+            />
+            <input
+              type="text"
+              id="groupMembers"
+              placeholder="IDs des membres séparés par des virgules (ex: 534589D,570479H)"
+              value="534589D"
+            />
+            <button onclick="createGroup()" class="btn-primary">
+              ➕ Créer Groupe
+            </button>
+            <div class="status" id="createGroupStatus"></div>
+          </div>
+
+          <div class="form-group">
+            <h3>Ajouter Participant</h3>
+            <input
+              type="text"
+              id="groupIdAdd"
+              placeholder="ID du groupe/channel"
+              value=""
+            />
+            <input
+              type="text"
+              id="participantIdAdd"
+              placeholder="ID du participant à ajouter (ex: 534589D)"
+              value=""
+            />
+            <button onclick="addParticipantToGroup()" class="btn-success">
+              ➕ Ajouter Participant
+            </button>
+            <div class="status" id="addParticipantStatus"></div>
+          </div>
+
+          <div class="form-group">
+            <h3>Promouvoir Admins</h3>
+            <input
+              type="text"
+              id="groupIdAdmin"
+              placeholder="ID du groupe/channel"
+              value=""
+            />
+            <input
+              type="text"
+              id="adminUserIds"
+              placeholder="IDs des membres à promouvoir (séparés par des virgules)"
+              value=""
+            />
+            <button onclick="addAdminsToGroup()" class="btn-warning">
+              👑 Promouvoir Admin(s)
+            </button>
+            <div class="status" id="addAdminStatus"></div>
+          </div>
+
+          <div class="form-group">
+            <h3>Retirer Participant</h3>
+            <input
+              type="text"
+              id="groupIdRemove"
+              placeholder="ID du groupe"
+              value=""
+            />
+            <input
+              type="text"
+              id="participantIdRemove"
+              placeholder="ID du participant à retirer (ex: 534589D)"
+              value=""
+            />
+            <button onclick="removeParticipantFromGroup()" class="btn-danger">
+              ➖ Retirer Participant
+            </button>
+            <div class="status" id="removeParticipantStatus"></div>
+          </div>
+
+          <div class="form-group">
+            <h3>Quitter un Groupe</h3>
+            <input
+              type="text"
+              id="groupIdLeave"
+              placeholder="ID du groupe à quitter"
+              value=""
+            />
+            <button onclick="leaveGroupAction()" class="btn-warning">
+              🚪 Quitter le Groupe
+            </button>
+            <div class="status" id="leaveGroupStatus"></div>
+          </div>
+
+          <div class="form-group">
+            <h3>Récupérer Groupe</h3>
+            <input
+              type="text"
+              id="groupIdGet"
+              placeholder="ID du groupe"
+              value=""
+            />
+            <button onclick="getGroupDetails()" class="btn-secondary">
+              🔍 Récupérer Détails
+            </button>
+            <div class="status" id="getGroupStatus"></div>
+            <pre id="groupDetailsOutput"></pre>
+          </div>
+
+          <div class="form-group">
+            <h3>Rechercher dans les Groupes</h3>
+            <input
+              type="text"
+              id="groupSearchQuery"
+              placeholder="Mot-clé de recherche (min. 2 caractères)"
+              value=""
+            />
+            <button onclick="searchGroups()" class="btn-info">
+              🔎 Rechercher
+            </button>
+            <div class="status" id="searchGroupsStatus"></div>
+            <pre id="searchGroupsOutput"></pre>
           </div>
         </div>
 
@@ -435,9 +618,9 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
           <div id="myFilesList"></div>
         </div>
 
-        <!-- Section Groupes et Diffusion -->
+        <!-- Section Groupes (legacy) -->
         <div class="section group-section">
-          <h2>👥 Test Groupes & Diffusion</h2>
+          <h2>👥 Test Groupes</h2>
           <div class="form-group">
             <input
               type="text"
@@ -449,57 +632,148 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
             </button>
             <input
               type="text"
-              id="broadcastId"
-              placeholder="ID Liste de diffusion (ObjectId auto)"
-            />
-            <button onclick="generateBroadcastId()" class="btn-secondary">
-              🔧 Générer ID Diffusion
-            </button>
-            <input
-              type="text"
               id="groupReceiverIds"
-              placeholder="IDs utilisateurs (séparés par virgule)"
+              placeholder="IDs utilisateurs (ex: 534589D,570479H)"
             />
             <textarea
               id="groupMessageContent"
               placeholder="Message pour le groupe..."
               rows="2"
             ></textarea>
-            <textarea
-              id="broadcastMessageContent"
-              placeholder="Message pour la diffusion..."
-              rows="2"
-            ></textarea>
-            <input
-              type="text"
-              id="groupName"
-              placeholder="Nom du groupe (optionnel)"
-            />
-            <input
-              type="text"
-              id="broadcastName"
-              placeholder="Nom de la diffusion (optionnel)"
-            />
             <div class="button-grid">
-              <button onclick="createGroup()" class="btn-primary">
-                ➕ Créer Groupe
-              </button>
-              <button onclick="createBroadcast()" class="btn-primary">
-                ➕ Créer Diffusion
-              </button>
               <button onclick="sendGroupMessage()" class="btn-success">
                 📤 Envoyer au Groupe
-              </button>
-              <button onclick="sendBroadcastMessage()" class="btn-warning">
-                📤 Envoyer à la Diffusion
               </button>
               <button onclick="fetchGroupMessages()" class="btn-secondary">
                 📥 Récupérer Messages Groupe
               </button>
-              <button onclick="fetchBroadcastMessages()" class="btn-secondary">
-                📥 Récupérer Messages Diffusion
-              </button>
             </div>
+          </div>
+        </div>
+
+        <!-- ✅ SECTION BROADCAST COMPLÈTE -->
+        <div
+          class="section"
+          style="border-left: 4px solid #f59e0b; background: #1c1917"
+        >
+          <h2>📢 Broadcast (Liste de Diffusion)</h2>
+
+          <!-- Créer une diffusion -->
+          <div class="form-group">
+            <h3>➕ Créer une Diffusion</h3>
+            <input
+              type="text"
+              id="broadcastId"
+              placeholder="ID Diffusion (généré automatiquement si vide)"
+            />
+            <button
+              onclick="generateBroadcastId()"
+              class="btn-secondary"
+              style="margin-bottom: 6px"
+            >
+              🔧 Générer ID
+            </button>
+            <input
+              type="text"
+              id="broadcastName"
+              placeholder="Nom de la diffusion (ex: Communiqué DRH)"
+              value=""
+            />
+            <input
+              type="text"
+              id="broadcastRecipientIds"
+              placeholder="IDs destinataires séparés par virgule (ex: 534589D,570479H)"
+              value=""
+            />
+            <div class="form-help">
+              <small>
+                📌 <strong>Seul le créateur</strong> peut envoyer dans une
+                diffusion.<br />
+                🔗 Les conversations privées avec chaque destinataire seront
+                créées <strong>automatiquement</strong> lors de la création.
+              </small>
+            </div>
+            <button onclick="createBroadcast()" class="btn-primary">
+              📢 Créer la Diffusion
+            </button>
+            <div class="status" id="createBroadcastStatus"></div>
+          </div>
+
+          <!-- Envoyer un message broadcast -->
+          <div class="form-group">
+            <h3>📤 Envoyer un Message Broadcast</h3>
+            <input
+              type="text"
+              id="broadcastConversationId"
+              placeholder="ID Conversation Broadcast (auto-rempli après création)"
+            />
+            <textarea
+              id="broadcastMessageContent"
+              placeholder="Message à diffuser..."
+              rows="3"
+            >
+Message broadcast de test 📢</textarea
+            >
+            <select id="broadcastMessageType">
+              <option value="TEXT">📝 TEXT</option>
+              <option value="IMAGE">🖼️ IMAGE</option>
+              <option value="FILE">📎 FILE</option>
+            </select>
+            <div class="form-help">
+              <small>
+                ⚡ Le message sera envoyé dans
+                <strong>chaque conv privée</strong> des destinataires via le
+                mapping <code>broadcastMetadata</code>.
+              </small>
+            </div>
+            <button onclick="sendBroadcastMessage()" class="btn-warning">
+              📤 Envoyer le Broadcast
+            </button>
+            <div class="status" id="sendBroadcastStatus"></div>
+          </div>
+
+          <!-- Récupérer les messages broadcast -->
+          <div class="form-group">
+            <h3>📥 Récupérer Messages de la Diffusion</h3>
+            <input
+              type="text"
+              id="broadcastFetchConversationId"
+              placeholder="ID Conversation Broadcast"
+            />
+            <input
+              type="number"
+              id="broadcastFetchLimit"
+              placeholder="Limite (défaut: 20)"
+              value="20"
+              min="1"
+              max="100"
+            />
+            <button onclick="fetchBroadcastMessages()" class="btn-secondary">
+              📥 Récupérer Messages
+            </button>
+            <div class="status" id="fetchBroadcastStatus"></div>
+            <pre
+              id="broadcastMessagesOutput"
+              style="max-height: 300px; overflow: auto; font-size: 12px"
+            ></pre>
+          </div>
+
+          <!-- Vérifier broadcastMetadata -->
+          <div class="form-group">
+            <h3>🔍 Vérifier broadcastMetadata</h3>
+            <input
+              type="text"
+              id="broadcastMetaConvId"
+              placeholder="ID Conversation Broadcast"
+            />
+            <button onclick="fetchBroadcastMetadata()" class="btn-info">
+              🔍 Voir Mapping Conv Privées
+            </button>
+            <div class="status" id="broadcastMetaStatus"></div>
+            <pre
+              id="broadcastMetaOutput"
+              style="max-height: 300px; overflow: auto; font-size: 12px"
+            ></pre>
           </div>
         </div>
 
@@ -515,7 +789,7 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
             <input
               type="text"
               id="participantUserId"
-              placeholder="ID(s) Utilisateur (séparés par virgule pour plusieurs)"
+              placeholder="ID(s) Utilisateur (ex: 534589D,570479H)"
             />
             <div class="button-grid">
               <button onclick="addParticipant()" class="btn-success">
@@ -633,6 +907,43 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
           <div class="status" id="deleteMessageStatus"></div>
         </div>
 
+        <!-- ✅ Section Transférer un Message -->
+        <div class="section forward-message-section">
+          <h2>📤 Transférer un Message</h2>
+          <div class="form-group">
+            <input
+              type="text"
+              id="forwardMessageId"
+              placeholder="ID du Message à transférer"
+            />
+            <textarea
+              id="forwardTargetConversationIds"
+              placeholder="ID(s) Conversation(s) cible(s) — un par ligne ou séparés par des virgules (max 10)"
+              rows="3"
+            ></textarea>
+            <div class="button-grid">
+              <button onclick="forwardMessageAction()" class="btn-primary">
+                📤 Transférer Message
+              </button>
+              <button onclick="fillForwardMessageId()" class="btn-secondary">
+                🔍 Utiliser Dernier Message
+              </button>
+            </div>
+            <div class="form-help">
+              <small>
+                📤 Transfère le contenu (texte, fichier, type) du message
+                original vers une ou plusieurs conversations.<br />
+                💡 Vous pouvez entrer plusieurs IDs de conversations (max 10),
+                séparés par des virgules ou un par ligne.<br />
+                🔄 Le message transféré sera marqué comme
+                <strong>transféré</strong> avec la référence au message
+                d'origine.
+              </small>
+            </div>
+          </div>
+          <div class="status" id="forwardMessageStatus"></div>
+        </div>
+
         <!-- ✅ Section Supprimer un Fichier -->
         <div class="section delete-file-section">
           <h2>🗑️ Supprimer un Fichier</h2>
@@ -686,6 +997,356 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
           <div class="status" id="downloadFileStatus"></div>
         </div>
 
+        <!-- ✅ Section Appels (CALL / VIDEO_CALL) -->
+        <div class="section call-section">
+          <h2>📞 Appels Audio / Vidéo</h2>
+
+          <!-- Initier un appel -->
+          <div class="form-group">
+            <h3>📲 Initier un Appel</h3>
+            <input
+              type="text"
+              id="callConversationId"
+              placeholder="ID Conversation (optionnel si receiverId fourni)"
+            />
+            <input
+              type="text"
+              id="callReceiverId"
+              placeholder="ID Destinataire (ex: 534589D)"
+              value="534589D"
+            />
+            <select id="callType">
+              <option value="AUDIO">📞 Appel Audio</option>
+              <option value="VIDEO">📹 Appel Vidéo</option>
+            </select>
+            <div class="button-grid">
+              <button onclick="initiateCall()" class="btn-primary">
+                📞 Lancer l'Appel
+              </button>
+            </div>
+            <div class="form-help">
+              <small>
+                💡 L'appel crée un message CALL/VIDEO_CALL et notifie le
+                destinataire via <code>call:incoming</code>.
+              </small>
+            </div>
+          </div>
+          <div class="status" id="initiateCallStatus"></div>
+
+          <!-- Gérer un appel en cours -->
+          <div class="form-group">
+            <h3>🎛️ Gérer un Appel en Cours</h3>
+            <input
+              type="text"
+              id="activeCallId"
+              placeholder="Call ID (auto-rempli après initiation)"
+            />
+            <input
+              type="text"
+              id="activeCallMessageId"
+              placeholder="Message ID (auto-rempli après initiation)"
+            />
+            <input
+              type="text"
+              id="activeCallConversationId"
+              placeholder="Conversation ID (auto-rempli après initiation)"
+            />
+            <div class="button-grid">
+              <button onclick="answerCall()" class="btn-success">
+                ✅ Décrocher
+              </button>
+              <button onclick="declineCall()" class="btn-danger">
+                ❌ Refuser
+              </button>
+              <button onclick="endCall()" class="btn-warning">
+                📴 Raccrocher
+              </button>
+              <button onclick="missedCall()" class="btn-secondary">
+                📵 Appel Manqué
+              </button>
+            </div>
+            <div class="form-help">
+              <small>
+                ✅ <strong>Décrocher</strong> : passe le statut à ANSWERED<br />
+                ❌ <strong>Refuser</strong> : passe le statut à DECLINED<br />
+                📴 <strong>Raccrocher</strong> : termine l'appel (calcule la
+                durée)<br />
+                📵 <strong>Appel Manqué</strong> : marque l'appel comme MISSED
+              </small>
+            </div>
+          </div>
+          <div class="status" id="callActionStatus"></div>
+
+          <!-- Journal des appels -->
+          <div class="form-group">
+            <h3>📋 Journal des Appels</h3>
+            <div class="button-grid">
+              <button onclick="clearCallLog()" class="btn-clear">
+                🗑️ Vider le Journal
+              </button>
+            </div>
+            <div
+              id="callLog"
+              style="
+                max-height: 300px;
+                overflow-y: auto;
+                margin-top: 10px;
+                padding: 10px;
+                background: #1e1e2e;
+                border-radius: 8px;
+                font-family: monospace;
+                font-size: 13px;
+              "
+            ></div>
+          </div>
+        </div>
+
+        <!-- ✅ Section Chiffrement E2EE -->
+        <div
+          class="section"
+          style="
+            border-left: 4px solid #a855f7;
+            background: linear-gradient(135deg, #1e1b2e 0%, #1a1a2e 100%);
+          "
+        >
+          <h2>🔐 Chiffrement E2EE (End-to-End)</h2>
+
+          <!-- Mode actif -->
+          <div
+            class="form-group"
+            style="
+              background: #12122a;
+              border-radius: 8px;
+              padding: 12px;
+              margin-bottom: 12px;
+            "
+          >
+            <h3>⚙️ Configuration Active</h3>
+            <div
+              style="
+                display: flex;
+                gap: 16px;
+                align-items: center;
+                flex-wrap: wrap;
+              "
+            >
+              <span
+                >Mode actuel :
+                <strong id="e2eeCurrentMode" style="color: #a855f7"
+                  >—</strong
+                ></span
+              >
+              <button
+                onclick="getEncryptionConfig()"
+                class="btn-info"
+                style="background: #7c3aed"
+              >
+                🔍 Voir Config
+              </button>
+            </div>
+            <div class="status" id="e2eeConfigStatus"></div>
+          </div>
+
+          <!-- Génération et enregistrement de clé -->
+          <div class="form-group">
+            <h3>🔑 Ma Clé Publique RSA-4096</h3>
+            <div
+              style="
+                display: flex;
+                gap: 8px;
+                flex-wrap: wrap;
+                margin-bottom: 8px;
+              "
+            >
+              <button
+                onclick="generateE2EEKeyPair()"
+                class="btn-primary"
+                style="background: #7c3aed"
+              >
+                ⚡ Générer Paire RSA-4096
+              </button>
+              <button onclick="registerE2EEKey()" class="btn-success">
+                📤 Enregistrer sur le Serveur
+              </button>
+              <button
+                onclick="testE2EEConnection()"
+                class="btn-info"
+                style="background: #ef4444"
+              >
+                🔍 DIAGNOSTIC E2EE
+              </button>
+            </div>
+            <div style="font-size: 12px; color: #888; margin-bottom: 6px">
+              Fingerprint :
+              <code id="e2eeFingerprint" style="color: #a855f7">—</code><br />
+              Version clé :
+              <code id="e2eeKeyVersion" style="color: #a855f7">—</code>
+            </div>
+            <pre
+              id="e2eePublicKeyDisplay"
+              style="
+                max-height: 120px;
+                overflow: auto;
+                font-size: 10px;
+                background: #0d0d1a;
+                padding: 8px;
+                border-radius: 6px;
+                color: #6cf;
+              "
+            >
+(aucune clé générée)</pre
+            >
+            <div class="status" id="e2eeRegisterStatus"></div>
+            <div class="form-help">
+              <small
+                >💡 La clé est
+                <strong>auto-générée et enregistrée</strong> juste après
+                l'authentification. Vous pouvez aussi le faire
+                manuellement.</small
+              >
+            </div>
+          </div>
+
+          <!-- Récupérer la clé d'un destinataire -->
+          <div class="form-group">
+            <h3>📥 Clé Publique d'un Destinataire</h3>
+            <input
+              type="text"
+              id="e2eeTargetUserId"
+              placeholder="userId du destinataire (ex: 534589D)"
+              value="534589D"
+            />
+            <button onclick="getRecipientPublicKey()" class="btn-secondary">
+              🔍 Récupérer Clé
+            </button>
+            <pre
+              id="e2eeRecipientKeyDisplay"
+              style="
+                max-height: 80px;
+                overflow: auto;
+                font-size: 10px;
+                background: #0d0d1a;
+                padding: 8px;
+                border-radius: 6px;
+                color: #6cf;
+                margin-top: 6px;
+              "
+            >
+(aucune clé récupérée)</pre
+            >
+            <div class="status" id="e2eeGetKeyStatus"></div>
+          </div>
+
+          <!-- Switch mode (admin) -->
+          <div class="form-group">
+            <h3>🔄 Changer le Mode (Admin)</h3>
+            <div
+              style="
+                display: flex;
+                gap: 8px;
+                align-items: center;
+                flex-wrap: wrap;
+              "
+            >
+              <select
+                id="e2eeSwitchModeSelect"
+                style="flex: 1; min-width: 120px"
+              >
+                <option value="e2ee">🔒 e2ee (chiffrement actif)</option>
+                <option value="none">🔓 none (texte clair)</option>
+              </select>
+              <button onclick="switchEncryptionMode()" class="btn-warning">
+                🔄 Appliquer
+              </button>
+            </div>
+            <div class="status" id="e2eeSwitchStatus"></div>
+            <div class="form-help">
+              <small
+                >⚠️ Réservé aux admins. Le changement est broadcasté à tous les
+                clients connectés.</small
+              >
+            </div>
+          </div>
+
+          <!-- Révoquer la clé -->
+          <div class="form-group">
+            <h3>🚫 Révoquer Ma Clé</h3>
+            <button onclick="revokeE2EEKey()" class="btn-danger">
+              🚫 Révoquer Ma Clé Publique
+            </button>
+            <div class="status" id="e2eeRevokeStatus"></div>
+            <div class="form-help">
+              <small
+                >⚠️ Après révocation, les nouveaux messages ne seront plus
+                chiffrés pour vous jusqu'au prochain enregistrement de
+                clé.</small
+              >
+            </div>
+          </div>
+        </div>
+
+        <!-- ✅ SECTION ARCHIVAGE DES CONVERSATIONS -->
+        <div class="section" id="archive-section" style="border-color: #f59e0b">
+          <h2>📂 Archivage des Conversations</h2>
+
+          <!-- Archiver / Désarchiver -->
+          <div style="margin-bottom: 16px">
+            <h3 style="color: #f59e0b">📦 Archiver / Désarchiver</h3>
+            <label>ID Conversation</label>
+            <input
+              type="text"
+              id="archiveConvId"
+              placeholder="conversationId"
+            />
+            <div style="display: flex; gap: 8px; margin-top: 8px">
+              <button onclick="archiveConversation()" class="btn-warning">
+                📥 Archiver
+              </button>
+              <button onclick="unarchiveConversation()" class="btn-success">
+                📤 Désarchiver
+              </button>
+            </div>
+            <div class="status" id="archiveStatus"></div>
+          </div>
+
+          <!-- Récupérer les archivées -->
+          <div style="margin-bottom: 16px">
+            <h3 style="color: #f59e0b">📋 Mes Conversations Archivées</h3>
+            <div style="display: flex; gap: 8px; align-items: center">
+              <label>Page</label>
+              <input
+                type="number"
+                id="archivedPage"
+                value="1"
+                style="width: 60px"
+                min="1"
+              />
+              <label>Limite</label>
+              <input
+                type="number"
+                id="archivedLimit"
+                value="20"
+                style="width: 60px"
+                min="1"
+                max="50"
+              />
+              <button onclick="getArchivedConversations()" class="btn-primary">
+                🔍 Récupérer
+              </button>
+            </div>
+            <div class="status" id="archivedListStatus"></div>
+            <div
+              id="archivedConvList"
+              style="
+                margin-top: 10px;
+                max-height: 200px;
+                overflow-y: auto;
+                font-size: 12px;
+              "
+            ></div>
+          </div>
+        </div>
+
         <!-- Section réception complète des messages -->
         <div class="section all-messages-section">
           <h2>📥 Tous les messages reçus</h2>
@@ -704,5 +1365,6 @@ Message de test depuis le testeur Socket.IO 🚀</textarea
     </div>
 
     <script src="app.js"></script>
+    <script src="group-functions.js"></script>
   </body>
 </html>

@@ -120,17 +120,6 @@ class MongoMessageRepository {
 
       const processingTime = Date.now() - startTime;
 
-      if (this.kafkaProducer) {
-        try {
-          await this._publishMessageEvent("MESSAGE_SAVED", savedMessage, {
-            processingTime,
-            isNew: !messageOrData._id,
-          });
-        } catch (kafkaError) {
-          console.warn("⚠️ Erreur publication message:", kafkaError.message);
-        }
-      }
-
       console.log(
         `✅ Message complètement sauvegardé: ${savedMessage._id} (${processingTime}ms)`,
       );
@@ -149,22 +138,6 @@ class MongoMessageRepository {
           : "données invalides",
         processingTime,
       });
-
-      // Publier l'erreur dans Kafka
-      if (this.kafkaProducer) {
-        try {
-          await this._publishMessageEvent(
-            "MESSAGE_SAVE_FAILED",
-            messageOrData,
-            {
-              error: error.message,
-              processingTime,
-            },
-          );
-        } catch (kafkaError) {
-          console.warn("⚠️ Erreur publication échec:", kafkaError.message);
-        }
-      }
 
       throw error;
     }
@@ -201,6 +174,8 @@ class MongoMessageRepository {
       const filter = {
         conversationId: objectId,
         deletedAt: null,
+        // ✅ Exclure les messages supprimés "pour moi" par cet utilisateur
+        ...(userId ? { deletedForUsers: { $nin: [String(userId)] } } : {}),
       };
 
       console.log("🔍 Filtre MongoDB (page-based):", filter);
@@ -213,7 +188,21 @@ class MongoMessageRepository {
 
       console.log("🔍 Messages trouvés (page-based):", messages.length);
 
-      return messages;
+      let nextCursor = null;
+      if (messages.length > 0) {
+        const lastMessage = messages[messages.length - 1];
+        nextCursor = lastMessage.createdAt.toISOString();
+      }
+
+      console.log("✅ Messages trouvés avec cursor:", {
+        count: messages.length,
+        nextCursor: nextCursor ? nextCursor.substring(0, 19) : null,
+      });
+
+      return {
+        messages: messages,
+        nextCursor,
+      };
     } catch (error) {
       console.error("❌ Erreur findByConversation:", error);
       return [];
@@ -234,6 +223,8 @@ class MongoMessageRepository {
       let filter = {
         conversationId: objectId,
         deletedAt: null,
+        // ✅ Exclure les messages supprimés "pour moi" par cet utilisateur
+        ...(userId ? { deletedForUsers: { $nin: [String(userId)] } } : {}),
       };
 
       // ✅ APPLIQUER LE CURSOR
@@ -339,6 +330,8 @@ class MongoMessageRepository {
         }
         // Exclure les messages déjà au statut voulu ou envoyés par l'utilisateur
         filter.senderId = { $ne: receiverId };
+        // ✅ Exclure les messages supprimés (évite la race condition delete → read/delivered)
+        filter.isDeleted = { $ne: true };
 
         const messages = await Message.find(filter).lean();
         console.log(`🔍 ${messages.length} messages à traiter pour ${status}`);
@@ -745,6 +738,17 @@ class MongoMessageRepository {
         readCount: existingMessage.readCount || 0,
       });
 
+      // ✅ NE PAS MODIFIER UN MESSAGE SUPPRIMÉ (évite la race condition delete → read/delivered)
+      if (existingMessage.isDeleted || existingMessage.status === "DELETED") {
+        console.log(`ℹ️ Message ${messageId} est supprimé, statut non modifié`);
+        return {
+          modifiedCount: 0,
+          matchedCount: 1,
+          message: existingMessage,
+          processingTime: Date.now() - startTime,
+        };
+      }
+
       // ✅ VÉRIFIER SI L'UTILISATEUR A DÉJÀ MARQUÉ CE MESSAGE
       const deliveredBy = existingMessage.deliveredBy || [];
       const readBy = existingMessage.readBy || [];
@@ -968,6 +972,15 @@ class MongoMessageRepository {
    */
   async countUnreadMessages(conversationId, userId) {
     try {
+      // ✅ Validation ObjectId avant la requête MongoDB
+      const mongoose = require("mongoose");
+      if (!mongoose.Types.ObjectId.isValid(conversationId)) {
+        console.warn(
+          `⚠️ countUnreadMessages: conversationId invalide "${conversationId}" (attendu: ObjectId). Retour 0.`,
+        );
+        return 0;
+      }
+
       const count = await Message.countDocuments({
         conversationId,
         receiverId: userId,
@@ -999,6 +1012,110 @@ class MongoMessageRepository {
     }
   }
 
+  // ===============================
+  // MÉTHODES RÉACTIONS
+  // ===============================
+
+  /**
+   * ✅ Ajouter ou mettre à jour une réaction sur un message
+   * Un seul emoji par utilisateur (upsert)
+   * @param {string} messageId - ID du message
+   * @param {string} userId - ID de l'utilisateur
+   * @param {string} emoji - Emoji de la réaction
+   * @returns {Promise<Object>} { message, action: 'added'|'updated', conversationId }
+   */
+  async addReaction(messageId, userId, emoji) {
+    try {
+      this.metrics.dbQueries++;
+
+      const message = await Message.findById(messageId);
+      if (!message) {
+        throw new Error(`Message ${messageId} non trouvé`);
+      }
+
+      const conversationId = String(message.conversationId);
+      let action = "added";
+
+      // Upsert : mettre à jour si l'utilisateur a déjà réagi, sinon ajouter
+      const existingReaction = message.reactions.find(
+        (r) => r.userId === String(userId),
+      );
+
+      if (existingReaction) {
+        existingReaction.emoji = emoji;
+        existingReaction.timestamp = new Date();
+        action = "updated";
+      } else {
+        message.reactions.push({
+          userId: String(userId),
+          emoji,
+          timestamp: new Date(),
+        });
+      }
+
+      await message.save();
+
+      console.log(
+        `😀 Réaction ${action}: ${emoji} par ${userId} sur ${messageId}`,
+      );
+
+      return {
+        message: message.toObject(),
+        action,
+        conversationId,
+      };
+    } catch (error) {
+      this.metrics.errors++;
+      console.error(`❌ Erreur addReaction ${messageId}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ Supprimer la réaction d'un utilisateur sur un message
+   * @param {string} messageId - ID du message
+   * @param {string} userId - ID de l'utilisateur
+   * @returns {Promise<Object>} { message, removed: true|false, conversationId }
+   */
+  async removeReaction(messageId, userId) {
+    try {
+      this.metrics.dbQueries++;
+
+      const message = await Message.findById(messageId);
+      if (!message) {
+        throw new Error(`Message ${messageId} non trouvé`);
+      }
+
+      const conversationId = String(message.conversationId);
+      const beforeCount = message.reactions.length;
+
+      message.reactions = message.reactions.filter(
+        (r) => r.userId !== String(userId),
+      );
+
+      const removed = message.reactions.length < beforeCount;
+
+      if (removed) {
+        await message.save();
+        console.log(`🚫 Réaction supprimée: ${userId} sur ${messageId}`);
+      } else {
+        console.log(
+          `⚠️ Aucune réaction à supprimer: ${userId} sur ${messageId}`,
+        );
+      }
+
+      return {
+        message: message.toObject(),
+        removed,
+        conversationId,
+      };
+    } catch (error) {
+      this.metrics.errors++;
+      console.error(`❌ Erreur removeReaction ${messageId}:`, error.message);
+      throw error;
+    }
+  }
+
   // Ajouter ces méthodes manquantes
   async getLastMessage(conversationId) {
     return await Message.findOne({ conversationId })
@@ -1008,6 +1125,11 @@ class MongoMessageRepository {
 
   async getMessageCount(conversationId) {
     return await Message.countDocuments({ conversationId });
+  }
+
+  // ✅ Mise à jour du statut d'appel via le modèle
+  async updateCallStatus(messageId, updates) {
+    return await Message.updateCallStatus(messageId, updates);
   }
 }
 

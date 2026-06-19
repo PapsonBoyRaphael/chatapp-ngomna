@@ -13,7 +13,12 @@ class AddParticipant {
     this.userCacheService = userCacheService;
   }
 
-  async execute({ conversationId, participantId, addedBy }) {
+  async execute({
+    conversationId,
+    participantId,
+    addedBy,
+    senderSocketId = null,
+  }) {
     if (!conversationId || !participantId || !addedBy) {
       throw new Error("conversationId, participantId et addedBy requis");
     }
@@ -26,14 +31,18 @@ class AddParticipant {
     }
 
     // Vérifier que c'est un groupe
-    if (conversation.type !== "GROUP") {
+    if (conversation.type !== "GROUP" || conversation.type === "CHANNEL") {
       throw new Error(
         "Seuls les groupes peuvent avoir des participants ajoutés",
       );
     }
 
-    // Vérifier que l'utilisateur qui ajoute est membre
-    if (!conversation.participants.includes(addedBy)) {
+    // Vérifier que l'utilisateur qui ajoute est membre, sauf si ajout système (SYSTEM ou autoAdded)
+    if (
+      addedBy !== "SYSTEM" &&
+      !(typeof autoAdded !== "undefined" && autoAdded === true) &&
+      !conversation.participants.includes(addedBy)
+    ) {
       throw new Error("Seul un membre peut ajouter des participants");
     }
 
@@ -92,7 +101,6 @@ class AddParticipant {
       prenom: participantInfo?.prenom || null,
       sexe: participantInfo?.sexe || null,
       avatar: participantInfo?.avatar || null,
-      departement: participantInfo?.departement || null,
       ministere: participantInfo?.ministere || null,
     });
 
@@ -113,6 +121,18 @@ class AddParticipant {
       });
     }
 
+    // verifier si le total des membres dépasse la limite pour un GROUP et convertir en CHANNEL si nécessaire
+    const MAX_GROUP_MEMBERS = process.env.MAX_GROUP_MEMBERS || 200; // Exemple de limite, à ajuster selon les besoins
+    if (
+      conversation.participants.length > MAX_GROUP_MEMBERS &&
+      conversation.type === "GROUP"
+    ) {
+      conversation.type = "CHANNEL";
+      console.log(
+        `⚠️ Conversation ${conversationId} convertie en CHANNEL car nombre de membres (${conversation.participants.length}) dépasse la limite pour GROUP.`,
+      );
+    }
+
     conversation.updatedAt = new Date();
 
     // Sauvegarder
@@ -125,11 +145,13 @@ class AddParticipant {
           "PARTICIPANT_ADDED",
           {
             conversationId: conversationId.toString(),
+            conversation: conversation, // Inclure les détails de la conversation pour les consommateurs qui veulent plus d'infos
             participantId,
             participantName: participantInfo?.name,
             addedBy,
             userMetadata: conversation.userMetadata,
             participants: conversation.participants,
+            senderSocketId, // ✅ PROPAGER senderSocketId pour exclusion MDS
           },
         );
         console.log(
@@ -146,29 +168,28 @@ class AddParticipant {
 
     // Publier notification système
     if (this.resilientMessageService) {
-      try {
-        const addedByInfo = this.userCacheService
-          ? (await this.userCacheService.fetchUsersInfo([addedBy]))[0]
-          : null;
-
-        await this.resilientMessageService.publishSystemMessage({
-          conversationId: conversationId.toString(),
-          type: "SYSTEM",
-          subType: "PARTICIPANT_ADDED",
-          senderId: addedBy,
-          senderName: addedByInfo?.name || "Un membre",
-          content: `${addedByInfo?.name || "Un membre"} a ajouté ${
-            participantInfo?.name || participantId
-          }`,
-          participants: conversation.participants,
-          metadata: {
-            participantId,
-            participantName: participantInfo?.name,
-          },
-        });
-      } catch (err) {
-        console.warn("⚠️ Erreur publication notification:", err.message);
-      }
+      //   try {
+      //     const addedByInfo = this.userCacheService
+      //       ? (await this.userCacheService.fetchUsersInfo([addedBy]))[0]
+      //       : null;
+      //     await this.resilientMessageService.publishSystemMessage({
+      //       conversationId: conversationId.toString(),
+      //       type: "SYSTEM",
+      //       subType: "PARTICIPANT_ADDED",
+      //       senderId: addedBy,
+      //       senderName: addedByInfo?.name || "Un membre",
+      //       content: `${addedByInfo?.name || "Un membre"} a ajouté ${
+      //         participantInfo?.name || participantId
+      //       }`,
+      //       participants: conversation.participants,
+      //       metadata: {
+      //         participantId,
+      //         participantName: participantInfo?.name,
+      //       },
+      //     });
+      //   } catch (err) {
+      //     console.warn("⚠️ Erreur publication notification:", err.message);
+      //   }
     }
 
     return updated;

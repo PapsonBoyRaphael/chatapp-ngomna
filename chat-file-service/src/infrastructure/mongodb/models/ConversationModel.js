@@ -152,7 +152,7 @@ const lastMessageSchema = new Schema(
     },
     type: {
       type: String,
-      enum: ["TEXT", "IMAGE", "VIDEO", "AUDIO", "FILE", "SYSTEM"],
+      enum: ["TEXT", "IMAGE", "VIDEO", "AUDIO", "FILE", "SYSTEM", "CALL"],
       default: "TEXT",
     },
     senderId: {
@@ -199,10 +199,17 @@ const conversationSchema = new Schema(
       maxlength: 500,
       default: null,
     },
+    // Ajout du code structure pour les groupes auto/structurés
+    code_structure: {
+      type: String,
+      default: null,
+      index: true,
+      description: "Code structure institutionnelle (groupes auto, etc.)",
+    },
     participants: [
       {
         type: String,
-        required: true,
+        required: false, // Permettre groupes vides
       },
     ],
     createdBy: {
@@ -218,9 +225,20 @@ const conversationSchema = new Schema(
       type: Boolean,
       default: true,
     },
-    isArchived: {
-      type: Boolean,
-      default: false,
+
+    // ✅ ARCHIVAGE PAR UTILISATEUR (par défaut exclues des listes normales)
+    // Tableau simple de userId — cohérent avec l'entité domaine Conversation.js
+    archivedBy: [
+      {
+        type: String, // userId
+      },
+    ],
+
+    // ✅ DATE D'ARCHIVAGE PAR UTILISATEUR { userId: Date }
+    archivedAt: {
+      type: Map,
+      of: Date,
+      default: {},
     },
 
     // ✅ MÉTADONNÉES UTILISATEUR
@@ -246,6 +264,27 @@ const conversationSchema = new Schema(
       // Pour BROADCAST
       broadcastAdmins: [{ type: String }], // IDs des admins/envoyeurs
       broadcastRecipients: [{ type: String }], // IDs des destinataires
+    },
+
+    // ✅ MÉTADONNÉES BROADCAST (uniquement pour type === "BROADCAST")
+    // Stocke le lien entre la conversation broadcast et les conversations privées créées par destinataire
+    broadcastMetadata: {
+      // Mapping destinataire → conversation privée
+      privateConversations: [
+        {
+          recipientId: { type: String, required: true },
+          conversationId: {
+            type: Schema.Types.ObjectId,
+            ref: "Conversation",
+            required: true,
+          },
+          _id: false,
+        },
+      ],
+      // Statistiques de diffusion
+      totalRecipients: { type: Number, default: 0 },
+      totalMessagesSent: { type: Number, default: 0 },
+      lastBroadcastAt: { type: Date, default: null },
     },
 
     // ✅ MÉTADONNÉES ET AUDIT - AVEC ENUM CORRIGÉ
@@ -302,7 +341,8 @@ conversationSchema.index({ participants: 1, lastMessageAt: -1 });
 conversationSchema.index({ participants: 1, type: 1 });
 conversationSchema.index({ createdBy: 1, createdAt: -1 });
 conversationSchema.index({ "userMetadata.userId": 1 });
-conversationSchema.index({ isActive: 1, isArchived: 1 });
+conversationSchema.index({ isActive: 1, archivedBy: 1 });
+conversationSchema.index({ archivedBy: 1, lastMessageAt: -1 }); // ✅ Requêtes getArchivedConversations
 
 // ✅ MÉTHODES VIRTUELLES
 conversationSchema.virtual("participantCount").get(function () {
@@ -436,6 +476,56 @@ conversationSchema.methods.updateUserMetadata = function (userId, updates) {
   this.updatedAt = new Date();
 };
 
+/**
+ * ✅ ARCHIVER LA CONVERSATION POUR UN UTILISATEUR
+ * L'archivage est individuel : chaque userId a son propre état
+ */
+conversationSchema.methods.archiveForUser = function (userId) {
+  if (!this.archivedBy.includes(userId)) {
+    this.archivedBy.push(userId);
+    if (!this.archivedAt) this.archivedAt = new Map();
+    this.archivedAt.set(userId, new Date());
+    this.markModified("archivedBy");
+    this.markModified("archivedAt");
+
+    this.metadata.auditLog.push({
+      action: "ARCHIVED",
+      userId,
+      timestamp: new Date(),
+      details: { archivedBy: userId },
+    });
+  }
+  return this;
+};
+
+/**
+ * ✅ DÉSARCHIVER LA CONVERSATION POUR UN UTILISATEUR
+ */
+conversationSchema.methods.unarchiveForUser = function (userId) {
+  const idx = this.archivedBy.indexOf(userId);
+  if (idx > -1) {
+    this.archivedBy.splice(idx, 1);
+    if (this.archivedAt) this.archivedAt.delete(userId);
+    this.markModified("archivedBy");
+    this.markModified("archivedAt");
+
+    this.metadata.auditLog.push({
+      action: "UNARCHIVED",
+      userId,
+      timestamp: new Date(),
+      details: { unarchivedBy: userId },
+    });
+  }
+  return this;
+};
+
+/**
+ * ✅ VÉRIFIER SI LA CONVERSATION EST ARCHIVÉE POUR UN UTILISATEUR
+ */
+conversationSchema.methods.isArchivedForUser = function (userId) {
+  return this.archivedBy.includes(userId);
+};
+
 // ✅ MÉTHODES STATIQUES
 conversationSchema.statics.findByParticipant = function (userId, options = {}) {
   const {
@@ -445,7 +535,6 @@ conversationSchema.statics.findByParticipant = function (userId, options = {}) {
     page = 1,
   } = options;
 
-  // Accepte les deux types pour la recherche
   const filter = {
     participants: {
       $in: [
@@ -456,8 +545,9 @@ conversationSchema.statics.findByParticipant = function (userId, options = {}) {
     isActive: true,
   };
 
+  // ✅ Exclure les conversations archivées par cet utilisateur
   if (!includeArchived) {
-    filter.isArchived = { $ne: true };
+    filter.archivedBy = { $nin: [userId] };
   }
 
   if (type) {
@@ -468,6 +558,37 @@ conversationSchema.statics.findByParticipant = function (userId, options = {}) {
 
   return this.find(filter)
     .sort({ lastMessageAt: -1 })
+    .skip(skip)
+    .limit(limit)
+    .lean();
+};
+
+/**
+ * ✅ RÉCUPÉRER LES CONVERSATIONS ARCHIVÉES D'UN UTILISATEUR
+ */
+conversationSchema.statics.findArchivedByParticipant = function (
+  userId,
+  options = {},
+) {
+  const { type = null, limit = 50, page = 1 } = options;
+
+  const filter = {
+    participants: {
+      $in: [
+        userId,
+        typeof userId === "string" ? Number(userId) : String(userId),
+      ],
+    },
+    isActive: true,
+    archivedBy: userId, // Seulement celles archivées par cet utilisateur
+  };
+
+  if (type) filter.type = type;
+
+  const skip = (page - 1) * limit;
+
+  return this.find(filter)
+    .sort({ [`archivedAt.${userId}`]: -1, lastMessageAt: -1 })
     .skip(skip)
     .limit(limit)
     .lean();
@@ -558,11 +679,24 @@ conversationSchema.pre("save", function (next) {
     }
 
     if (!this.participants || this.participants.length === 0) {
-      return next(new Error("Au moins un participant est requis"));
+      // Autoriser les groupes vides pour les conversations auto-créées
+      const autoCreated = (this.metadata && this.metadata.autoCreated) || false;
+      const createdBySystem = this.createdBy === "SYSTEM";
+      if (!autoCreated && !createdBySystem) {
+        return next(new Error("Au moins un participant est requis"));
+      }
+
+      // Normaliser participants en tableau vide si nécessaire
+      this.participants = this.participants || [];
     }
 
     if (!this.createdBy) {
-      return next(new Error("Le créateur de la conversation est requis"));
+      // Pour les groupes auto-créés, attribuer SYSTEM si absent
+      if (this.metadata && this.metadata.autoCreated) {
+        this.createdBy = "SYSTEM";
+      } else {
+        return next(new Error("Le créateur de la conversation est requis"));
+      }
     }
 
     console.log(

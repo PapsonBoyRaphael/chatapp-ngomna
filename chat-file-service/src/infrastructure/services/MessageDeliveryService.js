@@ -1,7 +1,7 @@
 /**
  * MessageDeliveryService - CONSOMMATEUR MULTI-STREAMS avec xReadGroup
- * ✅ Consomme PLUSIEURS streams par type (privé, groupe, typing, etc.)
- * ✅ Priorisation automatique (typing > privé > groupe)
+ * ✅ Consomme PLUSIEURS streams par type (privé, groupe, etc.)
+ * ✅ Priorisation automatique (privé > groupe)
  * ✅ Acknowledge après livraison
  * ✅ Messages en attente pour utilisateurs déconnectés
  * ✅ Scalable jusqu'à des millions d'utilisateurs
@@ -27,9 +27,10 @@ class MessageDeliveryService {
       HIGH_PRIORITY_WORKER: {
         name: "high-priority",
         streams: [
-          "typing",
+          // typing retiré — géré par TypingIndicatorService
           "conversationCreated",
           "private",
+          "call",
           "statusRead",
           "statusDelivered",
         ],
@@ -65,14 +66,7 @@ class MessageDeliveryService {
 
     // ✅ CONFIGURATION DES STREAMS PAR PRIORITÉ
     this.STREAM_CONFIGS = {
-      // Priorité 0 : Ultra-temps réel (typing, présence)
-      typing: {
-        streamKey: "chat:stream:events:typing",
-        groupId: "delivery-typing",
-        priority: 0,
-        interval: 50, // Consommer TRÈS souvent
-        workerPartition: "HIGH_PRIORITY_WORKER",
-      },
+      // typing retiré — géré exclusivement par TypingIndicatorService
       // Priorité 1 : Temps réel (messages privés)
       private: {
         streamKey: "chat:stream:messages:private",
@@ -149,6 +143,14 @@ class MessageDeliveryService {
         interval: 500,
         workerPartition: "SYSTEM_WORKER",
       },
+      // Priorité 0.5 : Événements appels (temps réel critique)
+      call: {
+        streamKey: "chat:stream:events:call",
+        groupId: "events-call",
+        priority: 0.5,
+        interval: 50,
+        workerPartition: "HIGH_PRIORITY_WORKER",
+      },
       // Priorité 3.5 : Événements fichiers
       files: {
         streamKey: "chat:stream:events:files",
@@ -161,15 +163,15 @@ class MessageDeliveryService {
       statusDelivered: {
         streamKey: "chat:stream:status:delivered",
         groupId: "delivery-delivered",
-        priority: 4,
-        interval: 1000,
+        priority: 1,
+        interval: 50,
         workerPartition: "HIGH_PRIORITY_WORKER",
       },
       statusRead: {
         streamKey: "chat:stream:status:read",
         groupId: "delivery-read",
-        priority: 4,
-        interval: 1000,
+        priority: 1,
+        interval: 50,
         workerPartition: "HIGH_PRIORITY_WORKER",
       },
       statusEdited: {
@@ -214,13 +216,16 @@ class MessageDeliveryService {
     // ✅ PHASES D'ABONNEMENT PROGRESSIF (LAZY SUBSCRIPTION)
     this.SUBSCRIPTION_PHASES = {
       PHASE_1: [
-        "typing",
+        // typing retiré — géré par TypingIndicatorService
         "private",
         "statusRead",
         "statusDelivered",
+        "statusEdited",
+        "statusDeleted",
         "conversationCreated",
-      ], // Immédiat
-      PHASE_2: ["group", "channel"], // Après 1s
+        "call",
+      ], // Immédiat (statusEdited/statusDeleted en Phase 1 pour éviter le flash de messages supprimés/modifiés)
+      PHASE_2: ["group", "channel"], // Après 100ms
       PHASE_3: [
         "notifications",
         "conversations",
@@ -228,9 +233,9 @@ class MessageDeliveryService {
         "participantAdded",
         "participantRemoved",
         "conversationDeleted",
-      ], // Après 3s
-      PHASE_4: ["files", "reactions", "replies"], // Après 10s
-      PHASE_5: ["analytics", "statusEdited", "statusDeleted"], // Background
+      ], // Après 300ms
+      PHASE_4: ["files", "reactions", "replies"], // Après 800ms
+      PHASE_5: ["analytics"], // Background
     };
 
     this.streamConsumers = new Map(); // streamKey → { redis, config, isRunning, interval }
@@ -240,11 +245,109 @@ class MessageDeliveryService {
 
     // ✅ CONFIGURATION GÉNÉRALE
     this.pendingMessagesPrefix = "chat:stream:pending:messages:"; // chat:stream:pending:messages:2
-    this.blockTimeout = 1000; // 1 sec max per stream
-    this.maxMessagesPerRead = 20;
+    this.blockTimeout = 50; // 50ms max per stream (réduit pour éviter les délais en cascade)
+    this.maxMessagesPerRead = 50; // ✅ Augmenté de 20→50 pour absorber les bursts de status
 
     this.isRunning = false;
     this.workers = new Map(); // workerPartition → worker instances
+
+    // ✅ QUEUE DE LIVRAISON SÉRIALISÉE pour éviter la saturation Socket.IO en burst
+    this._statusDeliveryQueues = new Map(); // userId → { queue: [], processing: boolean }
+    this._STATUS_INTER_MESSAGE_DELAY_MS = 20; // 20ms entre chaque emit pour éviter la saturation
+
+    // ✅ CACHE DE DÉDUPLICATION pour éviter double livraison (direct + stream consumer)
+    // Clé: "userId:messageId:status" → timestamp de livraison
+    this._deliveredStatusCache = new Map();
+    this._DEDUP_TTL_MS = 30000; // 30s de TTL pour la déduplication
+    // Nettoyage périodique du cache de dédup
+    this._dedupCleanupInterval = setInterval(() => {
+      const now = Date.now();
+      for (const [key, ts] of this._deliveredStatusCache) {
+        if (now - ts > this._DEDUP_TTL_MS) {
+          this._deliveredStatusCache.delete(key);
+        }
+      }
+    }, 60000); // Nettoyer chaque minute
+  }
+
+  /**
+   * ✅ LIVRAISON DIRECTE SÉRIALISÉE D'UN STATUT VIA SOCKET.IO
+   * Évite la perte de messages quand 26+ status arrivent en burst
+   */
+  async enqueueDirectStatusDelivery(recipientId, eventData) {
+    const recipientIdStr = String(recipientId);
+
+    if (!this._statusDeliveryQueues.has(recipientIdStr)) {
+      this._statusDeliveryQueues.set(recipientIdStr, {
+        queue: [],
+        processing: false,
+      });
+    }
+
+    const entry = this._statusDeliveryQueues.get(recipientIdStr);
+    entry.queue.push(eventData);
+
+    if (!entry.processing) {
+      entry.processing = true;
+      this._processStatusDeliveryQueue(recipientIdStr).catch((err) => {
+        console.error(
+          `❌ Erreur queue status delivery pour ${recipientIdStr}:`,
+          err.message,
+        );
+        entry.processing = false;
+      });
+    }
+  }
+
+  /**
+   * ✅ TRAITER LA QUEUE DE LIVRAISON SÉRIALISÉE POUR UN UTILISATEUR
+   */
+  async _processStatusDeliveryQueue(userId) {
+    const entry = this._statusDeliveryQueues.get(userId);
+    if (!entry) return;
+
+    while (entry.queue.length > 0) {
+      const eventData = entry.queue.shift();
+
+      try {
+        const socketIds = this.userSockets.get(userId);
+        if (socketIds && socketIds.length > 0) {
+          for (const socketId of socketIds) {
+            const socket = this.io.sockets.sockets.get(socketId);
+            if (socket) {
+              socket.emit("message:status", eventData);
+              console.log(`✅ [DIRECT-QUEUE] Statut livré via Socket.IO:`, {
+                socketId,
+                recipientId: userId,
+                messageId: eventData.messageId || "N/A",
+                status: eventData.status,
+              });
+            }
+          }
+          // ✅ Marquer comme déjà livré pour éviter double livraison par le stream consumer
+          const dedupKey = `${userId}:${eventData.messageId}:${eventData.status}`;
+          this._deliveredStatusCache.set(dedupKey, Date.now());
+        }
+      } catch (err) {
+        console.error(
+          `❌ [DIRECT-QUEUE] Erreur livraison status ${eventData.messageId} → ${userId}:`,
+          err.message,
+        );
+      }
+
+      // ✅ Délai inter-messages pour éviter la saturation du transport WebSocket
+      if (entry.queue.length > 0) {
+        await new Promise((r) =>
+          setTimeout(r, this._STATUS_INTER_MESSAGE_DELAY_MS),
+        );
+      }
+    }
+
+    entry.processing = false;
+    // Nettoyer si la queue est vide
+    if (entry.queue.length === 0) {
+      this._statusDeliveryQueues.delete(userId);
+    }
   }
 
   /**
@@ -576,10 +679,25 @@ class MessageDeliveryService {
           "statusRead",
           "statusEdited",
           "statusDeleted",
+          "reactions",
+          "replies",
         ].includes(streamType) && {
           messageId: message.messageId,
           senderId: message.senderId,
           receiverId: message.receiverId,
+          conversationId: message.conversationId,
+        }),
+        ...(streamType === "reactions" && {
+          messageId: message.messageId,
+          userId: message.userId,
+          reaction: message.reaction,
+          action: message.action,
+          conversationId: message.conversationId,
+        }),
+        ...(streamType === "replies" && {
+          messageId: message.messageId,
+          userId: message.userId,
+          replyId: message.replyId,
           conversationId: message.conversationId,
         }),
       });
@@ -589,14 +707,15 @@ class MessageDeliveryService {
         case "private":
           if (message.receiverId) {
             const receiverId = String(message.receiverId);
+            const senderId = String(message.senderId);
+            const senderSocketId = message.senderSocketId || null;
 
             console.log(
               `➡️ Livraison message privé: ${message.senderId} → ${receiverId}`,
             );
 
-            // ✅ VÉRIFIER QUE LE STREAM EST ACTIF POUR LE DESTINATAIRE
+            // ✅ LIVRER AU DESTINATAIRE
             if (this.isStreamActiveForUser(receiverId, streamType)) {
-              // ✅ VÉRIFIER QUE LE DESTINATAIRE EST CONNECTÉ
               if (this.userSockets.has(receiverId)) {
                 await this.deliverPrivateMessage(message, receiverId);
               } else {
@@ -620,6 +739,19 @@ class MessageDeliveryService {
                 "message",
                 "private",
               );
+            }
+
+            // ✅ LIVRER AUX AUTRES APPAREILS DU SENDER (multi-device)
+            // Le socket émetteur a déjà reçu l'ACK, mais ses autres appareils doivent voir le message
+            if (senderId && this.userSockets.has(senderId)) {
+              const senderSockets = this.userSockets.get(senderId) || [];
+              if (senderSockets.length > 1 || !senderSocketId) {
+                await this.deliverPrivateMessage(
+                  message,
+                  senderId,
+                  senderSocketId,
+                );
+              }
             }
           } else {
             console.warn("⚠️ Message privé sans receiverId:", message);
@@ -654,12 +786,7 @@ class MessageDeliveryService {
           }
           break;
 
-        // ✅ CAS 3 : TYPING EVENTS
-        case "typing":
-          if (message.conversationId) {
-            await this.deliverTypingEventToConversationParticipants(message);
-          }
-          break;
+        // typing retiré — géré par TypingIndicatorService
 
         // ✅ CAS 4-7 : MESSAGE STATUS
         case "statusDelivered":
@@ -669,9 +796,35 @@ class MessageDeliveryService {
           // ✅ CAS INDIVIDUEL: messageId présent
           if (message.messageId && message.userId) {
             const targetUser = String(message.userId);
+
+            // ✅ DÉDUPLICATION: vérifier si déjà livré directement par la queue sérialisée
+            const dedupKey = `${targetUser}:${message.messageId}:${message.status}`;
+            if (
+              this._deliveredStatusCache &&
+              this._deliveredStatusCache.has(dedupKey)
+            ) {
+              console.log(
+                `⏭️ [DEDUP] Status ${message.status} déjà livré directement pour ${message.messageId} → ${targetUser}, skip consumer`,
+              );
+              break;
+            }
+
             // Livrer le statut du message à l'expéditeur original
             if (this.isStreamActiveForUser(targetUser, streamType)) {
               await this.deliverMessageStatus(message, targetUser);
+            } else if (this.userSockets.has(targetUser)) {
+              // ✅ FIX: L'utilisateur est connecté mais le stream n'est pas encore activé
+              // (peut arriver pendant l'abonnement progressif) → livrer quand même
+              console.log(
+                `⚠️ [STATUS] Stream ${streamType} pas encore actif pour ${targetUser}, mais socket connecté → livraison forcée`,
+              );
+              await this.deliverMessageStatus(message, targetUser);
+            } else {
+              // ✅ FIX: L'utilisateur est offline → mettre en attente au lieu de drop silencieux
+              console.log(
+                `⏳ [STATUS] Utilisateur ${targetUser} offline → mise en attente ${streamType}`,
+              );
+              await this.addToPendingQueue(targetUser, message, streamType);
             }
           }
           // ✅ CAS BULK: isBulk présent avec participants
@@ -789,6 +942,89 @@ class MessageDeliveryService {
           console.log(`📊 Analytics event reçu: ${message.event}`);
           break;
 
+        // ✅ CAS 14 : ÉVÉNEMENTS APPELS
+        case "call":
+          if (message.conversationId) {
+            try {
+              const participants = message.participants
+                ? typeof message.participants === "string"
+                  ? JSON.parse(message.participants)
+                  : message.participants
+                : [];
+
+              const callEvent = {
+                messageId: message.messageId,
+                callId: message.callId,
+                conversationId: message.conversationId,
+                status: message.status,
+                userId: message.userId,
+                startedAt: message.startedAt || null,
+                endedAt: message.endedAt || null,
+                duration: message.duration ? Number(message.duration) : 0,
+                endReason: message.endReason || null,
+                timestamp: message.timestamp,
+              };
+
+              console.log(
+                `📞 Distribution call.status.updated (${message.status}) à ${participants.length} participant(s)`,
+              );
+
+              const excludeSocketId = message.senderSocketId || "";
+
+              for (const participantId of participants) {
+                const userIdStr = String(participantId);
+
+                // ✅ VÉRIFIER SI LE STREAM CALL EST ACTIF POUR CET UTILISATEUR
+                if (this.isStreamActiveForUser(userIdStr, "call")) {
+                  if (this.userSockets.has(userIdStr)) {
+                    const socketIds = this.userSockets.get(userIdStr);
+                    for (const socketId of socketIds) {
+                      // ✅ EXCLURE LE SOCKET SPÉCIFIQUE DE L'ÉMETTEUR (multi-device)
+                      if (excludeSocketId && socketId === excludeSocketId) {
+                        console.log(
+                          `⏭️ call:statusUpdated - socket émetteur exclu: ${socketId}`,
+                        );
+                        continue;
+                      }
+                      const targetSocket =
+                        this.io?.sockets?.sockets?.get(socketId);
+                      if (targetSocket) {
+                        targetSocket.emit("call:statusUpdated", callEvent);
+                        console.log(
+                          `📞 call:statusUpdated (${message.status}) livré à ${userIdStr}`,
+                        );
+                      }
+                    }
+                  } else {
+                    console.log(
+                      `⏳ Participant ${userIdStr} déconnecté — événement appel en attente`,
+                    );
+                    await this.addToPendingQueue(
+                      userIdStr,
+                      { ...callEvent, event: "call:statusUpdated" },
+                      "call",
+                    );
+                  }
+                } else {
+                  console.log(
+                    `⏸️ Stream call pas encore actif pour ${userIdStr}, événement mis en attente`,
+                  );
+                  await this.addToPendingQueue(
+                    userIdStr,
+                    { ...callEvent, event: "call:statusUpdated" },
+                    "call",
+                  );
+                }
+              }
+            } catch (callErr) {
+              console.error(
+                "❌ Erreur distribution événement appel:",
+                callErr.message,
+              );
+            }
+          }
+          break;
+
         default:
           console.warn(`⚠️ Stream type inconnu: ${streamType}`);
       }
@@ -866,10 +1102,9 @@ class MessageDeliveryService {
         }
       } else {
         // ✅ CAS 2 : MESSAGE NORMAL - CHERCHER DANS userConversations
-        for (const [userId, socketIds] of this.userSockets.entries()) {
-          // ✅ IGNORER L'EXPÉDITEUR
-          if (userId === senderId) continue;
+        const senderSocketId = message.senderSocketId || null;
 
+        for (const [userId, socketIds] of this.userSockets.entries()) {
           // ✅ VÉRIFIER SI L'UTILISATEUR EST DANS LA CONVERSATION ET QUE LE STREAM EST ACTIF
           const userConversations = this.userConversations.get(userId) || [];
           if (
@@ -878,7 +1113,10 @@ class MessageDeliveryService {
           ) {
             targetParticipants.push(userId);
           } else if (userConversations.includes(conversationId)) {
-            await this.addToPendingQueue(userId, message, "message", "group");
+            // ✅ NE PAS METTRE EN QUEUE le sender (il a déjà l'ACK)
+            if (userId !== senderId) {
+              await this.addToPendingQueue(userId, message, "message", "group");
+            }
           }
         }
       }
@@ -916,9 +1154,6 @@ class MessageDeliveryService {
       let targetParticipants = [];
 
       for (const [userId, socketIds] of this.userSockets.entries()) {
-        // ✅ IGNORER L'EXPÉDITEUR
-        if (userId === senderId) continue;
-
         // ✅ VÉRIFIER SI L'UTILISATEUR EST DANS LA CONVERSATION ET QUE LE STREAM EST ACTIF
         const userConversations = this.userConversations.get(userId) || [];
         if (
@@ -927,7 +1162,10 @@ class MessageDeliveryService {
         ) {
           targetParticipants.push(userId);
         } else if (userConversations.includes(conversationId)) {
-          await this.addToPendingQueue(userId, message, "message", "channel");
+          // ✅ NE PAS METTRE EN QUEUE le sender (il a déjà l'ACK)
+          if (userId !== senderId) {
+            await this.addToPendingQueue(userId, message, "message", "channel");
+          }
         }
       }
 
@@ -948,32 +1186,7 @@ class MessageDeliveryService {
     }
   }
 
-  /**
-   * ✅ LIVRER UN ÉVÉNEMENT TYPING AUX PARTICIPANTS
-   */
-  async deliverTypingEventToConversationParticipants(message) {
-    try {
-      const conversationId = String(message.conversationId);
-      const senderId = String(message.senderId);
-
-      // ✅ LIVRER À TOUS LES PARTICIPANTS SAUF L'EXPÉDITEUR AVEC STREAM ACTIF
-      for (const [userId, socketIds] of this.userSockets.entries()) {
-        if (userId === senderId) continue;
-
-        const userConversations = this.userConversations.get(userId) || [];
-        if (
-          userConversations.includes(conversationId) &&
-          this.isStreamActiveForUser(userId, "typing")
-        ) {
-          await this.deliverTypingEvent(message, userId);
-        }
-      }
-
-      console.log(`⌨️ Typing event livré pour conversation: ${conversationId}`);
-    } catch (error) {
-      console.error("❌ Erreur livraison typing event:", error);
-    }
-  }
+  // deliverTypingEventToConversationParticipants retiré — géré par TypingIndicatorService
 
   /**
    * ✅ ROUTER LES MESSAGES SELON LE TYPE DE STREAM
@@ -1019,12 +1232,7 @@ class MessageDeliveryService {
         }
         break;
 
-      // ✅ CAS 3 : TYPING EVENTS
-      case "typing":
-        if (message.receiverId && String(message.receiverId) === userIdStr) {
-          await this.deliverTypingEvent(message, userIdStr);
-        }
-        break;
+      // typing retiré — géré par TypingIndicatorService
 
       // ✅ CAS 4-7 : MESSAGE STATUS
       case "statusDelivered":
@@ -1083,7 +1291,7 @@ class MessageDeliveryService {
   /**
    * ✅ LIVRER UN MESSAGE PRIVÉ
    */
-  async deliverPrivateMessage(message, userId) {
+  async deliverPrivateMessage(message, userId, excludeSocketId = null) {
     try {
       const socketIds = this.userSockets.get(userId);
 
@@ -1096,7 +1304,12 @@ class MessageDeliveryService {
       }
 
       // Envoyer à toutes les connexions de l'utilisateur
+      // (sauf le socket émetteur spécifique qui a déjà reçu l'ACK)
       for (const socketId of socketIds) {
+        if (excludeSocketId && socketId === excludeSocketId) {
+          continue;
+        }
+
         const socket = this.io.sockets.sockets.get(socketId);
         if (socket) {
           socket.emit("newMessage", {
@@ -1109,6 +1322,14 @@ class MessageDeliveryService {
             status: message.status || "SENT",
             timestamp: message.timestamp,
             metadata: message.metadata,
+            ...(message.replyTo ? { replyTo: message.replyTo } : {}),
+            ...(message.isForwarded
+              ? {
+                  isForwarded: true,
+                  forwardedFrom: message.forwardedFrom,
+                  originalSenderId: message.originalSenderId,
+                }
+              : {}),
           });
         }
       }
@@ -1127,6 +1348,8 @@ class MessageDeliveryService {
       const room = `conversation_${message.conversationId}`;
       const socketIds = this.userSockets.get(userId);
       const isSystemMessage = message.type === "SYSTEM";
+      const senderId = String(message.senderId || "");
+      const senderSocketId = message.senderSocketId || null;
 
       if (!socketIds || socketIds.length === 0) {
         return;
@@ -1144,10 +1367,24 @@ class MessageDeliveryService {
         status: message.status || "DELIVERED",
         timestamp: message.timestamp || message.createdAt,
         metadata: message.metadata,
+        ...(message.replyTo ? { replyTo: message.replyTo } : {}),
+        ...(message.isForwarded
+          ? {
+              isForwarded: true,
+              forwardedFrom: message.forwardedFrom,
+              originalSenderId: message.originalSenderId,
+            }
+          : {}),
       };
 
       // ✅ ENVOYER À TOUTES LES CONNEXIONS DE L'UTILISATEUR
+      // Pour le sender : exclure uniquement le socket émetteur (ses autres appareils reçoivent)
       for (const socketId of socketIds) {
+        // ✅ Exclure le socket émetteur spécifique (pas tous les sockets du sender)
+        if (userId === senderId && socketId === senderSocketId) {
+          continue;
+        }
+
         const socket = this.io.sockets.sockets.get(socketId);
         if (socket) {
           // ✅ CAS 1 : MESSAGE SYSTÈME - UTILISER EVENT 'newMessage' POUR UNIFORMITÉ
@@ -1170,32 +1407,7 @@ class MessageDeliveryService {
     }
   }
 
-  /**
-   * ✅ LIVRER UN ÉVÉNEMENT TYPING (ULTRA-RAPIDE)
-   */
-  async deliverTypingEvent(message, userId) {
-    try {
-      const socketIds = this.userSockets.get(userId);
-
-      if (!socketIds || socketIds.length === 0) {
-        return;
-      }
-
-      for (const socketId of socketIds) {
-        const socket = this.io.sockets.sockets.get(socketId);
-        if (socket) {
-          socket.emit("typing:event", {
-            conversationId: message.conversationId,
-            userId: message.senderId,
-            isTyping: message.event === "TYPING_STARTED",
-            timestamp: message.timestamp,
-          });
-        }
-      }
-    } catch (error) {
-      console.error("❌ Erreur deliverTypingEvent:", error);
-    }
-  }
+  // deliverTypingEvent retiré — géré par TypingIndicatorService
 
   /**
    * ✅ LIVRER UN STATUT DE MESSAGE
@@ -1244,6 +1456,12 @@ class MessageDeliveryService {
               status: message.status,
               participants: participants,
               timestamp: message.timestamp,
+              // ✅ Inclure le contenu pour EDITED (pour que les clients puissent mettre à jour l'UI)
+              ...(message.messageContent
+                ? { newContent: message.messageContent }
+                : {}),
+              // ✅ Inclure le type de suppression pour DELETED
+              ...(message.deleteType ? { deleteType: message.deleteType } : {}),
             };
 
       console.log(
@@ -1256,6 +1474,8 @@ class MessageDeliveryService {
       );
 
       // ✅ ENVOYER À CHAQUE PARTICIPANT (ONLINE OU EN ATTENTE)
+      const excludeSocketId = message.senderSocketId || "";
+
       for (const recipientId of recipientIds) {
         const recipientIdStr = String(recipientId);
         const socketIds = this.userSockets.get(recipientIdStr);
@@ -1266,6 +1486,13 @@ class MessageDeliveryService {
             `✅ Participant ${recipientIdStr} ONLINE - livraison immédiate`,
           );
           for (const socketId of socketIds) {
+            // ✅ EXCLURE LE SOCKET SPÉCIFIQUE DE L'ÉMETTEUR (multi-device)
+            if (excludeSocketId && socketId === excludeSocketId) {
+              console.log(
+                `⏭️ message:status - socket émetteur exclu: ${socketId}`,
+              );
+              continue;
+            }
             const socket = this.io.sockets.sockets.get(socketId);
             if (socket) {
               socket.emit("message:status", eventData);
@@ -1298,16 +1525,11 @@ class MessageDeliveryService {
             const pendingKey = `chat:stream:pending:messages:${recipientIdStr}:${statusStreamType}`;
 
             // ✅ AJOUTER EN FILE D'ATTENTE (Redis STREAM)
-            await this.redis.xAdd(
-              pendingKey,
-              "*",
-              "event",
-              JSON.stringify(eventData),
-              "streamType",
-              statusStreamType,
-              "addedAt",
-              new Date().toISOString(),
-            );
+            await this.redis.xAdd(pendingKey, "*", {
+              event: JSON.stringify(eventData),
+              streamType: statusStreamType,
+              addedAt: new Date().toISOString(),
+            });
 
             // ✅ DÉFINIR TTL DE 24H
             await this.redis.expire(pendingKey, 86400);
@@ -1334,6 +1556,8 @@ class MessageDeliveryService {
   async deliverChannelMessage(message, userId) {
     try {
       const socketIds = this.userSockets.get(userId);
+      const senderId = String(message.senderId || "");
+      const senderSocketId = message.senderSocketId || null;
 
       if (!socketIds || socketIds.length === 0) {
         return;
@@ -1353,7 +1577,12 @@ class MessageDeliveryService {
       };
 
       // ✅ ENVOYER À TOUTES LES CONNEXIONS DE L'UTILISATEUR
+      // Pour le sender : exclure uniquement le socket émetteur
       for (const socketId of socketIds) {
+        if (userId === senderId && socketId === senderSocketId) {
+          continue;
+        }
+
         const socket = this.io.sockets.sockets.get(socketId);
         if (socket) {
           socket.emit("message:channel", messageData);
@@ -1427,6 +1656,7 @@ class MessageDeliveryService {
   async deliverConversationCreatedEvent(message) {
     try {
       const conversationId = String(message.conversationId);
+      const excludeSocketId = message.senderSocketId || "";
 
       // ✅ RÉCUPÉRER TOUS LES PARTICIPANTS DE LA CONVERSATION
       const allParticipants = JSON.parse(message.participants) || [];
@@ -1455,7 +1685,11 @@ class MessageDeliveryService {
 
         if (isConnected && isStreamActive) {
           // ✅ UTILISATEUR CONNECTÉ - LIVRAISON IMMÉDIATE
-          await this.deliverConversationCreated(message, userId);
+          await this.deliverConversationCreated(
+            message,
+            userId,
+            excludeSocketId,
+          );
         } else {
           // ✅ UTILISATEUR DÉCONNECTÉ OU STREAM PAS ACTIF - STOCKAGE EN ATTENTE
           console.log(
@@ -1479,6 +1713,7 @@ class MessageDeliveryService {
   async deliverConversationUpdatedEvent(message) {
     try {
       const conversationId = String(message.conversationId);
+      const excludeSocketId = message.senderSocketId || "";
 
       // ✅ RÉCUPÉRER TOUS LES PARTICIPANTS DE LA CONVERSATION
       const allParticipants =
@@ -1496,7 +1731,11 @@ class MessageDeliveryService {
           this.isStreamActiveForUser(userId, "conversationUpdated")
         ) {
           // ✅ UTILISATEUR CONNECTÉ - LIVRAISON IMMÉDIATE
-          await this.deliverConversationUpdated(message, userId);
+          await this.deliverConversationUpdated(
+            message,
+            userId,
+            excludeSocketId,
+          );
         } else {
           // ✅ UTILISATEUR DÉCONNECTÉ - STOCKAGE EN ATTENTE
           console.log(
@@ -1524,6 +1763,7 @@ class MessageDeliveryService {
     try {
       const conversationId = String(message.conversationId);
       const newParticipantId = String(message.participantId);
+      const excludeSocketId = message.senderSocketId || "";
 
       // ✅ RÉCUPÉRER LES PARTICIPANTS DEPUIS LE MESSAGE OU DEPUIS LE CACHE
       let allParticipants = [];
@@ -1579,7 +1819,7 @@ class MessageDeliveryService {
           this.isStreamActiveForUser(userId, "participantAdded")
         ) {
           // ✅ UTILISATEUR CONNECTÉ - LIVRAISON IMMÉDIATE
-          await this.deliverParticipantAdded(message, userId);
+          await this.deliverParticipantAdded(message, userId, excludeSocketId);
         } else {
           // ✅ UTILISATEUR DÉCONNECTÉ - STOCKAGE EN ATTENTE
           console.log(
@@ -1604,6 +1844,7 @@ class MessageDeliveryService {
     try {
       const conversationId = String(message.conversationId);
       const removedParticipantId = String(message.participantId);
+      const excludeSocketId = message.senderSocketId || "";
 
       // ✅ RÉCUPÉRER LES PARTICIPANTS DEPUIS LE MESSAGE OU DEPUIS LE CACHE
       let allParticipants = [];
@@ -1667,7 +1908,11 @@ class MessageDeliveryService {
           this.isStreamActiveForUser(userId, "participantRemoved")
         ) {
           // ✅ UTILISATEUR CONNECTÉ - LIVRAISON IMMÉDIATE
-          await this.deliverParticipantRemoved(message, userId);
+          await this.deliverParticipantRemoved(
+            message,
+            userId,
+            excludeSocketId,
+          );
         } else {
           // ✅ UTILISATEUR DÉCONNECTÉ - STOCKAGE EN ATTENTE
           console.log(
@@ -1732,7 +1977,7 @@ class MessageDeliveryService {
   /**
    * ✅ LIVRER ÉVÉNEMENT CONVERSATION CRÉÉE À UN UTILISATEUR
    */
-  async deliverConversationCreated(message, userId) {
+  async deliverConversationCreated(message, userId, excludeSocketId = "") {
     try {
       const socketIds = this.userSockets.get(userId);
 
@@ -1741,10 +1986,18 @@ class MessageDeliveryService {
       }
 
       for (const socketId of socketIds) {
+        // ✅ EXCLURE LE SOCKET SPÉCIFIQUE DE L'ÉMETTEUR (multi-device)
+        if (excludeSocketId && socketId === excludeSocketId) {
+          console.log(
+            `⏭️ conversation:created - socket émetteur exclu: ${socketId}`,
+          );
+          continue;
+        }
         const socket = this.io.sockets.sockets.get(socketId);
         if (socket) {
           socket.emit("conversation:created", {
             conversationId: message.conversationId,
+            conversation: message.conversation,
             name: message.name,
             type: message.type,
             createdBy: message.createdBy,
@@ -1763,7 +2016,7 @@ class MessageDeliveryService {
   /**
    * ✅ LIVRER ÉVÉNEMENT CONVERSATION MISE À JOUR À UN UTILISATEUR
    */
-  async deliverConversationUpdated(message, userId) {
+  async deliverConversationUpdated(message, userId, excludeSocketId = "") {
     try {
       const socketIds = this.userSockets.get(userId);
 
@@ -1772,6 +2025,13 @@ class MessageDeliveryService {
       }
 
       for (const socketId of socketIds) {
+        // ✅ EXCLURE LE SOCKET SPÉCIFIQUE DE L'ÉMETTEUR (multi-device)
+        if (excludeSocketId && socketId === excludeSocketId) {
+          console.log(
+            `⏭️ conversation:updated - socket émetteur exclu: ${socketId}`,
+          );
+          continue;
+        }
         const socket = this.io.sockets.sockets.get(socketId);
         if (socket) {
           socket.emit("conversation:updated", {
@@ -1793,7 +2053,7 @@ class MessageDeliveryService {
   /**
    * ✅ LIVRER ÉVÉNEMENT PARTICIPANT AJOUTÉ À UN UTILISATEUR
    */
-  async deliverParticipantAdded(message, userId) {
+  async deliverParticipantAdded(message, userId, excludeSocketId = "") {
     try {
       const socketIds = this.userSockets.get(userId);
 
@@ -1801,13 +2061,38 @@ class MessageDeliveryService {
         return;
       }
 
+      // Préparer la conversation complète si fournie dans le message
+      let conversationPayload = null;
+      if (message.conversation) {
+        try {
+          conversationPayload =
+            typeof message.conversation === "string"
+              ? JSON.parse(message.conversation)
+              : message.conversation;
+        } catch (err) {
+          console.warn(
+            "⚠️ Erreur parsing conversation dans participantAdded:",
+            err.message,
+          );
+          conversationPayload = null;
+        }
+      }
+
       for (const socketId of socketIds) {
+        // ✅ EXCLURE LE SOCKET SPÉCIFIQUE DE L'ÉMETTEUR (multi-device)
+        if (excludeSocketId && socketId === excludeSocketId) {
+          console.log(
+            `⏭️ conversation:participant:added - socket émetteur exclu: ${socketId}`,
+          );
+          continue;
+        }
         const socket = this.io.sockets.sockets.get(socketId);
         if (socket) {
           socket.emit("conversation:participant:added", {
             conversationId: message.conversationId,
-            participantId: message.participantId,
+            conversation: conversationPayload,
             participantName: message.participantName,
+            participantId: message.participantId,
             addedBy: message.addedBy,
             timestamp: message.timestamp,
           });
@@ -1823,7 +2108,7 @@ class MessageDeliveryService {
   /**
    * ✅ LIVRER ÉVÉNEMENT PARTICIPANT RETIRÉ À UN UTILISATEUR
    */
-  async deliverParticipantRemoved(message, userId) {
+  async deliverParticipantRemoved(message, userId, excludeSocketId = "") {
     try {
       const socketIds = this.userSockets.get(userId);
 
@@ -1832,6 +2117,13 @@ class MessageDeliveryService {
       }
 
       for (const socketId of socketIds) {
+        // ✅ EXCLURE LE SOCKET SPÉCIFIQUE DE L'ÉMETTEUR (multi-device)
+        if (excludeSocketId && socketId === excludeSocketId) {
+          console.log(
+            `⏭️ conversation:participant:removed - socket émetteur exclu: ${socketId}`,
+          );
+          continue;
+        }
         const socket = this.io.sockets.sockets.get(socketId);
         if (socket) {
           socket.emit("conversation:participant:removed", {
@@ -1911,30 +2203,50 @@ class MessageDeliveryService {
 
   /**
    * ✅ LIVRER UN ÉVÉNEMENT RÉACTION
+   * Filtré par participants de la conversation + exclusion senderSocketId
    */
   async deliverReactionEvent(message) {
     try {
       const messageId = String(message.messageId);
+      const conversationId = String(message.conversationId || "");
+      const senderSocketId = message.senderSocketId || null;
+      const senderId = String(message.userId || "");
+      let deliveredCount = 0;
 
-      // ✅ LIVRER À TOUS LES UTILISATEURS CONNECTÉS (broadcast)
+      // ✅ LIVRER UNIQUEMENT AUX PARTICIPANTS DE LA CONVERSATION
       for (const [userId, socketIds] of this.userSockets.entries()) {
         if (!socketIds || socketIds.length === 0) continue;
 
+        // ✅ FILTRER : ne livrer qu'aux utilisateurs de cette conversation
+        if (conversationId) {
+          const userConversations = this.userConversations.get(userId) || [];
+          if (!userConversations.includes(conversationId)) continue;
+        }
+
         for (const socketId of socketIds) {
+          // ✅ EXCLURE le socket émetteur (ses autres appareils reçoivent)
+          if (userId === senderId && socketId === senderSocketId) {
+            continue;
+          }
+
           const socket = this.io.sockets.sockets.get(socketId);
           if (socket) {
             socket.emit("message:reaction", {
               messageId: message.messageId,
+              conversationId,
               userId: message.userId,
               reaction: message.reaction,
               action: message.action, // "add" ou "remove"
               timestamp: message.timestamp,
             });
+            deliveredCount++;
           }
         }
       }
 
-      console.log(`😀 Réaction livrée pour message: ${messageId}`);
+      console.log(
+        `😀 Réaction livrée pour message: ${messageId} → ${deliveredCount} socket(s) (conv: ${conversationId})`,
+      );
     } catch (error) {
       console.error("❌ Erreur livraison réaction:", error);
     }
@@ -1942,30 +2254,50 @@ class MessageDeliveryService {
 
   /**
    * ✅ LIVRER UN ÉVÉNEMENT RÉPONSE
+   * Filtré par participants de la conversation + exclusion senderSocketId
    */
   async deliverReplyEvent(message) {
     try {
       const messageId = String(message.messageId);
+      const conversationId = String(message.conversationId || "");
+      const senderSocketId = message.senderSocketId || null;
+      const senderId = String(message.userId || "");
+      let deliveredCount = 0;
 
-      // ✅ LIVRER À TOUS LES UTILISATEURS CONNECTÉS (broadcast)
+      // ✅ LIVRER UNIQUEMENT AUX PARTICIPANTS DE LA CONVERSATION
       for (const [userId, socketIds] of this.userSockets.entries()) {
         if (!socketIds || socketIds.length === 0) continue;
 
+        // ✅ FILTRER : ne livrer qu'aux utilisateurs de cette conversation
+        if (conversationId) {
+          const userConversations = this.userConversations.get(userId) || [];
+          if (!userConversations.includes(conversationId)) continue;
+        }
+
         for (const socketId of socketIds) {
+          // ✅ EXCLURE le socket émetteur (ses autres appareils reçoivent)
+          if (userId === senderId && socketId === senderSocketId) {
+            continue;
+          }
+
           const socket = this.io.sockets.sockets.get(socketId);
           if (socket) {
             socket.emit("message:reply", {
               messageId: message.messageId,
               replyId: message.replyId,
+              conversationId,
               userId: message.userId,
               content: message.content,
               timestamp: message.timestamp,
             });
+            deliveredCount++;
           }
         }
       }
 
-      console.log(`💬 Réponse livrée pour message: ${messageId}`);
+      console.log(
+        `💬 Réponse livrée pour message: ${messageId} → ${deliveredCount} socket(s) (conv: ${conversationId})`,
+      );
     } catch (error) {
       console.error("❌ Erreur livraison réponse:", error);
     }
@@ -2130,6 +2462,41 @@ class MessageDeliveryService {
     } catch (error) {
       console.error("❌ Erreur unregisterUserSocket:", error);
       return false;
+    }
+  }
+
+  /**
+   * ✅ AJOUTER UNE CONVERSATION À LA LISTE D'UN UTILISATEUR CONNECTÉ
+   * Appelé quand l'utilisateur rejoint une conversation après la connexion initiale
+   */
+  addUserConversation(userId, conversationId) {
+    const userIdStr = String(userId);
+    const convIdStr = String(conversationId);
+    const conversations = this.userConversations.get(userIdStr) || [];
+    if (!conversations.includes(convIdStr)) {
+      conversations.push(convIdStr);
+      this.userConversations.set(userIdStr, conversations);
+      console.log(
+        `✅ [MDS] Conversation ${convIdStr} ajoutée pour ${userIdStr} (total: ${conversations.length})`,
+      );
+    }
+  }
+
+  /**
+   * ✅ RETIRER UNE CONVERSATION DE LA LISTE D'UN UTILISATEUR CONNECTÉ
+   * Appelé quand l'utilisateur quitte une conversation
+   */
+  removeUserConversation(userId, conversationId) {
+    const userIdStr = String(userId);
+    const convIdStr = String(conversationId);
+    const conversations = this.userConversations.get(userIdStr) || [];
+    const index = conversations.indexOf(convIdStr);
+    if (index > -1) {
+      conversations.splice(index, 1);
+      this.userConversations.set(userIdStr, conversations);
+      console.log(
+        `✅ [MDS] Conversation ${convIdStr} retirée pour ${userIdStr} (total: ${conversations.length})`,
+      );
     }
   }
 
@@ -2390,6 +2757,14 @@ class MessageDeliveryService {
           }
           break;
 
+        case "statusDelivered":
+        case "statusRead":
+        case "statusEdited":
+        case "statusDeleted":
+          // ✅ LIVRER STATUT DE MESSAGE EN ATTENTE
+          await this.deliverMessageStatus(event, userId);
+          break;
+
         case "conversationCreated":
           // ✅ LIVRER ÉVÉNEMENT CONVERSATION CRÉÉE EN ATTENTE
           await this.deliverConversationCreated(event, userId);
@@ -2474,6 +2849,24 @@ class MessageDeliveryService {
             participants: eventData.participants,
             senderName: eventData.senderName,
             subType: eventData.subType,
+          });
+          break;
+
+        case "statusDelivered":
+        case "statusRead":
+        case "statusEdited":
+        case "statusDeleted":
+          // ✅ STRUCTURE POUR LES STATUTS DE MESSAGE
+          eventJson = JSON.stringify({
+            eventType,
+            messageId: eventData.messageId,
+            conversationId: eventData.conversationId,
+            userId: eventData.userId,
+            status: eventData.status,
+            timestamp: eventData.timestamp,
+            isBulk: eventData.isBulk,
+            participants: eventData.participants,
+            messageCount: eventData.messageCount,
           });
           break;
 
@@ -2854,6 +3247,18 @@ class MessageDeliveryService {
       console.log("🛑 Arrêt MessageDeliveryService...");
 
       this.isRunning = false;
+
+      // ✅ Nettoyer le timer de déduplication
+      if (this._dedupCleanupInterval) {
+        clearInterval(this._dedupCleanupInterval);
+        this._dedupCleanupInterval = null;
+      }
+      if (this._deliveredStatusCache) {
+        this._deliveredStatusCache.clear();
+      }
+      if (this._statusDeliveryQueues) {
+        this._statusDeliveryQueues.clear();
+      }
 
       // Arrêter tous les workers
       for (const [partitionKey, partition] of this.workers.entries()) {

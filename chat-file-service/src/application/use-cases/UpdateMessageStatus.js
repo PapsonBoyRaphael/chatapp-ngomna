@@ -39,17 +39,21 @@ class UpdateMessageStatus {
 
       result = await updatePromise;
 
-      // Si le statut est "READ", réinitialiser le compteur de messages non lus
-      if (status === "READ") {
+      // Si le statut est "READ", décrémenter le compteur de messages non lus
+      if (status === "READ" && result && result.modifiedCount > 0) {
         try {
-          await this.conversationRepository.resetUnreadCountInUserMetadata(
+          const readCount = result.modifiedCount || 1;
+          await this.conversationRepository.decrementUnreadCountInUserMetadata(
             conversationId,
             receiverId,
+            readCount,
           );
-          console.log(`✅ Compteur non-lus réinitialisé pour ${receiverId}`);
+          console.log(
+            `✅ Compteur non-lus décrémenté de ${readCount} pour ${receiverId}`,
+          );
         } catch (error) {
-          console.error(`❌ Erreur réinitialisation compteur:`, error);
-          // Ne pas faire échouer la mise à jour du statut si la réinitialisation échoue
+          console.error(`❌ Erreur décrémentation compteur:`, error);
+          // Ne pas faire échouer la mise à jour du statut si la décrémentation échoue
         }
       }
 

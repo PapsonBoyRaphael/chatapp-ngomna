@@ -123,6 +123,12 @@ function setupSocketEvents() {
       `✅ Authentifié: ${data.matricule} (${data.userId})`,
       "success",
     );
+    // Auto-enregistrement de la clé E2EE après authentification
+    console.log("📋 Appel de autoRegisterE2EEKey()...");
+    autoRegisterE2EEKey().catch((err) => {
+      console.error("❌ Erreur dans autoRegisterE2EEKey:", err);
+      log(`❌ Erreur E2EE auto-register: ${err.message}`, "error");
+    });
   });
 
   socket.on("auth_error", (data) => {
@@ -141,11 +147,30 @@ function setupSocketEvents() {
 
   socket.on("newMessage", (data) => {
     log("💬 Nouveau message reçu", "info", data);
-    addReceivedMessage("message", "💬 Nouveau Message", data, {
+
+    // ✅ MARQUER AUTOMATIQUEMENT LE MESSAGE COMME LIVRÉ
+    if (data.messageId && data.conversationId) {
+      marquerCommeDelivered(data.messageId, data.conversationId);
+    }
+
+    const title = data.isForwarded
+      ? "↪️📤 Message Transféré Reçu"
+      : "💬 Nouveau Message";
+
+    const displayData = {
       sender: data.senderName || data.senderId,
       content: data.content,
       conversation: data.conversationId,
-    });
+      status: data.status || "SENT",
+    };
+
+    if (data.isForwarded) {
+      displayData.isForwarded = true;
+      displayData.forwardedFrom = data.forwardedFrom || "N/A";
+      displayData.originalSenderId = data.originalSenderId || "N/A";
+    }
+
+    addReceivedMessage("message", title, data, displayData);
   });
 
   socket.on("message_sent", (data) => {
@@ -247,6 +272,76 @@ function setupSocketEvents() {
   });
 
   // ========================================
+  // ÉVÉNEMENTS MESSAGE:GROUP (Messages de groupe)
+  // ========================================
+
+  socket.on("message:group", (data) => {
+    log("📬 Message groupe reçu", "info", data);
+
+    // ✅ MARQUER AUTOMATIQUEMENT LE MESSAGE COMME LIVRÉ
+    if (data.messageId && data.conversationId) {
+      marquerCommeDelivered(data.messageId, data.conversationId);
+    }
+
+    addReceivedMessage("message", "📬 Message Groupe", data, {
+      sender: data.senderName || data.senderId,
+      content: data.content,
+      conversation: data.conversationId,
+      status: data.status || "SENT",
+    });
+  });
+
+  // ========================================
+  // ÉVÉNEMENTS MESSAGES QUICK/FULL LOAD
+  // ========================================
+
+  socket.on("messages:quick", (data) => {
+    log("⚡ Messages Quick Load reçus", "info", data);
+    displayMessages(data);
+  });
+
+  socket.on("messages:full", (data) => {
+    log("📚 Messages Full Load reçus", "info", data);
+    displayMessages(data);
+
+    // ✅ MARQUER TOUS LES MESSAGES COMME LUS
+    if (data.messages && Array.isArray(data.messages)) {
+      data.messages.forEach((msg) => {
+        if (msg._id && data.conversationId) {
+          marquerCommeRead(msg._id, data.conversationId);
+        }
+      });
+    }
+  });
+
+  // ========================================
+  // ÉVÉNEMENTS DE FRAPPE REÇUS (broadcast)
+  // ========================================
+
+  socket.on("user:typing", (data) => {
+    log("⌨️ Utilisateur en train de taper (broadcast)", "info", data);
+
+    if (data.userId && data.userId !== currentUser?.userId) {
+      typingUsers.set(data.userId, {
+        userId: data.userId,
+        userName: data.userName || data.matricule || data.userId,
+        conversationId: data.conversationId,
+        startedAt: new Date(),
+      });
+      updateTypingDisplay();
+    }
+  });
+
+  socket.on("user:stopTyping", (data) => {
+    log("⏹️ Utilisateur a arrêté de taper (broadcast)", "info", data);
+
+    if (data.userId) {
+      typingUsers.delete(data.userId);
+      updateTypingDisplay();
+    }
+  });
+
+  // ========================================
   // ÉVÉNEMENTS UTILISATEURS EN LIGNE
   // ========================================
 
@@ -295,6 +390,46 @@ function setupSocketEvents() {
     addReceivedMessage("message", "➖ Conversation Quittée", data, {
       conversation: data.conversationId,
     });
+  });
+
+  // ✅ ÉVÉNEMENTS DE MESSAGES CHARGÉS
+  socket.on("messagesLoaded", (data) => {
+    log("✅ Messages chargés", "success", data);
+    displayMessages(data);
+    addReceivedMessage("message", "✅ Messages Chargés", data, {
+      total: data.total || 0,
+      hasMore: data.hasMore || false,
+      processingTime: data.processingTime || "N/A",
+    });
+  });
+
+  socket.on("messages:quick", (data) => {
+    log("⚡ Quick load messages reçus", "success", data);
+    displayMessages(data);
+    addReceivedMessage("message", "⚡ Quick Load Messages", data, {
+      total: data.messages?.length || 0,
+      conversationId: data.conversationId,
+      fromCache: data.fromCache || false,
+    });
+  });
+
+  socket.on("messages:full", (data) => {
+    log("📚 Full load messages reçus", "success", data);
+    displayMessages(data);
+    addReceivedMessage("message", "📚 Full Load Messages", data, {
+      total: data.messages?.length || 0,
+      hasMore: data.hasMore || false,
+      conversationId: data.conversationId,
+    });
+  });
+
+  socket.on("messages:error", (error) => {
+    log("❌ Erreur récupération messages", "error", error);
+    addReceivedMessage("error", "❌ Erreur Messages", error, {
+      message: error.error || error.message,
+      code: error.code,
+    });
+    alert(`Erreur: ${error.error || error.message}`);
   });
 
   // ========================================
@@ -434,13 +569,25 @@ function setupSocketEvents() {
       }, 200); // Petit délai pour éviter les conflits
     }
 
-    // Traitement existant...
-    addReceivedMessage("message", "💬 Nouveau Message", data, {
+    const title = data.isForwarded
+      ? "↪️📤 Message Transféré Reçu"
+      : "💬 Nouveau Message";
+
+    const displayData = {
       sender: data.senderName || data.senderId,
       content: data.content,
       conversation: data.conversationId,
       requiresReceipt: data.requiresDeliveryReceipt,
-    });
+    };
+
+    if (data.isForwarded) {
+      displayData.isForwarded = true;
+      displayData.forwardedFrom = data.forwardedFrom || "N/A";
+      displayData.originalSenderId = data.originalSenderId || "N/A";
+    }
+
+    // Traitement existant...
+    addReceivedMessage("message", title, data, displayData);
   });
 
   // ✅ ÉVÉNEMENTS GROUPE
@@ -475,12 +622,41 @@ function setupSocketEvents() {
   // ✅ ÉVÉNEMENTS DIFFUSION
   socket.on("broadcast:created", (data) => {
     log("✅ Liste de diffusion créée", "success", data);
+
+    const broadcastId = data.broadcast?.id || data.conversationId;
+    const broadcastName = data.broadcast?.name;
+    const recipientCount = data.broadcast?.recipientCount;
+    const privateConvs =
+      data.broadcast?.broadcastMetadata?.privateConversations || [];
+
     addReceivedMessage("broadcast", "📢 Diffusion Créée", data, {
-      broadcastId: data.broadcast?.id,
-      broadcastName: data.broadcast?.name,
-      recipients: data.broadcast?.recipientCount,
+      broadcastId,
+      broadcastName,
+      recipients: recipientCount,
+      privateConvsLinked: privateConvs.length,
     });
-    alert(`Liste de diffusion "${data.broadcast?.name}" créée avec succès !`);
+
+    // ✅ Auto-remplir les champs pour les tests suivants
+    const convIdEl = document.getElementById("broadcastConversationId");
+    const fetchEl = document.getElementById("broadcastFetchConversationId");
+    const metaEl = document.getElementById("broadcastMetaConvId");
+    if (broadcastId) {
+      if (convIdEl) convIdEl.value = broadcastId;
+      if (fetchEl) fetchEl.value = broadcastId;
+      if (metaEl) metaEl.value = broadcastId;
+    }
+
+    const statusDiv = document.getElementById("createBroadcastStatus");
+    if (statusDiv) {
+      statusDiv.textContent = `✅ Diffusion "${broadcastName}" créée ! ${privateConvs.length} conv(s) privée(s) liée(s). ID: ${broadcastId}`;
+      statusDiv.className = "status success";
+    }
+
+    log(
+      `📢 broadcastMetadata: ${privateConvs.length} conv(s) privée(s)`,
+      "success",
+      privateConvs,
+    );
   });
 
   socket.on("broadcast:error", (data) => {
@@ -643,6 +819,42 @@ function setupSocketEvents() {
   // ✅ ÉVÉNEMENTS SUPPRESSION FICHIER
   // ========================================
 
+  // ========================================
+  // ✅ ÉVÉNEMENTS TRANSFERT MESSAGE
+  // ========================================
+
+  socket.on("forward:sent", (data) => {
+    log("📤 Message transféré avec succès", "success", data);
+    addReceivedMessage("message", "📤 Message Transféré", data, {
+      originalMessageId: data.originalMessageId,
+      forwardedCount: data.results ? data.results.length : 0,
+      results: data.results,
+    });
+    const statusDiv = document.getElementById("forwardMessageStatus");
+    if (statusDiv) {
+      const count = data.results ? data.results.length : 0;
+      statusDiv.textContent = `✅ Message transféré vers ${count} conversation(s)`;
+      statusDiv.className = "status success";
+    }
+  });
+
+  socket.on("forward:error", (data) => {
+    log("❌ Erreur transfert message", "error", data);
+    addReceivedMessage("error", "❌ Erreur Transfert", data, {
+      error: data.error,
+      code: data.code,
+    });
+    const statusDiv = document.getElementById("forwardMessageStatus");
+    if (statusDiv) {
+      statusDiv.textContent = `❌ ${data.error}`;
+      statusDiv.className = "status error";
+    }
+  });
+
+  // ========================================
+  // ✅ ÉVÉNEMENTS SUPPRESSION FICHIER (suite)
+  // ========================================
+
   socket.on("file:deleted", (data) => {
     log("🗑️ Fichier supprimé", "success", data);
     addReceivedMessage("message", "🗑️ Fichier Supprimé", data, {
@@ -722,6 +934,432 @@ function setupSocketEvents() {
     });
     alert(`Erreur: ${error.message || error.error}`);
   });
+
+  // ========================================
+  // ✅ ÉVÉNEMENTS PRÉSENCE (Utilisateurs en ligne par conversation)
+  // ========================================
+
+  socket.on("conversation_online_users", (data) => {
+    log("👥 Utilisateurs en ligne de la conversation", "success", data);
+    displayConversationOnlineUsers(data);
+    addReceivedMessage("user", "👥 Utilisateurs En Ligne", data, {
+      conversation: data.conversationId,
+      count: data.onlineUsers || 0,
+      total: data.totalUsers || 0,
+    });
+  });
+
+  socket.on("conversation_users:error", (error) => {
+    log("❌ Erreur récupération utilisateurs en ligne", "error", error);
+    addReceivedMessage("error", "❌ Erreur Utilisateurs En Ligne", error, {
+      error: error.error || error.message,
+      code: error.code,
+    });
+  });
+
+  socket.on("conversations_with_presence", (data) => {
+    log("👥 Conversations avec présence", "success", data);
+    addReceivedMessage("user", "👥 Conversations avec Présence", data, {
+      count: data.conversations?.length || 0,
+      userId: data.userId,
+    });
+  });
+
+  // ========================================
+  // ✅ ÉVÉNEMENTS APPELS (CALL / VIDEO_CALL)
+  // ========================================
+
+  socket.on("call:initiated", (data) => {
+    log("📞 Appel initié avec succès", "success", data);
+    addReceivedMessage("message", "📞 Appel Initié", data, {
+      callId: data.callId,
+      messageId: data.messageId,
+      callType: data.callType,
+      conversationId: data.conversationId,
+    });
+    // Auto-remplir les champs de gestion d'appel
+    document.getElementById("activeCallId").value = data.callId || "";
+    document.getElementById("activeCallMessageId").value = data.messageId || "";
+    document.getElementById("activeCallConversationId").value =
+      data.conversationId || "";
+    updateStatus(
+      "initiateCallStatus",
+      `✅ Appel ${data.callType} initié — CallID: ${data.callId}`,
+      "success",
+    );
+    addCallLogEntry(
+      "📞 INITIÉ",
+      data.callType,
+      data.callId,
+      data.conversationId,
+    );
+  });
+
+  socket.on("call:incoming", (data) => {
+    log("📲 Appel entrant !", "warning", data);
+    addReceivedMessage("message", "📲 Appel Entrant", data, {
+      callId: data.callId,
+      callType: data.callType,
+      caller: `${data.caller?.prenom || ""} ${data.caller?.nom || ""} (${data.caller?.matricule || data.caller?.userId})`,
+    });
+    // Auto-remplir les champs pour pouvoir répondre
+    document.getElementById("activeCallId").value = data.callId || "";
+    document.getElementById("activeCallMessageId").value = data.messageId || "";
+    document.getElementById("activeCallConversationId").value =
+      data.conversationId || "";
+    updateStatus(
+      "callActionStatus",
+      `📲 Appel entrant de ${data.caller?.matricule || data.caller?.userId} — ${data.callType}`,
+      "warning",
+    );
+    addCallLogEntry(
+      "📲 ENTRANT",
+      data.callType,
+      data.callId,
+      data.conversationId,
+      `de ${data.caller?.matricule || data.caller?.userId}`,
+    );
+  });
+
+  socket.on("call:answered", (data) => {
+    log("✅ Appel décroché", "success", data);
+    addReceivedMessage("message", "✅ Appel Décroché", data, {
+      callId: data.callId,
+      answeredBy: data.answeredByMatricule || data.answeredBy,
+    });
+    updateStatus(
+      "callActionStatus",
+      `✅ Appel décroché par ${data.answeredByMatricule || data.answeredBy}`,
+      "success",
+    );
+    addCallLogEntry(
+      "✅ DÉCROCHÉ",
+      null,
+      data.callId,
+      null,
+      `par ${data.answeredByMatricule || data.answeredBy}`,
+    );
+  });
+
+  socket.on("call:declined", (data) => {
+    log("❌ Appel refusé", "warning", data);
+    addReceivedMessage("message", "❌ Appel Refusé", data, {
+      callId: data.callId,
+      declinedBy: data.declinedByMatricule || data.declinedBy,
+    });
+    updateStatus(
+      "callActionStatus",
+      `❌ Appel refusé par ${data.declinedByMatricule || data.declinedBy}`,
+      "warning",
+    );
+    addCallLogEntry(
+      "❌ REFUSÉ",
+      null,
+      data.callId,
+      null,
+      `par ${data.declinedByMatricule || data.declinedBy}`,
+    );
+  });
+
+  socket.on("call:ended", (data) => {
+    log("📴 Appel terminé", "info", data);
+    addReceivedMessage("message", "📴 Appel Terminé", data, {
+      callId: data.callId,
+      endedBy: data.endedByMatricule || data.endedBy,
+      reason: data.reason,
+    });
+    updateStatus(
+      "callActionStatus",
+      `📴 Appel terminé par ${data.endedByMatricule || data.endedBy} — Raison: ${data.reason}`,
+      "info",
+    );
+    addCallLogEntry(
+      "📴 TERMINÉ",
+      null,
+      data.callId,
+      null,
+      `par ${data.endedByMatricule || data.endedBy} (${data.reason})`,
+    );
+  });
+
+  socket.on("call:missed", (data) => {
+    log("📵 Appel manqué", "warning", data);
+    addReceivedMessage("message", "📵 Appel Manqué", data, {
+      callId: data.callId,
+      missedBy: data.missedBy,
+    });
+    updateStatus(
+      "callActionStatus",
+      `📵 Appel manqué — CallID: ${data.callId}`,
+      "warning",
+    );
+    addCallLogEntry(
+      "📵 MANQUÉ",
+      null,
+      data.callId,
+      null,
+      `par ${data.missedBy}`,
+    );
+  });
+
+  // ✅ ÉVÉNEMENT STREAM : Mise à jour du statut d'appel (via Redis stream → MDS)
+  socket.on("call:statusUpdated", (data) => {
+    const statusLabels = {
+      ANSWERED: "✅ Décroché",
+      DECLINED: "❌ Refusé",
+      ENDED: "📴 Terminé",
+      MISSED: "📵 Manqué",
+      INITIATED: "📞 Initié",
+      RINGING: "🔔 Sonnerie",
+      CANCELLED: "🚫 Annulé",
+      FAILED: "💥 Échoué",
+      BUSY: "📳 Occupé",
+    };
+    const label = statusLabels[data.status] || `📞 ${data.status}`;
+    log(`📞 [Stream] Statut appel mis à jour: ${data.status}`, "info", data);
+    addReceivedMessage("message", `${label} (via Stream)`, data, {
+      callId: data.callId,
+      status: data.status,
+      conversationId: data.conversationId,
+      userId: data.userId,
+      duration: data.duration || 0,
+      endReason: data.endReason || "-",
+    });
+    updateStatus(
+      "callActionStatus",
+      `${label} — CallID: ${data.callId} (stream)`,
+      data.status === "ANSWERED" ? "success" : "info",
+    );
+    addCallLogEntry(
+      `${label} [STREAM]`,
+      null,
+      data.callId,
+      data.conversationId,
+      `par ${data.userId} | durée: ${data.duration || 0}s`,
+    );
+  });
+
+  socket.on("call:error", (data) => {
+    log("❌ Erreur appel", "error", data);
+    addReceivedMessage("error", "❌ Erreur Appel", data, {
+      error: data.error,
+      code: data.code,
+    });
+    updateStatus("initiateCallStatus", `❌ ${data.error}`, "error");
+    updateStatus(
+      "callActionStatus",
+      `❌ ${data.error} (${data.code})`,
+      "error",
+    );
+  });
+
+  // ========================================
+  // ÉVÉNEMENTS CHIFFREMENT E2EE
+  // ========================================
+
+  socket.on("encryption:keyRegistered", (data) => {
+    log("🔑 Clé publique enregistrée", "success", data);
+    updateStatus(
+      "e2eeRegisterStatus",
+      `✅ Clé enregistrée — version: ${data.keyVersion} | fingerprint: ${data.fingerprint?.slice(0, 16)}…`,
+      "success",
+    );
+    document.getElementById("e2eeFingerprint").textContent =
+      data.fingerprint || "—";
+    document.getElementById("e2eeKeyVersion").textContent =
+      data.keyVersion || "—";
+    addReceivedMessage("e2ee", "🔑 Clé E2EE Enregistrée", data, {
+      keyVersion: data.keyVersion,
+      fingerprint: data.fingerprint,
+    });
+  });
+
+  socket.on("encryption:publicKey", (data) => {
+    log("📤 Clé publique reçue", "info", data);
+    updateStatus(
+      "e2eeGetKeyStatus",
+      `✅ Clé reçue — fingerprint: ${data.fingerprint?.slice(0, 16)}…`,
+      "success",
+    );
+    document.getElementById("e2eeRecipientKeyDisplay").textContent =
+      data.publicKey ? data.publicKey.slice(0, 80) + "…" : "N/A";
+    addReceivedMessage("e2ee", "📤 Clé Publique Reçue", data, {
+      userId: data.userId,
+      fingerprint: data.fingerprint,
+      keyVersion: data.keyVersion,
+    });
+  });
+
+  socket.on("encryption:config", (data) => {
+    log("⚙️ Config chiffrement", "info", data);
+    updateStatus(
+      "e2eeConfigStatus",
+      `Mode actif: ${data.mode} | E2EE: ${data.isE2EEEnabled ? "✅" : "❌"}`,
+      "info",
+    );
+    document.getElementById("e2eeCurrentMode").textContent = data.mode || "—";
+    addReceivedMessage("e2ee", "⚙️ Config E2EE", data, data);
+  });
+
+  socket.on("encryption:modeChanged", (data) => {
+    log("🔄 Mode chiffrement changé", "warning", data);
+    updateStatus(
+      "e2eeSwitchStatus",
+      `✅ Mode changé → ${data.newMode}`,
+      "success",
+    );
+    document.getElementById("e2eeCurrentMode").textContent =
+      data.newMode || "—";
+    addReceivedMessage("e2ee", "🔄 Mode E2EE Changé", data, {
+      previousMode: data.previousMode,
+      newMode: data.newMode,
+      changedBy: data.changedBy,
+    });
+  });
+
+  socket.on("encryption:keyRevoked", (data) => {
+    log("🚫 Clé révoquée", "warning", data);
+    updateStatus(
+      "e2eeRevokeStatus",
+      `✅ Clé révoquée pour userId: ${data.userId}`,
+      "success",
+    );
+    document.getElementById("e2eeFingerprint").textContent = "—";
+    document.getElementById("e2eeKeyVersion").textContent = "—";
+    addReceivedMessage("e2ee", "🚫 Clé E2EE Révoquée", data, data);
+  });
+
+  socket.on("encryption:error", (data) => {
+    log("❌ Erreur chiffrement", "error", data);
+    const msg = data.message || data.error || JSON.stringify(data);
+    [
+      "e2eeRegisterStatus",
+      "e2eeGetKeyStatus",
+      "e2eeConfigStatus",
+      "e2eeSwitchStatus",
+      "e2eeRevokeStatus",
+    ].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) updateStatus(id, `❌ ${msg}`, "error");
+    });
+    addReceivedMessage("error", "❌ Erreur E2EE", data, { error: msg });
+  });
+
+  // ========================================
+  // 📂 ÉVÉNEMENTS ARCHIVAGE
+  // ========================================
+
+  socket.on("conversation:archived", (data) => {
+    updateStatus(
+      "archiveStatus",
+      `✅ Archivée: ${data.conversationId}${data.alreadyArchived ? " (déjà archivée)" : ""}`,
+      "success",
+    );
+    addReceivedMessage("archive", "📥 Conversation Archivée", data, data);
+    log(`📂 Conversation archivée: ${data.conversationId}`, "success");
+  });
+
+  socket.on("conversation:unarchived", (data) => {
+    updateStatus(
+      "archiveStatus",
+      `✅ Désarchivée: ${data.conversationId}${data.alreadyUnarchived ? " (déjà active)" : ""}`,
+      "success",
+    );
+    addReceivedMessage("archive", "📤 Conversation Désarchivée", data, data);
+    log(`📂 Conversation désarchivée: ${data.conversationId}`, "success");
+  });
+
+  socket.on("conversation:archivedList", (data) => {
+    const count = data.conversations?.length || 0;
+    updateStatus(
+      "archivedListStatus",
+      `✅ ${count} conversation(s) archivée(s) — total: ${data.totalCount || 0}`,
+      "success",
+    );
+    const container = document.getElementById("archivedConvList");
+    if (container) {
+      if (count === 0) {
+        container.innerHTML =
+          '<em style="color:#888">Aucune conversation archivée</em>';
+      } else {
+        container.innerHTML = data.conversations
+          .map(
+            (c) =>
+              `<div style="padding:4px 0; border-bottom:1px solid #333">
+            <strong>${c.name || c.id || c._id}</strong>
+            <span style="color:#888; margin-left:8px">[${c.type || "?"}]</span>
+            ${c.archivedAt ? `<span style="color:#f59e0b; margin-left:8px">📅 ${new Date(c.archivedAt).toLocaleDateString()}</span>` : ""}
+          </div>`,
+          )
+          .join("");
+      }
+    }
+    addReceivedMessage("archive", "📂 Liste Archivées", data, {
+      count,
+      totalCount: data.totalCount,
+    });
+  });
+
+  socket.on("conversation:archiveError", (data) => {
+    const msg = data.message || JSON.stringify(data);
+    updateStatus("archiveStatus", `❌ ${msg}`, "error");
+    updateStatus("archivedListStatus", `❌ ${msg}`, "error");
+    addReceivedMessage("error", "❌ Erreur Archivage", data, { error: msg });
+    log(`❌ Erreur archivage: ${msg}`, "error");
+  });
+}
+
+// ========================================
+// FONCTIONS ARCHIVAGE
+// ========================================
+
+function archiveConversation() {
+  const conversationId = document
+    .getElementById("archiveConvId")
+    ?.value?.trim();
+  if (!conversationId) {
+    updateStatus("archiveStatus", "❌ conversationId requis", "error");
+    return;
+  }
+  if (!socket || !isAuthenticated) {
+    updateStatus("archiveStatus", "❌ Non authentifié", "error");
+    return;
+  }
+  updateStatus("archiveStatus", "⏳ Archivage en cours...", "info");
+  socket.emit("conversation:archive", { conversationId });
+  log(`📤 Émission conversation:archive pour ${conversationId}`, "info");
+}
+
+function unarchiveConversation() {
+  const conversationId = document
+    .getElementById("archiveConvId")
+    ?.value?.trim();
+  if (!conversationId) {
+    updateStatus("archiveStatus", "❌ conversationId requis", "error");
+    return;
+  }
+  if (!socket || !isAuthenticated) {
+    updateStatus("archiveStatus", "❌ Non authentifié", "error");
+    return;
+  }
+  updateStatus("archiveStatus", "⏳ Désarchivage en cours...", "info");
+  socket.emit("conversation:unarchive", { conversationId });
+  log(`📤 Émission conversation:unarchive pour ${conversationId}`, "info");
+}
+
+function getArchivedConversations() {
+  if (!socket || !isAuthenticated) {
+    updateStatus("archivedListStatus", "❌ Non authentifié", "error");
+    return;
+  }
+  const page = parseInt(document.getElementById("archivedPage")?.value) || 1;
+  const limit = parseInt(document.getElementById("archivedLimit")?.value) || 20;
+  updateStatus("archivedListStatus", "⏳ Chargement...", "info");
+  socket.emit("conversation:getArchived", { page, limit });
+  log(
+    `📤 Émission conversation:getArchived (page=${page}, limit=${limit})`,
+    "info",
+  );
 }
 
 // ========================================
@@ -772,40 +1410,198 @@ function createGroup() {
 
 function createBroadcast() {
   const name = document.getElementById("broadcastName")?.value?.trim();
-  const receiverIds = document
-    .getElementById("groupReceiverIds")
-    ?.value?.trim();
+  const receiverIdsStr =
+    document.getElementById("broadcastRecipientIds")?.value?.trim() ||
+    document.getElementById("groupReceiverIds")?.value?.trim();
   const broadcastId =
     document.getElementById("broadcastId")?.value?.trim() || undefined;
+  const statusDiv = document.getElementById("createBroadcastStatus");
+
+  const setStatus = (msg, type) => {
+    if (statusDiv) {
+      statusDiv.textContent = msg;
+      statusDiv.className = `status ${type}`;
+    }
+  };
 
   if (!name) {
-    alert("Veuillez saisir un nom de diffusion");
+    setStatus("❌ Nom de diffusion requis", "error");
+    return;
+  }
+  if (!receiverIdsStr) {
+    setStatus("❌ IDs destinataires requis", "error");
     return;
   }
 
-  if (!receiverIds) {
-    alert("Veuillez saisir les IDs des destinataires (séparés par virgule)");
-    return;
-  }
-
-  const recipients = receiverIds
+  const recipients = receiverIdsStr
     .split(",")
     .map((id) => id.trim())
     .filter((id) => id);
 
   if (recipients.length === 0) {
-    alert("Aucun destinataire valide");
+    setStatus("❌ Aucun destinataire valide", "error");
     return;
   }
 
-  const data = {
-    name,
-    recipients,
-    broadcastId,
-  };
-
+  const data = { name, recipients, broadcastId };
+  setStatus(
+    `⏳ Création de la diffusion (${recipients.length} destinataires)…`,
+    "info",
+  );
   log("📤 Émission createBroadcast", "info", data);
   socket.emit("createBroadcast", data);
+}
+
+// ========================================
+// ✅ FONCTIONS BROADCAST
+// ========================================
+
+function generateBroadcastId() {
+  const id = generateMongoObjectId();
+  const el = document.getElementById("broadcastId");
+  if (el) el.value = id;
+  log(`🔧 ID diffusion généré: ${id}`, "info");
+}
+
+function sendBroadcastMessage() {
+  if (!socket || !socket.connected) {
+    log("❌ Socket non connecté", "error");
+    return;
+  }
+
+  const conversationId = document
+    .getElementById("broadcastConversationId")
+    ?.value?.trim();
+  const content = document
+    .getElementById("broadcastMessageContent")
+    ?.value?.trim();
+  const type = document.getElementById("broadcastMessageType")?.value || "TEXT";
+  const statusDiv = document.getElementById("sendBroadcastStatus");
+
+  const setStatus = (msg, cls) => {
+    if (statusDiv) {
+      statusDiv.textContent = msg;
+      statusDiv.className = `status ${cls}`;
+    }
+  };
+
+  if (!conversationId) {
+    setStatus("❌ ID conversation broadcast requis", "error");
+    return;
+  }
+  if (!content && type === "TEXT") {
+    setStatus("❌ Contenu requis pour un message TEXT", "error");
+    return;
+  }
+
+  const payload = {
+    conversationId,
+    content,
+    type,
+    senderId: currentUser?.userId,
+  };
+
+  setStatus("⏳ Envoi en cours…", "info");
+  log("📤 Envoi message broadcast", "info", payload);
+  socket.emit("sendMessage", payload, (ack) => {
+    if (ack?.success) {
+      setStatus(
+        `✅ Message envoyé (id: ${ack.data?.messageId || "?"})`,
+        "success",
+      );
+      log("✅ Broadcast message envoyé", "success", ack.data);
+    } else {
+      setStatus(`❌ ${ack?.message || "Erreur"}`, "error");
+      log("❌ Erreur envoi broadcast", "error", ack);
+    }
+  });
+}
+
+async function fetchBroadcastMessages() {
+  const conversationId = document
+    .getElementById("broadcastFetchConversationId")
+    ?.value?.trim();
+  const limit = document.getElementById("broadcastFetchLimit")?.value || 20;
+  const statusDiv = document.getElementById("fetchBroadcastStatus");
+  const outputEl = document.getElementById("broadcastMessagesOutput");
+
+  const setStatus = (msg, cls) => {
+    if (statusDiv) {
+      statusDiv.textContent = msg;
+      statusDiv.className = `status ${cls}`;
+    }
+  };
+
+  if (!conversationId) {
+    setStatus("❌ ID conversation requis", "error");
+    return;
+  }
+
+  setStatus("⏳ Récupération…", "info");
+  try {
+    const res = await fetch(
+      `/conversations/${conversationId}/messages?limit=${limit}`,
+      { headers: { "user-id": currentUser?.userId || "" } },
+    );
+    const data = await res.json();
+    if (data.success) {
+      const msgs = data.data?.messages || [];
+      setStatus(`✅ ${msgs.length} message(s) récupéré(s)`, "success");
+      if (outputEl) outputEl.textContent = JSON.stringify(msgs, null, 2);
+      log("✅ Messages broadcast récupérés", "success", { count: msgs.length });
+    } else {
+      setStatus(`❌ ${data.message || "Erreur"}`, "error");
+      if (outputEl) outputEl.textContent = JSON.stringify(data, null, 2);
+    }
+  } catch (err) {
+    setStatus(`❌ ${err.message}`, "error");
+    log("❌ Erreur fetchBroadcastMessages", "error", err);
+  }
+}
+
+async function fetchBroadcastMetadata() {
+  const conversationId = document
+    .getElementById("broadcastMetaConvId")
+    ?.value?.trim();
+  const statusDiv = document.getElementById("broadcastMetaStatus");
+  const outputEl = document.getElementById("broadcastMetaOutput");
+
+  const setStatus = (msg, cls) => {
+    if (statusDiv) {
+      statusDiv.textContent = msg;
+      statusDiv.className = `status ${cls}`;
+    }
+  };
+
+  if (!conversationId) {
+    setStatus("❌ ID conversation requis", "error");
+    return;
+  }
+
+  setStatus("⏳ Récupération du mapping…", "info");
+  try {
+    const res = await fetch(`/conversations/${conversationId}`, {
+      headers: { "user-id": currentUser?.userId || "" },
+    });
+    const data = await res.json();
+    if (data.success) {
+      const conv = data.data;
+      const meta = conv?.broadcastMetadata || null;
+      const privateConvs = meta?.privateConversations || [];
+      setStatus(
+        `✅ ${privateConvs.length} conv(s) privée(s) liée(s) | totalMessagesSent: ${meta?.totalMessagesSent ?? 0}`,
+        "success",
+      );
+      if (outputEl) outputEl.textContent = JSON.stringify(meta, null, 2);
+      log("✅ broadcastMetadata récupéré", "success", meta);
+    } else {
+      setStatus(`❌ ${data.message || "Erreur"}`, "error");
+      if (outputEl) outputEl.textContent = JSON.stringify(data, null, 2);
+    }
+  } catch (err) {
+    setStatus(`❌ ${err.message}`, "error");
+    log("❌ Erreur fetchBroadcastMetadata", "error", err);
+  }
 }
 
 // ========================================
@@ -1658,6 +2454,70 @@ function escapeHtml(text) {
 }
 
 // ========================================
+// ✅ FONCTIONS POUR MARQUER LES MESSAGES (AUTOMATIQUE)
+// ========================================
+
+/**
+ * ✅ Marquer un message comme LIVRÉ (DELIVERED)
+ * Appelée automatiquement à la réception de newMessage ou message:group
+ */
+function marquerCommeDelivered(messageId, conversationId) {
+  try {
+    if (!socket || !socket.connected || !isAuthenticated) {
+      log(
+        "⚠️ Socket non connecté ou non authentifié, marking DELIVERED non envoyé",
+        "warning",
+      );
+      return;
+    }
+
+    if (!messageId || !conversationId) {
+      log("⚠️ messageId ou conversationId manquant", "warning");
+      return;
+    }
+
+    socket.emit("markMessageDelivered", {
+      messageId: messageId,
+      conversationId: conversationId,
+    });
+
+    log(`✅ Marquage DELIVERED envoyé pour message ${messageId}`, "success");
+  } catch (error) {
+    log(`❌ Erreur marquage DELIVERED: ${error.message}`, "error");
+  }
+}
+
+/**
+ * ✅ Marquer un message comme LU (READ)
+ * Appelée automatiquement quand on charge les messages
+ */
+function marquerCommeRead(messageId, conversationId) {
+  try {
+    if (!socket || !socket.connected || !isAuthenticated) {
+      log(
+        "⚠️ Socket non connecté ou non authentifié, marking READ non envoyé",
+        "warning",
+      );
+      return;
+    }
+
+    if (!messageId || !conversationId) {
+      log("⚠️ messageId ou conversationId manquant", "warning");
+      return;
+    }
+
+    socket.emit("markMessageRead", {
+      messageId: messageId,
+      conversationId: conversationId,
+    });
+
+    log(`📖 Marquage READ envoyé pour message ${messageId}`, "info");
+  } catch (error) {
+    log(`❌ Erreur marquage READ: ${error.message}`, "error");
+  }
+}
+
+// ========================================
 // AJOUTER UNE FONCTION POUR RÉCUPÉRER UN MESSAGE ID RÉEL DANS app.js
 function getLastMessageId() {
   // Récupérer le dernier message envoyé pour avoir un ID réel
@@ -1940,6 +2800,151 @@ async function downloadFile(fileId) {
   } catch (err) {
     log(`❌ Erreur téléchargement fichier ${fileId}: ${err.message}`, "error");
   }
+}
+
+// ========================================
+// ✅ FONCTIONS GESTION MESSAGES
+// ========================================
+
+function getMessages() {
+  const conversationId = document
+    .getElementById("messagesConversationId")
+    ?.value.trim();
+
+  if (!conversationId) {
+    log("❌ ID conversation requis", "error");
+    return;
+  }
+
+  log(`📥 Récupération messages pour ${conversationId}`, "info");
+  socket.emit("getMessages", { conversationId });
+}
+
+function getMessagesQuickload() {
+  const conversationId = document
+    .getElementById("messagesConversationId")
+    ?.value.trim();
+  const limit = parseInt(document.getElementById("messagesLimit")?.value || 20);
+
+  if (!conversationId) {
+    log("❌ ID conversation requis", "error");
+    return;
+  }
+
+  log(`⚡ Quick Load messages (limit ${limit})`, "info");
+  socket.emit("messages:quickload", { conversationId, limit });
+}
+
+function getMessagesFullload() {
+  const conversationId = document
+    .getElementById("messagesConversationId")
+    ?.value.trim();
+  const limit = parseInt(document.getElementById("messagesLimit")?.value || 50);
+  const cursor =
+    document.getElementById("messagesCursor")?.value.trim() || null;
+
+  if (!conversationId) {
+    log("❌ ID conversation requis", "error");
+    return;
+  }
+
+  log(`📚 Full Load messages (limit ${limit})`, "info");
+  socket.emit("messages:fullload", { conversationId, limit, cursor });
+}
+
+function displayMessages(data) {
+  const resultsDiv = document.getElementById("messagesResults");
+  if (!resultsDiv) return;
+
+  resultsDiv.style.display = "block";
+
+  const statsDiv = document.getElementById("messagesStats");
+  const listDiv = document.getElementById("messagesList");
+
+  const messages = data.messages || [];
+  const statsHtml = `
+    <div class="stats-container">
+      <div class="stat-item">
+        <span class="stat-label">Total</span>
+        <span class="stat-value">${messages.length}</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">De Conversation</span>
+        <span class="stat-value">${escapeHtml(data.conversationId || "")}</span>
+      </div>
+      <div class="stat-item">
+        <span class="stat-label">Cache</span>
+        <span class="stat-value">${data.fromCache ? "✅ Oui" : "❌ Non"}</span>
+      </div>
+      ${
+        data.hasMore
+          ? `<div class="stat-item">
+        <span class="stat-label">Plus disponible</span>
+        <span class="stat-value">✅ Oui</span>
+      </div>`
+          : ""
+      }
+    </div>
+  `;
+
+  statsDiv.innerHTML = statsHtml;
+
+  if (messages.length === 0) {
+    listDiv.innerHTML = `
+      <div class="empty-state">
+        <p>Aucun message dans cette conversation</p>
+      </div>
+    `;
+    return;
+  }
+
+  const messagesHtml = messages
+    .map(
+      (msg, idx) => `
+    <div class="message-item conversation-message">
+      <div class="message-meta">
+        <span class="message-number">#${idx + 1}</span>
+        <span class="message-author">${escapeHtml(msg.authorMatricule || msg.author || "Inconnu")}</span>
+        <span class="message-time">${
+          msg.createdAt
+            ? new Date(msg.createdAt).toLocaleString()
+            : "Temps inconnu"
+        }</span>
+      </div>
+      <div class="message-body">
+        <strong>Type:</strong> ${msg.type || "TEXT"}<br/>
+        <strong>Contenu:</strong> ${escapeHtml((msg.content || "").substring(0, 100))}${
+          (msg.content || "").length > 100 ? "..." : ""
+        }<br/>
+        <strong>Statut:</strong> ${msg.status || "SENT"}
+      </div>
+      <div class="message-id">ID: ${msg._id}</div>
+    </div>
+  `,
+    )
+    .join("");
+
+  listDiv.innerHTML = messagesHtml;
+
+  // ✅ MARQUER AUTOMATIQUEMENT TOUS LES MESSAGES COMME LUS
+  // Délai légèrement pour s'assurer que le DOM est mis à jour
+  setTimeout(() => {
+    if (data.messages && Array.isArray(data.messages)) {
+      let markedCount = 0;
+      data.messages.forEach((msg) => {
+        if (msg._id && data.conversationId && msg.status !== "READ") {
+          marquerCommeRead(msg._id, data.conversationId);
+          markedCount++;
+        }
+      });
+      if (markedCount > 0) {
+        log(
+          `📖 ${markedCount} message(s) marqué(s) comme lus automatiquement`,
+          "info",
+        );
+      }
+    }
+  }, 100);
 }
 
 // ========================================
@@ -2491,6 +3496,91 @@ function fillDeleteMessageId() {
 }
 
 // ========================================
+// ✅ FONCTION TRANSFÉRER UN MESSAGE
+// ========================================
+
+function forwardMessageAction() {
+  if (!socket || !socket.connected || !isAuthenticated) {
+    log("❌ Socket non connecté ou non authentifié", "error");
+    updateStatus(
+      "forwardMessageStatus",
+      "❌ Non connecté ou non authentifié",
+      "error",
+    );
+    return;
+  }
+
+  const messageId = document.getElementById("forwardMessageId")?.value.trim();
+
+  const rawTargets = document
+    .getElementById("forwardTargetConversationIds")
+    ?.value.trim();
+
+  if (!messageId) {
+    log("❌ ID message requis", "error");
+    updateStatus("forwardMessageStatus", "❌ ID message requis", "error");
+    return;
+  }
+
+  if (!rawTargets) {
+    log("❌ Au moins un ID de conversation cible requis", "error");
+    updateStatus(
+      "forwardMessageStatus",
+      "❌ Au moins un ID de conversation cible requis",
+      "error",
+    );
+    return;
+  }
+
+  // Séparer par virgules ou retours à la ligne, filtrer les vides
+  const targetConversationIds = rawTargets
+    .split(/[,\n]+/)
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+
+  if (targetConversationIds.length === 0) {
+    log("❌ Aucun ID de conversation valide", "error");
+    updateStatus(
+      "forwardMessageStatus",
+      "❌ Aucun ID de conversation valide",
+      "error",
+    );
+    return;
+  }
+
+  if (targetConversationIds.length > 10) {
+    log("❌ Maximum 10 conversations cibles", "error");
+    updateStatus(
+      "forwardMessageStatus",
+      "❌ Maximum 10 conversations cibles",
+      "error",
+    );
+    return;
+  }
+
+  const data = { messageId, targetConversationIds };
+  log(
+    `📤 Transfert du message vers ${targetConversationIds.length} conversation(s)...`,
+    "info",
+    data,
+  );
+  updateStatus(
+    "forwardMessageStatus",
+    `⏳ Transfert vers ${targetConversationIds.length} conversation(s) en cours...`,
+    "info",
+  );
+  socket.emit("forwardMessage", data);
+}
+
+function fillForwardMessageId() {
+  const lastMessageId = getLastMessageId();
+  if (lastMessageId) {
+    document.getElementById("forwardMessageId").value = lastMessageId;
+    log(`🔍 ID message rempli: ${lastMessageId}`, "info");
+  }
+}
+
+// ========================================
 // ✅ FONCTION SUPPRIMER UN FICHIER (VIA WEBSOCKET)
 // ========================================
 
@@ -2707,4 +3797,511 @@ async function handleFileUpload(e) {
     statusDiv.className = "status error";
     log("❌ Erreur upload", "error", err);
   }
+}
+
+// ========================================
+// ✅ FONCTION AFFICHER UTILISATEURS EN LIGNE PAR CONVERSATION
+// ========================================
+
+function displayConversationOnlineUsers(data) {
+  const conversationId = data.conversationId;
+  const users = data.users || [];
+  const onlineUsers = data.onlineUsers || 0;
+  const totalUsers = data.totalUsers || 0;
+
+  log(
+    `👥 Affichage ${onlineUsers}/${totalUsers} utilisateurs en ligne pour conversation ${conversationId}`,
+    "info",
+  );
+
+  // Optionnel : afficher quelque part dans l'interface
+  const message = {
+    conversationId,
+    onlineCount: onlineUsers,
+    totalCount: totalUsers,
+    usersList: users.map((u) => u.matricule || u.userId).join(", "),
+  };
+
+  console.log("👥 Utilisateurs en ligne:", message);
+}
+
+// ========================================
+// ✅ FONCTIONS APPELS (CALL / VIDEO_CALL)
+// ========================================
+
+function initiateCall() {
+  if (!socket || !isAuthenticated) {
+    alert("Veuillez vous authentifier d'abord");
+    return;
+  }
+
+  const conversationId = document
+    .getElementById("callConversationId")
+    .value.trim();
+  const receiverId = document.getElementById("callReceiverId").value.trim();
+  const callType = document.getElementById("callType").value;
+
+  if (!conversationId && !receiverId) {
+    updateStatus(
+      "initiateCallStatus",
+      "❌ conversationId ou receiverId requis",
+      "error",
+    );
+    return;
+  }
+
+  const data = { callType };
+  if (conversationId) data.conversationId = conversationId;
+  if (receiverId) data.receiverId = receiverId;
+
+  log(`📞 Initiation appel ${callType}...`, "info", data);
+  updateStatus(
+    "initiateCallStatus",
+    "⏳ Initiation de l'appel en cours...",
+    "info",
+  );
+  socket.emit("initiateCall", data);
+}
+
+function answerCall() {
+  if (!socket || !isAuthenticated) {
+    alert("Veuillez vous authentifier d'abord");
+    return;
+  }
+
+  const callId = document.getElementById("activeCallId").value.trim();
+  const messageId = document.getElementById("activeCallMessageId").value.trim();
+  const conversationId = document
+    .getElementById("activeCallConversationId")
+    .value.trim();
+
+  if (!callId || !messageId) {
+    updateStatus("callActionStatus", "❌ callId et messageId requis", "error");
+    return;
+  }
+
+  const data = { callId, messageId };
+  if (conversationId) data.conversationId = conversationId;
+
+  log("✅ Réponse à l'appel...", "info", data);
+  updateStatus("callActionStatus", "⏳ Décrochage en cours...", "info");
+  socket.emit("answerCall", data);
+}
+
+function declineCall() {
+  if (!socket || !isAuthenticated) {
+    alert("Veuillez vous authentifier d'abord");
+    return;
+  }
+
+  const callId = document.getElementById("activeCallId").value.trim();
+  const messageId = document.getElementById("activeCallMessageId").value.trim();
+  const conversationId = document
+    .getElementById("activeCallConversationId")
+    .value.trim();
+
+  if (!callId) {
+    updateStatus("callActionStatus", "❌ callId requis", "error");
+    return;
+  }
+
+  const data = { callId };
+  if (messageId) data.messageId = messageId;
+  if (conversationId) data.conversationId = conversationId;
+
+  log("❌ Refus de l'appel...", "info", data);
+  updateStatus("callActionStatus", "⏳ Refus en cours...", "info");
+  socket.emit("declineCall", data);
+}
+
+function endCall() {
+  if (!socket || !isAuthenticated) {
+    alert("Veuillez vous authentifier d'abord");
+    return;
+  }
+
+  const callId = document.getElementById("activeCallId").value.trim();
+  const messageId = document.getElementById("activeCallMessageId").value.trim();
+  const conversationId = document
+    .getElementById("activeCallConversationId")
+    .value.trim();
+
+  if (!callId) {
+    updateStatus("callActionStatus", "❌ callId requis", "error");
+    return;
+  }
+
+  const data = { callId, reason: "user_hangup" };
+  if (messageId) data.messageId = messageId;
+  if (conversationId) data.conversationId = conversationId;
+
+  log("📴 Fin de l'appel...", "info", data);
+  updateStatus("callActionStatus", "⏳ Raccordage en cours...", "info");
+  socket.emit("endCall", data);
+}
+
+function missedCall() {
+  if (!socket || !isAuthenticated) {
+    alert("Veuillez vous authentifier d'abord");
+    return;
+  }
+
+  const callId = document.getElementById("activeCallId").value.trim();
+  const messageId = document.getElementById("activeCallMessageId").value.trim();
+  const conversationId = document
+    .getElementById("activeCallConversationId")
+    .value.trim();
+
+  if (!callId) {
+    updateStatus("callActionStatus", "❌ callId requis", "error");
+    return;
+  }
+
+  const data = { callId };
+  if (messageId) data.messageId = messageId;
+  if (conversationId) data.conversationId = conversationId;
+
+  log("📵 Signalement appel manqué...", "info", data);
+  updateStatus("callActionStatus", "⏳ Signalement en cours...", "info");
+  socket.emit("missedCall", data);
+}
+
+function addCallLogEntry(action, callType, callId, conversationId, extra = "") {
+  const callLog = document.getElementById("callLog");
+  if (!callLog) return;
+
+  const now = new Date().toLocaleTimeString();
+  const typeLabel = callType ? ` [${callType}]` : "";
+  const convLabel = conversationId
+    ? ` conv:${conversationId.substring(0, 8)}...`
+    : "";
+  const entry = document.createElement("div");
+  entry.style.cssText =
+    "padding: 4px 0; border-bottom: 1px solid #333; color: #ccc;";
+  entry.innerHTML = `<span style="color:#888">${now}</span> <strong>${action}</strong>${typeLabel} <span style="color:#6cf">ID:${callId ? callId.substring(0, 8) + "..." : "N/A"}</span>${convLabel} ${extra}`;
+  callLog.prepend(entry);
+}
+
+function clearCallLog() {
+  const callLog = document.getElementById("callLog");
+  if (callLog)
+    callLog.innerHTML =
+      '<div style="color:#888; text-align:center;">Journal vide</div>';
+}
+
+// ========================================
+// FONCTIONS CHIFFREMENT E2EE
+// ========================================
+
+// Stockage de la paire de clés générée (en mémoire, côté test uniquement)
+let e2eeKeyPair = null;
+
+/**
+ * Génère une paire de clés RSA-OAEP 4096 bits via SubtleCrypto (Web API)
+ * et exporte la clé publique au format PEM SPKI.
+ */
+async function generateE2EEKeyPair() {
+  updateStatus(
+    "e2eeRegisterStatus",
+    "⏳ Génération de la paire RSA-4096...",
+    "info",
+  );
+  try {
+    const keyPair = await window.crypto.subtle.generateKey(
+      {
+        name: "RSA-OAEP",
+        modulusLength: 4096,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256",
+      },
+      true,
+      ["encrypt", "decrypt"],
+    );
+
+    // Export clé publique → PEM SPKI
+    const spki = await window.crypto.subtle.exportKey(
+      "spki",
+      keyPair.publicKey,
+    );
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(spki)));
+    const pem = `-----BEGIN PUBLIC KEY-----\n${b64.match(/.{1,64}/g).join("\n")}\n-----END PUBLIC KEY-----`;
+
+    // Export clé privée → PEM PKCS8 (stockée en mémoire uniquement)
+    const pkcs8 = await window.crypto.subtle.exportKey(
+      "pkcs8",
+      keyPair.privateKey,
+    );
+    const b64priv = btoa(String.fromCharCode(...new Uint8Array(pkcs8)));
+    const pemPriv = `-----BEGIN PRIVATE KEY-----\n${b64priv.match(/.{1,64}/g).join("\n")}\n-----END PRIVATE KEY-----`;
+
+    e2eeKeyPair = {
+      publicKey: pem,
+      privateKey: pemPriv,
+      cryptoKeyPair: keyPair,
+    };
+
+    document.getElementById("e2eePublicKeyDisplay").textContent = pem;
+    updateStatus(
+      "e2eeRegisterStatus",
+      "✅ Paire RSA-4096 générée — prête à enregistrer",
+      "success",
+    );
+    log("🔑 Paire RSA-4096 générée avec succès", "success");
+  } catch (err) {
+    updateStatus(
+      "e2eeRegisterStatus",
+      `❌ Erreur génération: ${err.message}`,
+      "error",
+    );
+    log(`❌ Erreur génération RSA: ${err.message}`, "error");
+  }
+}
+
+/**
+ * Auto-enregistre la clé publique E2EE juste après l'authentification.
+ * Génère une nouvelle paire si nécessaire.
+ */
+async function autoRegisterE2EEKey() {
+  try {
+    if (!socket || !isAuthenticated) {
+      log(
+        "⚠️ Impossible d'auto-enregistrer : socket ou auth non disponible",
+        "warning",
+      );
+      return;
+    }
+
+    if (!e2eeKeyPair) {
+      log("🔑 Génération automatique de la paire RSA-4096...", "info");
+      // Génération silencieuse sans toucher les statuts de la section E2EE
+      const keyPair = await window.crypto.subtle.generateKey(
+        {
+          name: "RSA-OAEP",
+          modulusLength: 4096,
+          publicExponent: new Uint8Array([1, 0, 1]),
+          hash: "SHA-256",
+        },
+        true,
+        ["encrypt", "decrypt"],
+      );
+      const spki = await window.crypto.subtle.exportKey(
+        "spki",
+        keyPair.publicKey,
+      );
+      const b64 = btoa(String.fromCharCode(...new Uint8Array(spki)));
+      const pem = `-----BEGIN PUBLIC KEY-----\n${b64.match(/.{1,64}/g).join("\n")}\n-----END PUBLIC KEY-----`;
+      const pkcs8 = await window.crypto.subtle.exportKey(
+        "pkcs8",
+        keyPair.privateKey,
+      );
+      const b64priv = btoa(String.fromCharCode(...new Uint8Array(pkcs8)));
+      const pemPriv = `-----BEGIN PRIVATE KEY-----\n${b64priv.match(/.{1,64}/g).join("\n")}\n-----END PRIVATE KEY-----`;
+      e2eeKeyPair = {
+        publicKey: pem,
+        privateKey: pemPriv,
+        cryptoKeyPair: keyPair,
+      };
+
+      // Mise à jour UI si l'élément existe
+      const displayEl = document.getElementById("e2eePublicKeyDisplay");
+      if (displayEl) {
+        displayEl.textContent = pem;
+      }
+      log("✅ Paire RSA-4096 générée automatiquement", "success");
+    }
+
+    log("📤 Émission encryption:registerKey (auto)...", "info");
+    socket.emit("encryption:registerKey", {
+      publicKey: e2eeKeyPair.publicKey,
+      deviceInfo: { platform: "web-test-client", deviceName: "HTML Testeur" },
+    });
+    log("🔑 Auto-enregistrement clé E2EE après auth — émis", "info");
+  } catch (err) {
+    log(`⚠️ Auto-enregistrement E2EE échoué: ${err.message}`, "error");
+    console.error("Erreur auto-register E2EE:", err);
+  }
+}
+
+/**
+ * Enregistre manuellement la clé publique générée auprès du serveur.
+ */
+function registerE2EEKey() {
+  if (!socket || !isAuthenticated) {
+    alert("Authentifiez-vous d'abord");
+    return;
+  }
+  if (!e2eeKeyPair) {
+    updateStatus(
+      "e2eeRegisterStatus",
+      "❌ Générez d'abord une paire de clés",
+      "error",
+    );
+    return;
+  }
+
+  updateStatus("e2eeRegisterStatus", "⏳ Enregistrement...", "info");
+  socket.emit("encryption:registerKey", {
+    publicKey: e2eeKeyPair.publicKey,
+    deviceInfo: { platform: "web-test-client", deviceName: "HTML Testeur" },
+  });
+  log("📤 Émission encryption:registerKey", "info");
+}
+
+/**
+ * Récupère la clé publique d'un autre utilisateur.
+ */
+function getRecipientPublicKey() {
+  if (!socket || !isAuthenticated) {
+    alert("Authentifiez-vous d'abord");
+    return;
+  }
+  const targetUserId = document.getElementById("e2eeTargetUserId").value.trim();
+  if (!targetUserId) {
+    updateStatus("e2eeGetKeyStatus", "❌ Entrez un userId cible", "error");
+    return;
+  }
+
+  updateStatus(
+    "e2eeGetKeyStatus",
+    `⏳ Récupération clé de ${targetUserId}...`,
+    "info",
+  );
+  socket.emit("encryption:getPublicKey", { targetUserId });
+  log(`📤 Émission encryption:getPublicKey pour ${targetUserId}`, "info");
+}
+
+/**
+ * Récupère la configuration de chiffrement active.
+ */
+function getEncryptionConfig() {
+  if (!socket || !isAuthenticated) {
+    alert("Authentifiez-vous d'abord");
+    return;
+  }
+  updateStatus("e2eeConfigStatus", "⏳ Récupération config...", "info");
+  socket.emit("encryption:getConfig");
+  log("📤 Émission encryption:getConfig", "info");
+}
+
+/**
+ * Change le mode de chiffrement (admin uniquement).
+ */
+function switchEncryptionMode() {
+  if (!socket || !isAuthenticated) {
+    alert("Authentifiez-vous d'abord");
+    return;
+  }
+  const mode = document.getElementById("e2eeSwitchModeSelect").value;
+  updateStatus(
+    "e2eeSwitchStatus",
+    `⏳ Changement vers mode: ${mode}...`,
+    "info",
+  );
+  socket.emit("encryption:switchMode", { mode });
+  log(`📤 Émission encryption:switchMode → ${mode}`, "info");
+}
+
+/**
+ * Révoque la clé publique de l'utilisateur connecté.
+ */
+function revokeE2EEKey() {
+  if (!socket || !isAuthenticated) {
+    alert("Authentifiez-vous d'abord");
+    return;
+  }
+  if (
+    !confirm(
+      "⚠️ Révoquer votre clé E2EE ? Les messages futurs ne pourront plus être chiffrés jusqu'à réenregistrement.",
+    )
+  )
+    return;
+  updateStatus("e2eeRevokeStatus", "⏳ Révocation en cours...", "info");
+  socket.emit("encryption:revokeKey");
+  e2eeKeyPair = null;
+  document.getElementById("e2eePublicKeyDisplay").textContent = "(aucune clé)";
+  log("📤 Émission encryption:revokeKey", "warning");
+}
+
+/**
+ * Test de diagnostic E2EE complet
+ */
+function testE2EEConnection() {
+  console.log("🔍 ═══════════════════════════════════════════════════════");
+  console.log("🔍 DIAGNOSTIC E2EE COMPLET");
+  console.log("🔍 ═══════════════════════════════════════════════════════");
+
+  // 1. Vérifier l'état du socket
+  console.log("\n1️⃣ État Socket.IO");
+  console.log("   socket existe:", !!socket);
+  console.log("   socket.connected:", socket?.connected);
+  console.log("   socket.id:", socket?.id);
+
+  // 2. Vérifier l'authentification
+  console.log("\n2️⃣ État Authentification");
+  console.log("   isAuthenticated:", isAuthenticated);
+  console.log("   currentUser:", currentUser);
+  console.log("   socket.userId:", socket?.userId);
+
+  // 3. Vérifier la paire de clés
+  console.log("\n3️⃣ Paire de clés E2EE");
+  console.log("   e2eeKeyPair existe:", !!e2eeKeyPair);
+  if (e2eeKeyPair) {
+    console.log("   publicKey length:", e2eeKeyPair.publicKey?.length);
+    console.log(
+      "   publicKey preview:",
+      e2eeKeyPair.publicKey?.substring(0, 50) + "...",
+    );
+  }
+
+  // 4. Vérifier les éléments DOM
+  console.log("\n4️⃣ Éléments DOM");
+  const elements = [
+    "e2eePublicKeyDisplay",
+    "e2eeFingerprint",
+    "e2eeKeyVersion",
+    "e2eeCurrentMode",
+  ];
+  elements.forEach((id) => {
+    const el = document.getElementById(id);
+    console.log(
+      `   ${id}:`,
+      !!el,
+      el ? `(${el.textContent?.substring(0, 20)}...)` : "",
+    );
+  });
+
+  // 5. Test d'émission
+  console.log("\n5️⃣ Test Émission Socket");
+  if (!socket || !socket.connected) {
+    console.error("   ❌ Socket non connecté");
+  } else if (!isAuthenticated) {
+    console.error("   ❌ Non authentifié");
+  } else {
+    console.log("   ✅ Prêt à émettre");
+
+    // Test avec un événement factice
+    console.log("   📤 Test avec encryption:getConfig...");
+    socket.emit("encryption:getConfig");
+
+    // Si paire existe, tester l'enregistrement
+    if (e2eeKeyPair) {
+      console.log("   📤 Test avec encryption:registerKey...");
+      socket.emit("encryption:registerKey", {
+        publicKey: e2eeKeyPair.publicKey,
+        deviceInfo: { platform: "diagnostic-test", deviceName: "Test Manual" },
+      });
+    } else {
+      console.log("   ⚠️  Pas de paire de clés, génération...");
+      generateE2EEKeyPair().then(() => {
+        console.log("   ✅ Génération terminée, réessayez le diagnostic");
+      });
+    }
+  }
+
+  console.log("\n🔍 ═══════════════════════════════════════════════════════");
+  console.log("🔍 Vérifiez les logs du serveur pour voir si les événements");
+  console.log("🔍 encryption:* sont bien reçus côté serveur.");
+  console.log("🔍 ═══════════════════════════════════════════════════════\n");
+
+  log("🔍 Diagnostic E2EE exécuté — voir console (F12)", "info");
 }

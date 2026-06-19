@@ -36,18 +36,21 @@ class CachedMessageRepository {
       let cacheKey = null;
       let ttl = this.shortTTL;
 
-      if (useCache && this.cache) {
+      if (useCache && this.cache && !cursor) {
+        // ✅ Inclure userId dans la clé de cache pour isoler les suppressions FOR_ME
+        const userSegment = userId ? `:u${userId}` : "";
+
         if (cursor) {
           // Pagination avec cursor - cache court
-          cacheKey = `${this.cacheKeyPrefix}:${conversationId}:cursor:${cursor}:${limit}`;
+          cacheKey = `${this.cacheKeyPrefix}:${conversationId}${userSegment}:cursor:${cursor}:${limit}`;
           ttl = this.shortTTL;
         } else if (page === 1) {
           // Première page - cache long
-          cacheKey = `${this.cacheKeyPrefix}:${conversationId}:first:${limit}`;
+          cacheKey = `${this.cacheKeyPrefix}:${conversationId}${userSegment}:first:${limit}`;
           ttl = this.defaultTTL;
         } else {
           // Autres pages - cache moyen
-          cacheKey = `${this.cacheKeyPrefix}:${conversationId}:p${page}:${limit}`;
+          cacheKey = `${this.cacheKeyPrefix}:${conversationId}${userSegment}:p${page}:${limit}`;
           ttl = this.shortTTL;
         }
 
@@ -84,6 +87,10 @@ class CachedMessageRepository {
           conversationId,
           { cursor, limit, direction, userId },
         );
+
+        console.log(
+          `🔍 Pagination cursor-based: ${result.messages.length} messages récupérés (nextCursor: ${result.nextCursor})`,
+        );
       } else {
         // ✅ PAGINATION PAGE-BASED (fallback)
         const messages = await this.primaryStore.findByConversation(
@@ -92,10 +99,13 @@ class CachedMessageRepository {
         );
 
         result = {
-          messages,
-          nextCursor: null,
-          hasMore: messages.length === limit,
+          messages: messages.messages || messages,
+          nextCursor: messages.nextCursor || null,
+          hasMore: messages.hasMore || false,
         };
+        console.log(
+          `🔍 Pagination page-based: ${result.messages.length} messages récupérés (page: ${page}), nextCursor: ${result.nextCursor}`,
+        );
       }
 
       // ✅ METTRE EN CACHE SELON LA STRATÉGIE
@@ -113,10 +123,10 @@ class CachedMessageRepository {
     } catch (error) {
       console.error("❌ Erreur findByConversation:", error.message);
 
-      // ✅ FALLBACK SANS CACHE
+      // ✅ FALLBACK SANS CACHE (userId propagé pour filtrer les messages supprimés FOR_ME)
       const messages = await this.primaryStore.findByConversation(
         conversationId,
-        { page: 1, limit: 20 },
+        { page: 1, limit: 20, userId },
       );
 
       return {
@@ -328,7 +338,47 @@ class CachedMessageRepository {
     }
   }
 
-  async getUnreadCount(conversationId, userId) {
+  /**
+   * ✅ DÉCRÉMENTER le compteur Redis (au lieu de supprimer la clé)
+   */
+  async decrementUnreadCount(conversationId, userId, count = 1) {
+    if (!this.redis) return true;
+
+    try {
+      const safeCount = Math.max(0, Math.floor(count));
+      if (safeCount === 0) return true;
+
+      const userKey = `${this.userUnreadPrefix}:${userId}:${conversationId}`;
+      const convKey = `${this.conversationUnreadPrefix}:${conversationId}:${userId}`;
+
+      // Décrémenter les deux clés
+      const [userResult, convResult] = await Promise.all([
+        this.redis.decrBy(userKey, safeCount),
+        this.redis.decrBy(convKey, safeCount),
+      ]);
+
+      // Garantir min 0 (DECRBY peut descendre en négatif)
+      if (userResult < 0) await this.redis.set(userKey, "0");
+      if (convResult < 0) await this.redis.set(convKey, "0");
+
+      // Maintenir le TTL
+      await Promise.all([
+        this.redis.expire(userKey, this.unreadTTL),
+        this.redis.expire(convKey, this.unreadTTL),
+      ]);
+
+      const finalCount = Math.max(0, userResult);
+      console.log(
+        `📉 Unread décrémenté: ${userId} dans ${conversationId} (-${safeCount}) → ${finalCount}`,
+      );
+      return finalCount;
+    } catch (error) {
+      console.error("❌ Erreur decrementUnreadCount:", error.message);
+      return 0;
+    }
+  }
+
+  async getUnreadCount(userId, conversationId) {
     if (!this.redis) {
       return await this.primaryStore.countUnreadMessages(
         conversationId,
@@ -391,7 +441,11 @@ class CachedMessageRepository {
       );
 
       if (result.modifiedCount > 0) {
-        await this.resetUnreadCount(conversationId, userId);
+        await this.decrementUnreadCount(
+          conversationId,
+          userId,
+          result.modifiedCount,
+        );
         await this.invalidateConversationCaches(conversationId);
       }
 
@@ -413,8 +467,12 @@ class CachedMessageRepository {
 
       await this.invalidateConversationCaches(conversationId);
 
-      if (status === "READ") {
-        await this.resetUnreadCount(conversationId, userId);
+      if (status === "READ" && result.modifiedCount > 0) {
+        await this.decrementUnreadCount(
+          conversationId,
+          userId,
+          result.modifiedCount,
+        );
       }
 
       return result;
@@ -439,10 +497,11 @@ class CachedMessageRepository {
       if (result && result.message && result.message.conversationId) {
         await this.invalidateConversationCaches(result.message.conversationId);
 
-        if (status === "READ") {
-          await this.resetUnreadCount(
+        if (status === "READ" && result.modifiedCount > 0) {
+          await this.decrementUnreadCount(
             result.message.conversationId,
             receiverId,
+            result.modifiedCount || 1,
           );
         }
       }
@@ -487,6 +546,55 @@ class CachedMessageRepository {
       console.log("✅ Cache messages complètement nettoyé");
     } catch (error) {
       console.error("❌ Erreur clearCache:", error.message);
+    }
+  }
+
+  // ✅ DÉLÉGATION updateCallStatus au repository sous-jacent
+  async updateCallStatus(messageId, updates) {
+    return await this.primaryStore.updateCallStatus(messageId, updates);
+  }
+
+  // ===== RÉACTIONS (avec invalidation cache) =====
+
+  /**
+   * ✅ Ajouter/mettre à jour une réaction (délègue au primaryStore + invalide cache)
+   */
+  async addReaction(messageId, userId, emoji) {
+    try {
+      const result = await this.primaryStore.addReaction(
+        messageId,
+        userId,
+        emoji,
+      );
+
+      // Invalider le cache de la conversation
+      if (result && result.conversationId) {
+        await this.invalidateConversationCaches(result.conversationId);
+      }
+
+      return result;
+    } catch (error) {
+      console.error("❌ Erreur addReaction (cached):", error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * ✅ Supprimer une réaction (délègue au primaryStore + invalide cache)
+   */
+  async removeReaction(messageId, userId) {
+    try {
+      const result = await this.primaryStore.removeReaction(messageId, userId);
+
+      // Invalider le cache de la conversation si suppression effective
+      if (result && result.removed && result.conversationId) {
+        await this.invalidateConversationCaches(result.conversationId);
+      }
+
+      return result;
+    } catch (error) {
+      console.error("❌ Erreur removeReaction (cached):", error.message);
+      throw error;
     }
   }
 }

@@ -27,7 +27,16 @@ class CachedConversationRepository {
     this.quickTTL = 60; // 1 minute pour quick load
     this.listTTL = 600; // 10 minutes pour listes
 
-    this.cacheKeyPrefix = "cache:convs";
+    this.cacheKeyPrefix = "chat:cache:convs";
+  }
+
+  // ===== TROUVER UNE CONVERSATION PAR UN CHAMP (ex: code_structure) =====
+  async findOne(query = {}) {
+    // Pas de cache ici, accès direct au primaryStore (MongoDB)
+    if (!query || typeof query !== "object") {
+      throw new Error("Query object requis pour findOne");
+    }
+    return this.primaryStore.findOne(query);
   }
 
   // ===== LIRE LES CONVERSATIONS D'UN UTILISATEUR (CACHE INTELLIGENT) =====
@@ -475,6 +484,29 @@ class CachedConversationRepository {
     }
   }
 
+  async findPrivateConversation(participant1, participant2) {
+    return this.primaryStore.findPrivateConversation(
+      participant1,
+      participant2,
+    );
+  }
+
+  async incrementBroadcastMessageCount(broadcastConversationId) {
+    return this.primaryStore.incrementBroadcastMessageCount(
+      broadcastConversationId,
+    );
+  }
+
+  async updateBroadcastMetadata(
+    broadcastConversationId,
+    privateConversationEntries,
+  ) {
+    return this.primaryStore.updateBroadcastMetadata(
+      broadcastConversationId,
+      privateConversationEntries,
+    );
+  }
+
   async incrementUnreadCountInUserMetadata(conversationId, userId, amount = 1) {
     try {
       const result = await this.primaryStore.incrementUnreadCountInUserMetadata(
@@ -518,6 +550,32 @@ class CachedConversationRepository {
   }
 
   /**
+   * ✅ DÉCRÉMENTER LE COMPTEUR unreadCount (au lieu de réinitialiser à 0)
+   */
+  async decrementUnreadCountInUserMetadata(conversationId, userId, count = 1) {
+    try {
+      const result = await this.primaryStore.decrementUnreadCountInUserMetadata(
+        conversationId,
+        userId,
+        count,
+      );
+
+      // Invalider le cache pour cet utilisateur
+      await this.invalidateConversationCaches(conversationId, {
+        participants: [userId],
+      });
+
+      return result;
+    } catch (error) {
+      console.error(
+        "❌ Erreur decrementUnreadCountInUserMetadata:",
+        error.message,
+      );
+      throw error;
+    }
+  }
+
+  /**
    * ✅ METTRE À JOUR LE lastSeen POUR UN UTILISATEUR (DÉCONNEXION)
    */
   async updateLastSeenForUser(userId) {
@@ -535,10 +593,56 @@ class CachedConversationRepository {
   }
 
   /**
-   * ✅ OBTENIR LE lastSeen D'UN UTILISATEUR
+   * ✅ OBTENIR LE lastSeen D'UN UTILISATEUR DANS UNE CONVERSATION
    */
   async getLastSeenForUser(conversationId, userId) {
     return await this.primaryStore.getLastSeenForUser(conversationId, userId);
+  }
+
+  /**
+   * ✅ TROUVER LE lastSeen LE PLUS RÉCENT D'UN UTILISATEUR (TOUTES CONVERSATIONS)
+   * Utilisé comme fallback MongoDB quand Redis est vide (ex: après FLUSHALL)
+   */
+  async findLastSeenForUser(userId) {
+    return await this.primaryStore.findLastSeenForUser(userId);
+  }
+
+  // ===== ARCHIVAGE =====
+
+  /**
+   * Archive ou désarchive une conversation pour un utilisateur.
+   * Invalide ensuite le cache de la liste de conversations de l'utilisateur.
+   */
+  async archiveForUser(conversationId, userId, action = "archive") {
+    const result = await this.primaryStore.archiveForUser(
+      conversationId,
+      userId,
+      action,
+    );
+
+    // Invalider le cache de liste de conversations de l'utilisateur
+    if (this.cache) {
+      try {
+        const patterns = [`${this.cacheKeyPrefix}:user:${userId}:*`];
+        for (const pattern of patterns) {
+          await this.cache.delete(pattern);
+        }
+        console.log(
+          `🗑️ Cache conversations invalidé pour userId=${userId} après ${action}`,
+        );
+      } catch (err) {
+        console.warn("⚠️ Erreur invalidation cache archivage:", err.message);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Récupère les conversations archivées d'un utilisateur (pas de cache — liste dynamique).
+   */
+  async findArchivedByUser(userId, options = {}) {
+    return await this.primaryStore.findArchivedByUser(userId, options);
   }
 
   // ===== RECHERCHE =====

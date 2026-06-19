@@ -16,7 +16,8 @@ class UnreadMessageManager {
     this.recalculateTotalFn = null; // Callback pour recalcul total
 
     this.keyPrefix = options.keyPrefix || "chat:cache:unread";
-    this.userUnreadPrefix = options.userUnreadPrefix || "chat:cache:unread:user";
+    this.userUnreadPrefix =
+      options.userUnreadPrefix || "chat:cache:unread:user";
     this.conversationUnreadPrefix =
       options.conversationUnreadPrefix || "chat:cache:unread:conv";
     this.defaultTTL = options.defaultTTL || 3 * 24 * 3600; // 3 jours

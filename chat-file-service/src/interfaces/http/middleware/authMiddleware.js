@@ -24,7 +24,14 @@ class AuthMiddleware {
         method: req.method,
       });
 
+      console.log("[AuthMiddleware] Vérification du token JWT", {
+        token,
+        authHeader,
+        cookieToken,
+      });
+
       if (!token) {
+        console.warn("⚠️ Aucun token d'authentification fourni");
         return res.status(401).json({
           success: false,
           message: "Token d'authentification requis",
@@ -47,6 +54,9 @@ class AuthMiddleware {
 
       return next();
     } catch (error) {
+      console.warn("⚠️ Échec de l'authentification", {
+        message: error.message,
+      });
       console.warn("⚠️ Token JWT invalide", {
         message: error.message,
         path: req.path,
@@ -54,6 +64,7 @@ class AuthMiddleware {
       });
 
       if (!res.headersSent) {
+        console.error("❌ Erreur d'authentification:", error);
         return res.status(401).json({
           success: false,
           message: "Token invalide ou expiré",

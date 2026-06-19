@@ -18,7 +18,12 @@ class GetConversationIds {
     });
     // result peut être { conversations: [...] }
     const conversations = result.conversations || result || [];
-    return conversations.map((conv) =>
+    // ✅ Exclure les BROADCAST dont l'utilisateur n'est pas le créateur
+    const visibleConversations = conversations.filter((conv) => {
+      if (conv.type !== "BROADCAST") return true;
+      return String(conv.createdBy) === String(userId);
+    });
+    return visibleConversations.map((conv) =>
       conv._id ? conv._id.toString() : conv.id?.toString()
     );
   }

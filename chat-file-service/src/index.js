@@ -38,12 +38,16 @@ const {
 } = require("../shared");
 
 // Services
+const AutoGroupSyncService = require("./infrastructure/services/AutoGroupSyncService");
 const ThumbnailService = require("./infrastructure/services/ThumbnailService");
 const FileStorageService = require("./infrastructure/services/FileStorageService");
 const MediaProcessingService = require("./infrastructure/services/MediaProcessingService");
 const ResilientMessageService = require("./infrastructure/services/ResilientMessageService");
 const UserCacheService = require("./infrastructure/services/UserCacheService");
 const SmartCachePrewarmer = require("./infrastructure/services/SmartCachePrewarmer");
+const ChunkedUploadService = require("./infrastructure/services/ChunkedUploadService");
+const EncryptionService = require("./infrastructure/services/EncryptionService");
+const KeyManagementService = require("./infrastructure/services/KeyManagementService");
 
 // Repositories - Cached
 const CachedMessageRepository = require("./infrastructure/repositories/CachedMessageRepository");
@@ -67,6 +71,7 @@ const GetMessageById = require("./application/use-cases/GetMessageById");
 const UpdateMessageContent = require("./application/use-cases/UpdateMessageContent");
 const DownloadFile = require("./application/use-cases/DownloadFile");
 const CreateGroup = require("./application/use-cases/CreateGroup");
+const AddAdmin = require("./application/use-cases/AddAdmin");
 const CreateBroadcast = require("./application/use-cases/CreateBroadcast");
 const MarkMessageDelivered = require("./application/use-cases/MarkMessageDelivered");
 const MarkMessageRead = require("./application/use-cases/MarkMessageRead");
@@ -75,11 +80,19 @@ const RemoveParticipant = require("./application/use-cases/RemoveParticipant");
 const LeaveConversation = require("./application/use-cases/LeaveConversation");
 const DeleteMessage = require("./application/use-cases/DeleteMessage");
 const DeleteFile = require("./application/use-cases/DeleteFile");
+const ForwardMessage = require("./application/use-cases/ForwardMessage");
+const ReplyMessage = require("./application/use-cases/ReplyMessage");
+const SearchOccurrences = require("./application/use-cases/SearchOccurrences");
+const ArchiveConversation = require("./application/use-cases/ArchiveConversation");
+const GetArchivedConversations = require("./application/use-cases/GetArchivedConversations");
+const AddReaction = require("./application/use-cases/AddReaction");
+const RemoveReaction = require("./application/use-cases/RemoveReaction");
 
 // Controllers
 const FileController = require("./application/controllers/FileController");
 const MessageController = require("./application/controllers/MessageController");
 const ConversationController = require("./application/controllers/ConversationController");
+const GroupController = require("./application/controllers/GroupController");
 const HealthController = require("./application/controllers/HealthController");
 
 // Repositories - Mongo
@@ -304,7 +317,42 @@ const startServer = async () => {
     // Initialiser le service de traitement multimédia
     const thumbnailService = new ThumbnailService(fileStorageService);
 
+    // ✅ INITIALISER ChunkedUploadService (upload par morceaux > 100 MB)
+    const chunkedUploadService = new ChunkedUploadService(
+      redisClient,
+      fileStorageService,
+    );
+    console.log("✅ ChunkedUploadService initialisé");
+
+    // ✅ NETTOYAGE AUTOMATIQUE DES CHUNKS EXPIRÉS (toutes les 30 minutes)
+    // Supprime les dossiers temporaires d'uploads abandonnés ou crashés (TTL > 2h)
+    const CHUNK_CLEANUP_INTERVAL_MS = 30 * 60 * 1000; // 30 min
+    setInterval(async () => {
+      try {
+        await chunkedUploadService.cleanupExpired();
+      } catch (err) {
+        console.warn("⚠️ Erreur nettoyage périodique chunks:", err.message);
+      }
+    }, CHUNK_CLEANUP_INTERVAL_MS);
+    console.log(
+      "✅ Nettoyage automatique des chunks planifié (toutes les 30 min)",
+    );
+
     console.log("✅ Services de fichiers initialisés");
+
+    // ===============================
+    // 5b. SERVICES CHIFFREMENT E2EE
+    // ===============================
+    const encryptionService = new EncryptionService({
+      mode: process.env.ENCRYPTION_MODE || "none",
+    });
+    const keyManagementService = new KeyManagementService(redisClient);
+    app.locals.encryptionService = encryptionService;
+    app.locals.keyManagementService = keyManagementService;
+    console.log(
+      `✅ EncryptionService initialisé (mode: ${encryptionService.getMode()})`,
+    );
+    console.log("✅ KeyManagementService initialisé");
 
     // ===============================
     // 6. INITIALISATION REPOSITORIES
@@ -350,6 +398,9 @@ const startServer = async () => {
           }
         },
       );
+
+      // ✅ CONFIGURER LE FALLBACK MongoDB POUR lastSeen
+      onlineUserManager.setConversationRepository(conversationRepository);
     }
 
     // ✅ INITIALISER TypingIndicatorService (après conversationRepository)
@@ -415,12 +466,22 @@ const startServer = async () => {
     // 7. INITIALISATION USE CASES
     // ===============================
 
+    // ✅ INITIALISER getFileUseCase EN PREMIER (requis par SendMessage)
+    const getFileUseCase = new GetFile(
+      fileRepository, // Cached
+      cacheServiceInstance,
+    );
+
     // ✅ PASSER resilientService À SendMessage
     const sendMessageUseCase = new SendMessage(
       messageRepository, // Cached
       conversationRepository, // Cached
       cacheServiceInstance,
       resilientMessageService, // ← NOUVEAU
+      null, // userCacheService
+      getFileUseCase, // ✅ AJOUT DE getFileUseCase
+      encryptionService, // ✅ Chiffrement E2EE
+      keyManagementService, // ✅ Gestion clés publiques
     );
 
     const getMessagesUseCase = new GetMessages(
@@ -440,6 +501,14 @@ const startServer = async () => {
       onlineUserManager, // ✅ AJOUTÉ pour statuts de présence
     );
 
+    const archiveConversationUseCase = new ArchiveConversation(
+      conversationRepository,
+    );
+    const getArchivedConversationsUseCase = new GetArchivedConversations(
+      conversationRepository,
+      onlineUserManager,
+    );
+
     const updateMessageStatusUseCase = new UpdateMessageStatus(
       messageRepository, // Cached
       conversationRepository, // Cached
@@ -457,11 +526,6 @@ const startServer = async () => {
       fileRepository, // Cached
       null, // kafkaProducer
       resilientMessageService, // ✅ AJOUTÉ pour publication events:files
-    );
-
-    const getFileUseCase = new GetFile(
-      fileRepository, // Cached
-      cacheServiceInstance,
     );
 
     const getConversationIdsUseCase = new GetConversationIds(
@@ -522,6 +586,11 @@ const startServer = async () => {
       userCacheService,
     );
 
+    const addAdminUseCase = new AddAdmin(
+      conversationRepository,
+      resilientMessageService,
+    );
+
     // ✅ NOUVEAUX USE CASES - Suppression
     const deleteMessageUseCase = new DeleteMessage(
       messageRepository,
@@ -535,6 +604,48 @@ const startServer = async () => {
       null, // kafkaProducer
       resilientMessageService,
     );
+
+    const forwardMessageUseCase = new ForwardMessage(
+      messageRepository,
+      sendMessageUseCase,
+    );
+
+    const replyMessageUseCase = new ReplyMessage(
+      messageRepository,
+      sendMessageUseCase,
+    );
+
+    const searchOccurrencesUseCase = new SearchOccurrences({
+      fileRepository,
+      conversationRepository,
+      messageRepository,
+    });
+
+    // ✅ NOUVEAUX USE CASES - Réactions
+    const addReactionUseCase = new AddReaction(
+      messageRepository,
+      resilientMessageService,
+    );
+
+    const removeReactionUseCase = new RemoveReaction(
+      messageRepository,
+      resilientMessageService,
+    );
+
+    // ===============================
+    // INITIALISATION AutoGroupSyncService
+    // ===============================
+    const autoGroupSyncService = new AutoGroupSyncService({
+      conversationRepository,
+      createGroupUseCase,
+      addParticipantUseCase,
+      userCacheService,
+      // visibilityServiceUrl: par défaut via .env
+    });
+    app.locals.autoGroupSyncService = autoGroupSyncService;
+
+    const AutoGroupSyncUseCase = require("./application/use-cases/AutoGroupSync");
+    const autoGroupSyncUseCase = new AutoGroupSyncUseCase(autoGroupSyncService);
 
     // Rendre disponibles globalement (injection simple pour controllers / handlers)
     app.locals.useCases = app.locals.useCases || {};
@@ -561,6 +672,10 @@ const startServer = async () => {
       fileStorageService,
       downloadFileUseCase,
       mediaProcessingService,
+      null, // searchOccurrencesUseCase
+      chunkedUploadService, // ✅ Upload chunké > 100 MB
+      encryptionService, // ✅ Chiffrement E2EE
+      keyManagementService, // ✅ Gestion clés publiques
     );
 
     const messageController = new MessageController(
@@ -574,7 +689,21 @@ const startServer = async () => {
       getConversationsUseCase,
       getConversationUseCase,
       redisClient,
+      null, // cacheService
+      searchOccurrencesUseCase,
+      archiveConversationUseCase,
+      getArchivedConversationsUseCase,
     );
+
+    const groupController = new GroupController({
+      createGroupUseCase,
+      getConversationUseCase,
+      addParticipantUseCase,
+      removeParticipantUseCase,
+      leaveConversationUseCase,
+      addAdminUseCase,
+      searchOccurrencesUseCase,
+    });
 
     const healthController = new HealthController(redisClient);
 
@@ -590,7 +719,7 @@ const startServer = async () => {
     // ✅ AJOUTER LA ROUTE CONVERSATIONS
     app.use("/conversations", createConversationRoutes(conversationController));
     app.use("/health", createHealthRoutes(healthController));
-    app.use("/groups", createGroupRoutes(createGroupUseCase));
+    app.use("/groups", createGroupRoutes(groupController));
     app.use("/broadcasts", createBroadcastRoutes(createBroadcastUseCase));
 
     // ===============================
@@ -599,6 +728,12 @@ const startServer = async () => {
     console.log("🔌 Configuration du gestionnaire WebSocket...");
 
     // ✅ CRÉER LE CHATHANDLER SANS UserConsumerManager
+    const UpdateCallStatus = require("./application/use-cases/UpdateCallStatus");
+    const updateCallStatusUseCase = new UpdateCallStatus(
+      messageRepository,
+      resilientMessageService,
+    );
+
     const chatHandler = new ChatHandler(
       io,
       sendMessageUseCase,
@@ -623,6 +758,16 @@ const startServer = async () => {
       leaveConversationUseCase,
       deleteMessageUseCase,
       deleteFileUseCase,
+      updateCallStatusUseCase,
+      forwardMessageUseCase,
+      addReactionUseCase,
+      removeReactionUseCase,
+      replyMessageUseCase,
+      autoGroupSyncUseCase,
+      encryptionService, // ✅ E2EE
+      keyManagementService, // ✅ E2EE
+      archiveConversationUseCase, // ✅ Archivage
+      getArchivedConversationsUseCase, // ✅ Archivage
     );
 
     // ✅ CONFIGURER LES GESTIONNAIRES D'ÉVÉNEMENTS SOCKET.IO

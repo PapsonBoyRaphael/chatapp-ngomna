@@ -21,6 +21,7 @@ class File {
     isPublic = false,
     expiresAt = null,
     tags = [],
+    isClientRecorded = false,
   }) {
     this._id = _id;
     this.originalName = originalName;
@@ -40,6 +41,8 @@ class File {
     this.isPublic = isPublic;
     this.expiresAt = expiresAt;
     this.tags = tags;
+    this.isClientRecorded =
+      isClientRecorded === true || isClientRecorded === "true";
   }
 
   // Enrichir les métadonnées
@@ -202,7 +205,11 @@ class File {
           aspectRatio: existing.aspectRatio,
           videoCodec: existing.videoCodec,
           audioCodec: existing.audioCodec,
+          audioChannels: existing.audioChannels,
+          audioSampleRate: existing.audioSampleRate,
           hasSubtitles: existing.hasSubtitles || false,
+          // ✅ Miniature vidéo (frame extraite + thumbnails générés)
+          thumbnail: existing.thumbnail || null,
         };
 
       case "AUDIO":
@@ -527,6 +534,7 @@ class File {
       isPublic: this.isPublic,
       expiresAt: this.expiresAt,
       tags: this.tags,
+      isClientRecorded: this.isClientRecorded,
     };
   }
 
@@ -546,7 +554,7 @@ class File {
     mimeType,
     size,
     uploadedBy,
-    conversationId = null
+    conversationId = null,
   ) {
     const fileName = `${Date.now()}_${originalName}`;
 

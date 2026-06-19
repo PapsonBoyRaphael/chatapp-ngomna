@@ -4,4 +4,3 @@ dist
 *.log
 chat-file-service/~/minio-data/
 .env
-*.md

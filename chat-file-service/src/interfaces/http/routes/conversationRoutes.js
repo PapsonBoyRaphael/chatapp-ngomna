@@ -28,16 +28,19 @@ function createConversationRoutes(conversationController) {
     "getConversation",
     "createConversation",
     "markAsRead",
+    "archiveConversation",
+    "unarchiveConversation",
+    "getArchivedConversations",
   ];
   const missingMethods = requiredMethods.filter(
-    (method) => typeof conversationController[method] !== "function"
+    (method) => typeof conversationController[method] !== "function",
   );
 
   if (missingMethods.length > 0) {
     console.error(
       `❌ Méthodes manquantes dans ConversationController: ${missingMethods.join(
-        ", "
-      )}`
+        ", ",
+      )}`,
     );
     router.all("*", (req, res) => {
       res.status(503).json({
@@ -87,7 +90,95 @@ function createConversationRoutes(conversationController) {
                 : "Erreur interne",
           });
         }
-      }
+      },
+    );
+
+    /**
+     * @api {get} /conversations/archived Get Archived Conversations
+     * @apiName GetArchivedConversations
+     * @apiGroup Conversations
+     */
+    router.get(
+      "/archived",
+      authMiddleware.authenticate,
+      rateLimitMiddleware.apiLimit,
+      async (req, res) => {
+        try {
+          await conversationController.getArchivedConversations(req, res);
+        } catch (error) {
+          console.error("❌ Erreur route GET /conversations/archived:", error);
+          res.status(500).json({
+            success: false,
+            message:
+              "Erreur lors de la récupération des conversations archivées",
+            error:
+              process.env.NODE_ENV === "development"
+                ? error.message
+                : "Erreur interne",
+          });
+        }
+      },
+    );
+
+    /**
+     * @api {post} /conversations/:conversationId/archive Archive Conversation
+     * @apiName ArchiveConversation
+     * @apiGroup Conversations
+     */
+    router.post(
+      "/:conversationId/archive",
+      authMiddleware.authenticate,
+      rateLimitMiddleware.apiLimit,
+      validationMiddleware.validateMongoId("conversationId"),
+      async (req, res) => {
+        try {
+          req.body = { ...req.body, action: "archive" };
+          await conversationController.archiveConversation(req, res);
+        } catch (error) {
+          console.error(
+            "❌ Erreur route POST /conversations/:id/archive:",
+            error,
+          );
+          res.status(500).json({
+            success: false,
+            message: "Erreur lors de l'archivage",
+            error:
+              process.env.NODE_ENV === "development"
+                ? error.message
+                : "Erreur interne",
+          });
+        }
+      },
+    );
+
+    /**
+     * @api {post} /conversations/:conversationId/unarchive Unarchive Conversation
+     * @apiName UnarchiveConversation
+     * @apiGroup Conversations
+     */
+    router.post(
+      "/:conversationId/unarchive",
+      authMiddleware.authenticate,
+      rateLimitMiddleware.apiLimit,
+      validationMiddleware.validateMongoId("conversationId"),
+      async (req, res) => {
+        try {
+          await conversationController.unarchiveConversation(req, res);
+        } catch (error) {
+          console.error(
+            "❌ Erreur route POST /conversations/:id/unarchive:",
+            error,
+          );
+          res.status(500).json({
+            success: false,
+            message: "Erreur lors du désarchivage",
+            error:
+              process.env.NODE_ENV === "development"
+                ? error.message
+                : "Erreur interne",
+          });
+        }
+      },
     );
 
     /**
@@ -114,7 +205,7 @@ function createConversationRoutes(conversationController) {
                 : "Erreur interne",
           });
         }
-      }
+      },
     );
 
     /**
@@ -142,7 +233,7 @@ function createConversationRoutes(conversationController) {
                 : "Erreur interne",
           });
         }
-      }
+      },
     );
 
     /**
@@ -169,7 +260,7 @@ function createConversationRoutes(conversationController) {
                 : "Erreur interne",
           });
         }
-      }
+      },
     );
 
     /**
@@ -193,7 +284,7 @@ function createConversationRoutes(conversationController) {
             error: error.message,
           });
         }
-      }
+      },
     );
 
     console.log("✅ Routes conversations configurées");

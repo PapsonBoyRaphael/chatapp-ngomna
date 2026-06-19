@@ -103,14 +103,21 @@ class MarkMessageDelivered {
             targetMsgId &&
             updatedMessage?.status === "DELIVERED"
           ) {
-            await this.conversationRepository.updateLastMessageStatus(
-              targetConvId,
-              targetMsgId,
-              "DELIVERED",
-            );
-            console.log(
-              `✅ lastMessage.status mis à jour → DELIVERED (tous ont reçu)`,
-            );
+            const updateResult =
+              await this.conversationRepository.updateLastMessageStatus(
+                targetConvId,
+                targetMsgId,
+                "DELIVERED",
+              );
+            if (updateResult) {
+              console.log(
+                `✅ lastMessage.status mis à jour → DELIVERED (tous ont reçu)`,
+              );
+            } else {
+              console.log(
+                `ℹ️ lastMessage.status non modifié (message ${targetMsgId} n'est pas le dernier message de la conversation)`,
+              );
+            }
           } else {
             console.log(
               `ℹ️ lastMessage.status non mis à jour (${updatedMessage?.deliveredCount || 0}/${updatedMessage?.totalRecipients || 1} ont reçu)`,

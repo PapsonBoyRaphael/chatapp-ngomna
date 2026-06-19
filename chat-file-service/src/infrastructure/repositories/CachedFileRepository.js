@@ -7,7 +7,7 @@ class CachedFileRepository {
   constructor(fileRepository, cacheService) {
     this.primaryStore = fileRepository; // Le pur Mongo repo
     this.cache = cacheService;
-    this.cachePrefix = "file:";
+    this.cachePrefix = "chat:cache:file:";
     this.defaultTTL = 7200; // 2 heures (adapté pour fichiers)
     this.shortTTL = 300; // 5 minutes pour ops temporaires
   }
