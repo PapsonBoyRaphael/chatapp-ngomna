@@ -13,6 +13,21 @@ class MongoConversationRepository {
     };
   }
 
+  /**
+   * Trouve une conversation par query MongoDB (ex: { code_structure: "..." })
+   */
+  async findOne(query = {}) {
+    try {
+      if (!query || typeof query !== "object") {
+        throw new Error("Query object requis pour findOne");
+      }
+      return await Conversation.findOne(query).lean();
+    } catch (error) {
+      console.error("❌ Erreur findOne conversation:", error);
+      throw error;
+    }
+  }
+
   async save(conversationData) {
     const startTime = Date.now();
 

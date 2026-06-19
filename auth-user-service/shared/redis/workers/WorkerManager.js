@@ -31,7 +31,7 @@ class WorkerManager {
     this.workers.retry = new RetryWorker(this.streamManager, {
       maxRetries: this.options.maxRetries || 5,
       batchSize: this.options.batchSize || 10,
-      processingDelayMs: this.options.retryIntervalMs || 1000,
+      processingDelayMs: this.options.retryIntervalMs || 20,
       saveCallback: callbacks.save,
       publishCallback: callbacks.publish,
       dlqCallback: callbacks.dlq,

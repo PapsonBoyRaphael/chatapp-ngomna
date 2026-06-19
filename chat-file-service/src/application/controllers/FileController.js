@@ -1081,6 +1081,21 @@ class FileController {
       const processingTime = Date.now() - startTime;
       console.error("❌ Erreur completeChunkedUpload:", error);
 
+      // ✅ NETTOYAGE DES CHUNKS EN CAS D'ERREUR
+      // Évite l'accumulation de fichiers temporaires orphelins sur le disque
+      if (this.chunkedUploadService) {
+        const { uploadId } = req.params;
+        try {
+          await this.chunkedUploadService.cleanup(uploadId);
+          console.log(`🗑️ Chunks nettoyés après erreur pour: ${uploadId}`);
+        } catch (cleanupError) {
+          console.warn(
+            `⚠️ Erreur nettoyage chunks après échec (${uploadId}):`,
+            cleanupError.message,
+          );
+        }
+      }
+
       return res.status(500).json({
         success: false,
         message: "Erreur lors de la finalisation de l'upload chunké",

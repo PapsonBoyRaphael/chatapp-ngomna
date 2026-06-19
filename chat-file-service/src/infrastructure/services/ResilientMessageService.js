@@ -75,7 +75,7 @@ class ResilientMessageService {
 
     this.isRunning = false;
     this.batchSize = 10;
-    this.processingDelayMs = 1000;
+    this.processingDelayMs = parseInt(process.env.PROCESSING_DELAY_MS) || 20;
     this.consumerGroupsInitialized = false;
 
     // ✅ NOUVEAU : Instancier WorkerManager pour orchestrer les workers
@@ -83,6 +83,10 @@ class ResilientMessageService {
       this.workerManager = new WorkerManager(this.streamManager, this.redis, {
         maxRetries: this.maxRetries,
         batchSize: this.batchSize,
+        // Intervalles des workers basés sur processingDelayMs
+        retryIntervalMs: this.processingDelayMs,            // 1x → 20ms
+        fallbackIntervalMs: this.processingDelayMs * 2,     // 2x → 40ms
+        walIntervalMs: this.processingDelayMs * 3,          // 3x → 60ms
       });
       console.log("✅ WorkerManager instancié avec succès");
     } catch (err) {

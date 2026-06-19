@@ -13,7 +13,7 @@ class RetryWorker {
     this.options = {
       maxRetries: options.maxRetries || 5,
       batchSize: options.batchSize || 10,
-      processingDelayMs: options.processingDelayMs || 1000,
+      processingDelayMs: options.processingDelayMs || 20,
       ...options,
     };
 
@@ -219,7 +219,7 @@ class RetryWorker {
           attempt: attempt.toString(),
           error: (error.message || "unknown").substring(0, 300),
           timestamp: Date.now().toString(),
-          nextRetryAt: (Date.now() + 100 * Math.pow(2, attempt - 1)).toString(),
+          nextRetryAt: (Date.now() + this.options.processingDelayMs * Math.pow(2, attempt - 1)).toString(),
           data: dataStr,
         }
       );

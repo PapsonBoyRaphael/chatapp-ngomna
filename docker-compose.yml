@@ -1,132 +1,229 @@
 version: "3.8"
+
 services:
-  gateway:
-    build: ./gateway
-    ports:
-      - "8000:8000"
-    depends_on:
-      - user-service
-      - auth-service
-      - chat-service
-      - group-service
-      - visibility-service
-      - file-service
-      - postgres
-      - mongo
-
-  user-service:
-    build: ./user-service
-    ports:
-      - "8001:8001"
-    environment:
-      - PORT=8001
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_USER=postgres
-      - DB_PASSWORD=password
-      - DB_NAME=chatapp_users
-    depends_on:
-      - postgres
-
-  auth-service:
-    build: ./auth-service
-    ports:
-      - "8002:8002"
-    environment:
-      - PORT=8002
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_USER=postgres
-      - DB_PASSWORD=password
-      - DB_NAME=chatapp_auth
-      - JWT_SECRET=your-secret-key
-    depends_on:
-      - postgres
-
-  chat-service:
-    build: ./chat-service
+  # ============================================================================
+  # CHAT-FILE-SERVICE - Cœur du système de messagerie
+  # ============================================================================
+  chat-file-service:
+    build:
+      context: ./chat-file-service
+      dockerfile: Dockerfile
+    container_name: chat-file-service
     ports:
       - "8003:8003"
     environment:
-      - PORT=8003
-      - DB_HOST=mongo
-      - DB_PORT=27017
-      - DB_NAME=chatapp_messages
-    depends_on:
-      - mongo
+      # Node
+      NODE_ENV: ${NODE_ENV:-development}
 
-  group-service:
-    build: ./group-service
-    ports:
-      - "8004:8004"
-    environment:
-      - PORT=8004
-      - DB_HOST=mongo
-      - DB_PORT=27017
-      - DB_NAME=chatapp_groups
-    depends_on:
-      - mongo
+      # Service
+      PORT: 8003
+      CHAT_FILE_SERVICE_PORT: 8003
 
-  visibility-service:
-    build: ./visibility-service
-    ports:
-      - "8005:8005"
-    environment:
-      - PORT=8005
-      - DB_HOST=mongo
-      - DB_PORT=27017
-      - DB_NAME=chatapp_visibility
-    depends_on:
-      - mongo
+      # MongoDB
+      MONGODB_URI: mongodb://mongodb:27017/chatdb
+      MONGODB_REPLICA_SET: ${MONGODB_REPLICA_SET:-}
 
-  file-service:
-    build: ./file-service
-    ports:
-      - "8006:8006"
-    environment:
-      - PORT=8006
-      - DB_HOST=mongo
-      - DB_PORT=27017
-      - DB_NAME=chatapp_files
-    depends_on:
-      - mongo
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_DB: ${REDIS_DB:-0}
 
-  postgres:
-    image: postgres:15
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=chatapp_users
-    ports:
-      - "5432:5432"
+      # MinIO (S3-compatible)
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-chat-files}
+      S3_REGION: ${S3_REGION:-us-east-1}
+
+      # JWT
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key-change-in-prod}
+      JWT_EXPIRY: ${JWT_EXPIRY:-15m}
+      JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY:-7d}
+
+      # E2EE (Encryption)
+      E2EE_ENABLED: ${E2EE_ENABLED:-false}
+      E2EE_KEY_ALGORITHM: ${E2EE_KEY_ALGORITHM:-RSA}
+      E2EE_KEY_SIZE: ${E2EE_KEY_SIZE:-2048}
+
+      # Rate Limiting
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-900000}
+      RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-1000}
+      RATE_LIMIT_AUTH_MAX: ${RATE_LIMIT_AUTH_MAX:-10}
+
+      # Upload
+      FILE_MAX_SIZE: ${FILE_MAX_SIZE:-104857600}
+      CHUNK_SIZE: ${CHUNK_SIZE:-5242880}
+      TEMP_DIR: /app/storage/temp
+
+      # FFmpeg (Thumbnails)
+      FFMPEG_PATH: /usr/bin/ffmpeg
+      THUMBNAIL_MAX_SIZE: ${THUMBNAIL_MAX_SIZE:-200x200}
+
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # Persistance des uploads
+      - chat_uploads:/app/storage/uploads
+      - chat_chunks:/app/storage/chunks
+      - chat_temp:/app/storage/temp
+      - chat_logs:/app/logs
 
-  mongo:
+    networks:
+      - chat_network
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ============================================================================
+  # MONGODB - Base de données NoSQL pour messages, conversations, fichiers
+  # ============================================================================
+  mongodb:
     image: mongo:6.0
-    environment:
-      - MONGO_INITDB_DATABASE=chatapp_messages
+    container_name: mongodb
     ports:
       - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
-
-  neo4j:
-    image: neo4j:5.9
-    ports:
-      - "7474:7474" # HTTP
-      - "7687:7687" # Bolt
     environment:
-      - NEO4J_AUTH=neo4j/password
-      - NEO4J_apoc_export_file_enabled=true
-      - NEO4J_apoc_import_file_enabled=true
-      - NEO4J_dbms_security_procedures_unrestricted=apoc.*
-    volumes:
-      - neo4j_data:/data
-      - neo4j_plugins:/plugins
+      MONGO_INITDB_DATABASE: chatdb
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-password}
 
+    volumes:
+      # Persistance des données
+      - mongodb_data:/data/db
+      - mongodb_config:/data/configdb
+      # Initialisation (optionnel)
+      - ./chat-file-service/scripts/mongo-init.js:/docker-entrypoint-initdb.d/init.js:ro
+
+    networks:
+      - chat_network
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: echo 'db.adminCommand("ping")' | mongosh --username ${MONGO_USER:-admin} --password ${MONGO_PASSWORD:-password} --authenticationDatabase admin
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+    command: >
+      mongod
+      --replSet rs0
+      --auth
+
+  # ============================================================================
+  # REDIS - Cache distribué, Streams, Pub/Sub pour la résilience
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    environment:
+      # Configuration via le Dockerfile ou command
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+
+    volumes:
+      # Persistance RDB
+      - redis_data:/data
+
+    networks:
+      - chat_network
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --requirepass ${REDIS_PASSWORD:-}
+
+  # ============================================================================
+  # MINIO - Stockage S3-compatible pour les fichiers (uploads, thumbnails)
+  # ============================================================================
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000" # API S3
+      - "9001:9001" # Console Web
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-minioadmin}
+      MINIO_BROWSER: "on"
+
+    volumes:
+      # Persistance des fichiers
+      - minio_data:/data
+
+    networks:
+      - chat_network
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
+
+    command: server /data --console-address ":9001"
+
+    # (Optionnel) Créer le bucket au démarrage
+    # Décommenter si vous avez un script d'init
+
+# ============================================================================
+# VOLUMES PERSISTANTS
+# ============================================================================
 volumes:
-  postgres_data:
-  mongo_data:
-  neo4j_data:
-  neo4j_plugins:
+  # MongoDB
+  mongodb_data:
+    driver: local
+  mongodb_config:
+    driver: local
+
+  # Redis
+  redis_data:
+    driver: local
+
+  # MinIO
+  minio_data:
+    driver: local
+
+  # Chat-File-Service
+  chat_uploads:
+    driver: local
+  chat_chunks:
+    driver: local
+  chat_temp:
+    driver: local
+  chat_logs:
+    driver: local
+
+# ============================================================================
+# RÉSEAU INTERNE
+# ============================================================================
+networks:
+  chat_network:
+    driver: bridge

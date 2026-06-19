@@ -324,6 +324,20 @@ const startServer = async () => {
     );
     console.log("✅ ChunkedUploadService initialisé");
 
+    // ✅ NETTOYAGE AUTOMATIQUE DES CHUNKS EXPIRÉS (toutes les 30 minutes)
+    // Supprime les dossiers temporaires d'uploads abandonnés ou crashés (TTL > 2h)
+    const CHUNK_CLEANUP_INTERVAL_MS = 30 * 60 * 1000; // 30 min
+    setInterval(async () => {
+      try {
+        await chunkedUploadService.cleanupExpired();
+      } catch (err) {
+        console.warn("⚠️ Erreur nettoyage périodique chunks:", err.message);
+      }
+    }, CHUNK_CLEANUP_INTERVAL_MS);
+    console.log(
+      "✅ Nettoyage automatique des chunks planifié (toutes les 30 min)",
+    );
+
     console.log("✅ Services de fichiers initialisés");
 
     // ===============================

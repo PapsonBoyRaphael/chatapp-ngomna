@@ -253,7 +253,7 @@ class MessageDeliveryService {
 
     // ✅ QUEUE DE LIVRAISON SÉRIALISÉE pour éviter la saturation Socket.IO en burst
     this._statusDeliveryQueues = new Map(); // userId → { queue: [], processing: boolean }
-    this._STATUS_INTER_MESSAGE_DELAY_MS = 15; // 15ms entre chaque emit pour éviter la saturation
+    this._STATUS_INTER_MESSAGE_DELAY_MS = 20; // 20ms entre chaque emit pour éviter la saturation
 
     // ✅ CACHE DE DÉDUPLICATION pour éviter double livraison (direct + stream consumer)
     // Clé: "userId:messageId:status" → timestamp de livraison
