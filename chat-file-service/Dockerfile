@@ -39,6 +39,7 @@ FROM node:18-alpine
 # Installer les dépendances runtime uniquement
 RUN apk add --no-cache \
     ffmpeg \
+    exiftool \
     curl \
     ca-certificates \
     tini \
