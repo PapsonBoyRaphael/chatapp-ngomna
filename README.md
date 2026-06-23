@@ -1,1403 +1,885 @@
-# 📚 Documentation Technique — ChatApp nGomna
+# 📚 Chat-File-Service — Documentation Technique
 
-**Version:** 1.0.0 | **Dernière mise à jour:** 17 Juin 2026 | **Statut:** Production
-
----
-
-## 🚀 Introduction & Objectif
-
-### Vue d'ensemble
-
-**ChatApp nGomna** est une **plateforme de messagerie en temps réel** basée sur une **architecture microservices**, conçue pour supporter :
-
-- **Conversations privées**, **groupes** et **canaux de diffusion**
-- **Transfert de fichiers** optimisé avec **chunks** et **MinIO** (S3-compatible)
-- **Crypto de bout en bout (E2EE)** pour les conversations sensibles
-- **Présence en temps réel** et **indicateurs de frappe**
-- **Résilience distribuée** via **Redis Streams** et **Circuit Breakers**
-- **Intégration multiplateforme** (Flask, Flutter, Web)
-
-### Problème résolu
-
-Le projet répond aux défis suivants :
-
-- **Scalabilité horizontale** : Architecture microservices découplée avec Redis Streams au lieu de broadcasts directs
-- **Fiabilité de livraison** : Garantie de livraison des messages via système de statuts (`DELIVERED`, `READ`, `EDITED`, `DELETED`)
-- **Performance** : Cache distribué (Redis), compression, prewarmers intelligents, pagination
-- **Sécurité** : Authentication JWT, rate limiting, E2EE, gestion des clés
-- **Accessibilité** : Support multi-device, archivage conversationnel, recherche fulltext
+**Version :** 1.0.0 | **Dernière mise à jour :** 20 Juin 2026 | **Port :** 8003
 
 ---
 
-## 🏗️ Architecture & Flux de données
+## 🚀 Vue d'ensemble
 
-### Modèle microservices
+Le **Chat-File-Service** est le microservice central de la messagerie de **ChatApp nGomna**. Il orchestre la totalité de la logique de messagerie en temps réel, la gestion complète des fichiers, et la distribution d'événements à travers une architecture distribuée résiliente.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         CLIENT LAYER                            │
-│  (Flutter App, Web App, API External Clients)                   │
-└────────────────────────┬────────────────────────────────────────┘
-                         │
-         HTTP + WebSocket over Socket.IO
-                         │
-         ┌───────────────▼──────────────────┐
-         │      GATEWAY (Port 8000)          │
-         │  • Route Proxy                    │
-         │  • Rate Limiting Global           │
-         │  • CORS & Security Headers        │
-         │  • Load Balancing                 │
-         └──┬─────────────┬─────────────┬────┘
-            │             │             │
-    ┌───────▼─┐    ┌──────▼──────┐   ┌─▼──────────────┐
-    │ Auth    │    │Chat-File    │   │ Visibility     │
-    │Service  │    │Service      │   │ Service        │
-    │(8001)   │    │(8003)       │   │(Future)        │
-    └────┬────┘    └──┬───┬──────┘   └────────────────┘
-         │            │   │
-         │            │   │
-    ┌────▼────────────▼───▼──────────┐
-    │    INFRASTRUCTURE LAYER        │
-    │                                │
-    │  ┌──────────────────────────┐  │
-    │  │ MongoDB                  │  │
-    │  │ • Messages               │  │
-    │  │ • Conversations          │  │
-    │  │ • Files                  │  │
-    │  │ • Users (cache)          │  │
-    │  └──────────────────────────┘  │
-    │                                │
-    │  ┌──────────────────────────┐  │
-    │  │ Redis (distributed)      │  │
-    │  │ • Streams (Events)       │  │
-    │  │ • Caches (Hot Data)      │  │
-    │  │ • Pub/Sub (Online Users) │  │
-    │  └──────────────────────────┘  │
-    │                                │
-    │  ┌──────────────────────────┐  │
-    │  │ MinIO (S3-compatible)    │  │
-    │  │ • File Storage           │  │
-    │  │ • Chunks                 │  │
-    │  └──────────────────────────┘  │
-    │                                │
-    │  ┌──────────────────────────┐  │
-    │  │ External Services        │  │
-    │  │ • FFmpeg (Thumbnails)    │  │
-    │  │ • E2EE (Crypto)          │  │
-    └──┴──────────────────────────┘
-```
+Ce service implémente une **Clean Architecture** stricte, découplant la logique métier des détails d'infrastructure, et s'appuie sur des **patterns de résilience** avancés (Circuit Breaker, WAL, DLQ, Retry exponentiel) pour garantir la livraison des messages même en cas de défaillance partielle de l'infrastructure.
 
-### Services microservices
+### Responsabilités principales
 
-| Service                | Port  | Responsabilité                                          | Tech Stack                                 |
-| ---------------------- | ----- | ------------------------------------------------------- | ------------------------------------------ |
-| **Gateway**            | 8000  | Point d'entrée, proxy, authentification, rate limiting  | Express.js, http-proxy, helmet             |
-| **Auth-User-Service**  | 8001  | Authentification JWT, gestion des utilisateurs, séeding | Node.js, Express, JWT, Redis               |
-| **Chat-File-Service**  | 8003  | Cœur du chat, messages, fichiers, groupes, présence     | Node.js, Socket.IO, MongoDB, Redis Streams |
-| **Visibility-Service** | (TBD) | Statut utilisateur, présence avancée                    | (Futur)                                    |
-
-### Couches architecturales du Chat-File-Service
-
-Le **Chat-File-Service** suit une **Clean Architecture** organisée par couches de responsabilité :
-
-```
-src/
-├── interfaces/              # 🔌 Couche d'interface (I/O)
-│   └── http/
-│       ├── routes/          # Définitions des routes Express
-│       │   ├── messageRoutes.js
-│       │   ├── fileRoutes.js
-│       │   ├── conversationRoutes.js
-│       │   ├── groupRoutes.js
-│       │   └── broadcastRoutes.js
-│       ├── middleware/      # Middleware (auth, validation, cache)
-│       │   ├── authMiddleware.js
-│       │   ├── validationMiddleware.js
-│       │   └── rateLimitMiddleware.js
-│       └── (WebSocket: chatHandler.js)
-│
-├── application/             # 📦 Couche application (Use Cases & Controllers)
-│   ├── controllers/         # HTTP Controllers
-│   │   ├── MessageController.js
-│   │   ├── FileController.js
-│   │   ├── ConversationController.js
-│   │   └── GroupController.js
-│   ├── use-cases/          # Business Logic (Clean Arch)
-│   │   ├── SendMessage.js
-│   │   ├── GetMessages.js
-│   │   ├── CreateGroup.js
-│   │   ├── MarkMessageRead.js
-│   │   ├── DeleteMessage.js
-│   │   ├── ForwardMessage.js
-│   │   ├── UploadFile.js
-│   │   └── ... (voir USE_CASES_REFERENCE.md pour la liste exhaustive)
-│   └── websocket/
-│       └── chatHandler.js   # WebSocket Event Handler
-│
-├── domain/                  # 🎯 Couche domaine (Entities & Rules)
-│   ├── entities/
-│   │   ├── Message.js
-│   │   ├── Conversation.js
-│   │   ├── User.js
-│   │   └── File.js
-│   ├── repositories/        # Interfaces (contracts)
-│   │   ├── IMessageRepository.js
-│   │   └── IConversationRepository.js
-│   └── rules/               # Logique métier
-│
-├── infrastructure/          # 🛠️ Couche infrastructure (External services)
-│   ├── mongodb/
-│   │   ├── connection.js
-│   │   ├── models/
-│   │   │   ├── Message.js
-│   │   │   ├── Conversation.js
-│   │   │   └── File.js
-│   │   └── indexes.js
-│   ├── redis/
-│   │   ├── redisConfig.js
-│   │   └── RedisManager.js (shared)
-│   ├── repositories/        # Implémentations concrètes
-│   │   ├── MongoMessageRepository.js
-│   │   ├── CachedMessageRepository.js
-│   │   ├── MongoConversationRepository.js
-│   │   └── CachedConversationRepository.js
-│   └── services/            # Services techniques
-│       ├── FileStorageService.js (MinIO)
-│       ├── ThumbnailService.js (FFmpeg)
-│       ├── ChunkedUploadService.js
-│       ├── EncryptionService.js (E2EE)
-│       ├── KeyManagementService.js
-│       ├── ResilientMessageService.js (Streams)
-│       ├── MessageDeliveryService.js (Consumer Redis)
-│       ├── TypingIndicatorService.js
-│       ├── UserCacheService.js
-│       ├── SmartCachePrewarmer.js
-│       └── AutoGroupSyncService.js
-│
-└── config/
-    └── envValidator.js      # Validation des variables d'env
-```
-
-### Flux de communication — Cycle de vie d'un message
-
-```
-ÉMETTEUR (Client A)
-        │
-        ├─► WebSocket: "sendMessage" event
-        │
-CHAT-FILE-SERVICE
-        │
-        ├─► chatHandler.handleSendMessage()
-        │
-        ├─► SendMessage Use Case execute()
-        │   ├─► Validation (contenu, conversationId)
-        │   ├─► Save MongoDB (Message document)
-        │   ├─► WAL (Write-Ahead Log) Redis
-        │   ├─► Publish Redis Stream "chat:stream:messages:*"
-        │   └─► ACK: "message_sent" → Client A
-        │
-        ├─► ResilientMessageService (senderSocketId = socket.id)
-        │   └─► Stream publie: { messageId, content, senderSocketId, ... }
-        │
-REDIS INFRASTRUCTURE
-        │
-        ├─► Redis Stream "chat:stream:messages:private" (ou group/channel)
-        │
-        ├─► MessageDeliveryService (Consumer)
-        │   ├─► Lit stream avec consumer group
-        │   ├─► Récupère senderSocketId
-        │   ├─► EXCLUT socket.id exact (pas tous les sockets de l'userId)
-        │   └─► Émet à TOUS les autres participants
-        │
-DESTINATAIRES (Sockets excepté A)
-        │
-        └─► "newMessage" event (privé)
-            ou "message:group" / "message:channel" (groupes)
-```
-
-### Redis Streams — Architecture distribuée
-
-```
-Redis Streams (Résilience & Scalabilité)
-│
-├─ chat:stream:messages:private
-│  ├─ Consumer: MessageDeliveryService
-│  └─ Format: { messageId, conversationId, content, type, senderSocketId, ... }
-│
-├─ chat:stream:messages:group
-│  └─ Consumer: MessageDeliveryService
-│
-├─ chat:stream:messages:channel
-│  └─ Consumer: MessageDeliveryService
-│
-├─ chat:stream:events:typing
-│  └─ Consumer: TypingIndicatorService (debounce 1s, timeout 10s)
-│
-├─ chat:stream:statusDelivered
-│  ├─ Consumer: MessageDeliveryService
-│  └─ ACK: Expéditeur reçoit "message:status" DELIVERED
-│
-├─ chat:stream:statusRead
-│  ├─ Consumer: MessageDeliveryService
-│  ├─ Format: { messageId, conversationId, userId, status: "READ" }
-│  └─ Bulk support: { isBulk: true, messageIds: [...], ... }
-│
-├─ chat:stream:statusEdited
-│  └─ Consumer: MessageDeliveryService
-│
-├─ chat:stream:statusDeleted
-│  └─ Consumer: MessageDeliveryService
-│
-├─ chat:stream:reactions
-│  └─ Consumer: MessageDeliveryService
-│
-├─ chat:stream:replies
-│  └─ Consumer: MessageDeliveryService
-│
-├─ chat:stream:conversationCreated
-│  └─ Consumer: MessageDeliveryService (MDS)
-│
-├─ chat:stream:participantAdded
-│  └─ Consumer: MessageDeliveryService
-│
-└─ chat:stream:calls
-   └─ Consumer: MessageDeliveryService
-```
-
-### Redis Keys (Caching & State)
-
-```
-Cache Hot Data
-├─ chat:message:{messageId}              # Message object (TTL: 1h)
-├─ chat:conversation:{conversationId}    # Conversation object (TTL: 30m)
-├─ chat:user:{userId}                    # User metadata (TTL: 1h)
-├─ chat:messages:conversation:{convId}   # Messages pagination cache
-├─ chat:unread:{userId}                  # Unread count (TTL: 5m)
-└─ chat:typing:{conversationId}          # Typing indicators (ephemeral)
-
-Online Presence
-├─ chat:online:users                     # Set of online user IDs
-├─ chat:online:user:{userId}             # Socket IDs of user
-├─ chat:presence:{conversationId}        # Users in conversation
-└─ chat:room:{conversationId}            # Socket.IO room members
-```
+- **Messagerie temps réel** : envoi, réception, édition, suppression, réactions, réponses, transfert
+- **Gestion des fichiers** : upload monolithique et chunké (> 100 MB), download, miniatures, traitement multimédia
+- **Distribution d'événements** : publication et consommation de 20+ streams Redis (messages, statuts, typing, notifications, conversations, appels)
+- **Chiffrement E2EE** : chiffrement de bout en bout optionnel (AES-256-GCM + RSA-OAEP 4096)
+- **Cache distribué** : cache multi-niveaux avec invalidation intelligente et pré-chauffage
+- **Présence temps réel** : tracking des utilisateurs en ligne, indicateurs de frappe avec debounce
 
 ---
 
-## 📦 Prérequis & Installation
+## 🛠️ Technologies & Dépendances
 
-### Prérequis système
+### Stack technique principale
 
-```bash
-# Version minimales requises
-Node.js       >= 18.x    (testé avec 18.19.0 LTS)
-npm           >= 8.x
-Docker        >= 20.x    (pour les services d'infrastructure)
-Git           >= 2.x
-```
-
-### Dépendances services
-
-| Service | Technologie           | Port        | Containerisé     |
-| ------- | --------------------- | ----------- | ---------------- |
-| MongoDB | NoSQL DB              | 27017       | ✅ Docker        |
-| Redis   | Cache & Streams       | 6379        | ✅ Docker        |
-| MinIO   | S3-compatible Storage | 9000/9001   | ✅ Docker        |
-| FFmpeg  | Media Processing      | N/A (local) | ❌ Local install |
-
-### Installation locale
-
-#### 1. Cloner le dépôt
-
-```bash
-git clone https://github.com/PapsonBoyRaphael/chatapp-ngomna.git
-cd chatapp-ngomna
-```
-
-#### 2. Installer les dépendances
-
-```bash
-# Auth-User-Service
-cd auth-user-service && npm install && cd ..
-
-# Chat-File-Service
-cd chat-file-service && npm install && cd ..
-
-# Gateway
-cd gateway && npm install && cd ..
-
-# Shared modules
-cd shared && npm install && cd ..
-```
-
-#### 3. Configurer les variables d'environnement
-
-**`.env` principal** (racine du projet) :
-
-```bash
-NODE_ENV=development
-
-# Gateway
-GATEWAY_PORT=8000
-GATEWAY_LOG_LEVEL=debug
-
-# Auth-User-Service
-AUTH_USER_SERVICE_PORT=8001
-AUTH_USER_SERVICE_URL=http://localhost:8001
-
-# Chat-File-Service
-CHAT_FILE_SERVICE_PORT=8003
-CHAT_FILE_SERVICE_URL=http://localhost:8003
-
-# MongoDB
-MONGODB_URI=mongodb://localhost:27017/chatdb
-MONGODB_REPLICA_SET=                    # Optionnel pour production
-
-# Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_PASSWORD=                         # Optionnel
-REDIS_DB=0
-
-# MinIO (S3)
-S3_ENDPOINT=http://localhost:9000
-S3_ACCESS_KEY=minioadmin
-S3_SECRET_KEY=minioadmin
-S3_BUCKET=chat-files
-S3_REGION=us-east-1
-
-# JWT
-JWT_SECRET=your-super-secret-jwt-key-change-in-prod
-JWT_EXPIRY=15m
-JWT_REFRESH_EXPIRY=7d
-
-# E2EE (Encryption)
-E2EE_ENABLED=false                      # Activer pour E2EE
-E2EE_KEY_ALGORITHM=RSA
-E2EE_KEY_SIZE=2048
-
-# Rate Limiting
-RATE_LIMIT_WINDOW_MS=900000             # 15 min
-RATE_LIMIT_MAX_REQUESTS=1000            # 1000 req/15min
-RATE_LIMIT_AUTH_MAX=10                  # 10 login attempts
-
-# Upload
-FILE_MAX_SIZE=104857600                 # 100 MB
-CHUNK_SIZE=5242880                      # 5 MB
-TEMP_DIR=/tmp/chat-uploads
-
-# FFmpeg (Thumbnails)
-FFMPEG_PATH=/usr/bin/ffmpeg             # ou detecté automatiquement
-THUMBNAIL_MAX_SIZE=200x200
-```
-
-**`auth-user-service/.env`** :
-
-```bash
-PORT=8001
-NODE_ENV=development
-MONGODB_URI=mongodb://localhost:27017/authdb
-REDIS_HOST=localhost
-REDIS_PORT=6379
-JWT_SECRET=your-super-secret-jwt-key-change-in-prod
-JWT_EXPIRY=15m
-```
-
-**`chat-file-service/.env`** :
-
-```bash
-PORT=8003
-NODE_ENV=development
-MONGODB_URI=mongodb://localhost:27017/chatdb
-REDIS_HOST=localhost
-REDIS_PORT=6379
-S3_ENDPOINT=http://localhost:9000
-S3_ACCESS_KEY=minioadmin
-S3_SECRET_KEY=minioadmin
-S3_BUCKET=chat-files
-JWT_SECRET=your-super-secret-jwt-key-change-in-prod
-```
-
-**`gateway/.env`** :
-
-```bash
-PORT=8000
-NODE_ENV=development
-AUTH_SERVICE_URL=http://localhost:8001
-CHAT_FILE_SERVICE_URL=http://localhost:8003
-```
-
-#### 4. Démarrer l'infrastructure (Docker)
-
-```bash
-# Via docker-compose existant
-docker-compose up -d mongodb redis minio
-
-# Vérifier les services
-docker-compose ps
-
-# Logs
-docker-compose logs -f mongodb
-docker-compose logs -f redis
-```
-
-#### 5. Initialiser les données (optionnel)
-
-```bash
-# Seed utilisateurs test
-cd auth-user-service
-npm run seed-users
-
-# Vérifier la connexion
-cd ../chat-file-service
-npm run health    # Doit retourner 200 OK
-```
-
-#### 6. Démarrer les services
-
-**Terminal 1 — Gateway** :
-
-```bash
-cd gateway
-npm run dev      # nodemon auto-reload
-# Écoute sur http://localhost:8000
-```
-
-**Terminal 2 — Auth-User-Service** :
-
-```bash
-cd auth-user-service
-npm run dev
-# Écoute sur http://localhost:8001
-```
-
-**Terminal 3 — Chat-File-Service** :
-
-```bash
-cd chat-file-service
-npm run dev      # Socket.IO sur localhost:8003
-# Écoute sur http://localhost:8003
-```
-
-#### 7. Vérifier le démarrage
-
-```bash
-# Health checks
-curl -s http://localhost:8000/health | jq .
-curl -s http://localhost:8001/health | jq .
-curl -s http://localhost:8003/health | jq .
-
-# Redis connectivity
-redis-cli ping  # Doit répondre PONG
-
-# MongoDB connectivity
-mongosh "mongodb://localhost:27017/chatdb"
-```
-
-### Troubleshooting
-
-| Problème                                      | Solution                                                             |
-| --------------------------------------------- | -------------------------------------------------------------------- |
-| `ECONNREFUSED 127.0.0.1:6379`                 | Redis n'est pas lancé : `docker-compose up -d redis`                 |
-| `MongooseError: Cannot connect`               | MongoDB non disponible : `docker-compose up -d mongodb`              |
-| `CORS policy errors`                          | Vérifier `gateway/app.js` : CORS est activé pour `*` en dev          |
-| `undefined is not a function`                 | Vérifier que tous les services sont lancés (dépendances circulaires) |
-| `Cannot find module '@chatapp-ngomna/shared'` | Exécuter `cd shared && npm install` dans chaque service              |
-
----
-
-## ⚡ Utilisation & Exemples
-
-### A. Authentication & Session
-
-#### 1. Login (Auth-User-Service)
-
-**Endpoint :** `POST /api/auth/login`
-
-```bash
-curl -X POST http://localhost:8000/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{
-    "matricule": "EMP001",
-    "password": "password123"
-  }' | jq .
-```
-
-**Réponse (succès)** :
-
-```json
-{
-  "success": true,
-  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "user": {
-    "id": "507f1f77bcf86cd799439011",
-    "matricule": "EMP001",
-    "nom": "Raphaël",
-    "prenom": "Boymond",
-    "email": "raphael@example.com"
-  }
-}
-```
-
-#### 2. Valider Token
-
-**Endpoint :** `POST /api/auth/validate`
-
-```bash
-curl -X POST http://localhost:8000/api/auth/validate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-  }' | jq .
-```
-
-#### 3. Rafraîchir Access Token
-
-**Endpoint :** `POST /api/auth/refresh`
-
-```bash
-curl -X POST http://localhost:8000/api/auth/refresh \
-  -H "Content-Type: application/json" \
-  -d '{
-    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-  }' | jq .
-```
-
----
-
-### B. Conversations & Messages
-
-#### 1. Obtenir toutes les conversations
-
-**Endpoint :** `GET /api/conversations`
-
-```bash
-curl -X GET "http://localhost:8000/api/conversations?page=1&limit=20" \
-  -H "Authorization: Bearer {accessToken}" | jq .
-```
-
-**Réponse** :
-
-```json
-{
-  "success": true,
-  "conversations": [
-    {
-      "id": "507f1f77bcf86cd799439001",
-      "name": "Conversation avec Alice",
-      "type": "PRIVATE",
-      "participants": [
-        { "id": "507f1f77bcf86cd799439010", "nom": "Raphaël" },
-        { "id": "507f1f77bcf86cd799439011", "nom": "Alice" }
-      ],
-      "lastMessage": {
-        "id": "507f1f77bcf86cd799439100",
-        "content": "À bientôt!",
-        "senderId": "507f1f77bcf86cd799439011",
-        "timestamp": "2026-06-17T14:30:00.000Z"
-      },
-      "unreadCount": 2,
-      "createdAt": "2026-01-15T10:00:00.000Z",
-      "updatedAt": "2026-06-17T14:30:00.000Z"
-    }
-  ],
-  "pagination": {
-    "page": 1,
-    "limit": 20,
-    "total": 5,
-    "hasMore": false
-  }
-}
-```
-
-#### 2. Récupérer les messages d'une conversation
-
-**Endpoint :** `GET /api/messages?conversationId={id}&page=1&limit=50`
-
-```bash
-curl -X GET "http://localhost:8000/api/messages?conversationId=507f1f77bcf86cd799439001&page=1&limit=50" \
-  -H "Authorization: Bearer {accessToken}" | jq .
-```
-
-#### 3. Créer un groupe
-
-**Endpoint :** `POST /api/groups`
-
-```bash
-curl -X POST http://localhost:8000/api/groups \
-  -H "Authorization: Bearer {accessToken}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Équipe Backend",
-    "type": "GROUP",
-    "members": [
-      "507f1f77bcf86cd799439010",
-      "507f1f77bcf86cd799439011",
-      "507f1f77bcf86cd799439012"
-    ]
-  }' | jq .
-```
-
-**Réponse** :
-
-```json
-{
-  "success": true,
-  "group": {
-    "id": "507f1f77bcf86cd799439050",
-    "name": "Équipe Backend",
-    "type": "GROUP",
-    "participants": [ { "id": "...", "nom": "..." }, ... ],
-    "participantCount": 3,
-    "createdBy": "507f1f77bcf86cd799439010",
-    "createdAt": "2026-06-17T14:35:00.000Z"
-  }
-}
-```
-
----
-
-### C. Événements WebSocket (Socket.IO)
-
-| Événement | Direction | Description | Format des données |
+| Catégorie | Technologie | Version | Rôle |
 |---|---|---|---|
-| `connect` | Client → Serveur | Connexion initiale au serveur WebSocket | `N/A` |
-| `authenticate` | Client → Serveur | Authentification du socket avec JWT | `{ token, userId }` |
-| `authenticated` | Serveur → Client | Confirmation de l'authentification réussie | `{ success, userId, matricule, nom, prenom, ... }` |
-| `auth_error` | Serveur → Client | Erreur lors de l'authentification | `{ error, message }` |
-| `sendMessage` | Client → Serveur | Envoi d'un nouveau message | `{ content, conversationId, type }` |
-| `newMessage` | Serveur → Client | Réception d'un nouveau message | `{ messageId, conversationId, content, senderId, timestamp, ... }` |
-| `markMessageRead` | Client → Serveur | Marquer un ou plusieurs messages comme lus | `{ messageId }` ou `{ conversationId, messageIds: [...] }` |
-| `message:status` | Serveur → Client | Mise à jour du statut d'un message (`READ`, `EDITED`, `DELETED`) | `{ messageId, userId, status, ... }` |
-| `typing` | Client → Serveur | Indique que l'utilisateur commence à taper | `{ conversationId }` |
-| `stopTyping` | Client → Serveur | Indique que l'utilisateur a arrêté de taper | `{ conversationId }` |
-| `typing:indicator` | Serveur → Client | Indique le statut de frappe d'un utilisateur | `{ conversationId, userId, status: "start"\|"refresh"\|"stop" }` |
-| `editMessage` | Client → Serveur | Modification d'un message existant | `{ messageId, newContent }` |
-| `deleteMessage` | Client → Serveur | Suppression d'un message existant | `{ messageId, deleteType: "EVERYONE"\|"SELF" }` |
-| `addReaction` | Client → Serveur | Ajout d'une réaction (emoji) à un message | `{ messageId, emoji, conversationId }` |
-| `message:reaction` | Serveur → Client | Réception d'une nouvelle réaction | `{ messageId, userId, reaction, action: "add"\|"remove" }` |
-| `replyToMessage` | Client → Serveur | Réponse spécifique à un message parent | `{ messageId, content, conversationId }` |
-| `forwardMessage` | Client → Serveur | Transfert d'un message vers d'autres conversations | `{ messageId, targetConversationIds: [...] }` |
+| **Runtime** | Node.js | ≥ 18.x | Environnement d'exécution serveur |
+| **Framework HTTP** | Express.js | 4.21+ | Serveur REST, middleware, routing |
+| **WebSocket** | Socket.IO | 4.7+ | Communication bidirectionnelle temps réel |
+| **Base de données** | MongoDB / Mongoose | 8.13+ | Persistance des messages, conversations, fichiers |
+| **Cache & Streams** | Redis (node-redis) | 4.6+ | Cache distribué, Pub/Sub, Streams pour l'event-driven |
+| **Stockage objet** | MinIO (S3-compatible) | 8.0+ | Stockage des fichiers uploadés (via `minio` SDK) |
+| **Architecture** | Clean Architecture + DDD | — | Séparation des responsabilités en couches |
 
-*(Pour plus de détails sur le format complet des payloads, veuillez consulter la documentation [SOCKET_EVENTS_REFERENCE.md](SOCKET_EVENTS_REFERENCE.md))*
+### Dépendances NPM détaillées
 
----
+#### Communication & Transport
 
-### D. Upload de fichiers
+| Package | Rôle dans le service |
+|---|---|
+| `socket.io` | Serveur WebSocket pour la messagerie temps réel |
+| `@socket.io/redis-adapter` | Adapter Redis pour la scalabilité multi-instances Socket.IO |
+| `axios` | Client HTTP pour la communication inter-services (auth-service, sync, prewarmer) |
+| `cors` | Middleware CORS pour les requêtes cross-origin |
+| `cookie-parser` | Parsing des cookies pour l'authentification |
 
-#### 1. Upload monolithique (< 100 MB)
+#### Traitement multimédia
 
-**Endpoint :** `POST /api/files/upload`
+| Package | Rôle dans le service |
+|---|---|
+| `sharp` | Traitement d'images : redimensionnement, conversion WebP, miniatures |
+| `fluent-ffmpeg` + `ffmpeg-static` | Manipulation vidéo/audio : extraction de miniatures, compression, métadonnées |
+| `music-metadata` | Extraction des métadonnées audio (durée, artiste, album, bitrate) |
+| `pdf-parse` | Extraction du texte et des métadonnées des documents PDF |
+| `mime-types` | Détection et validation des types MIME des fichiers |
+| `multer` | Middleware de gestion d'upload de fichiers multipart/form-data |
 
-```bash
-# Avec curl
-curl -X POST http://localhost:8000/api/files/upload \
-  -H "Authorization: Bearer {accessToken}" \
-  -F "file=@path/to/file.pdf" \
-  -F "conversationId=507f1f77bcf86cd799439001" | jq .
+#### Stockage & Système de fichiers
 
-# Réponse
-{
-  "success": true,
-  "file": {
-    "id": "507f1f77bcf86cd799439200",
-    "name": "document.pdf",
-    "size": 2048576,
-    "mimeType": "application/pdf",
-    "url": "http://localhost:9000/chat-files/507f1f77bcf86cd799439200/document.pdf",
-    "uploadedBy": "507f1f77bcf86cd799439010",
-    "uploadedAt": "2026-06-17T14:40:00.000Z"
-  }
-}
-```
+| Package | Rôle dans le service |
+|---|---|
+| `minio` | Client SDK MinIO/S3 pour le stockage objet (upload, download, URL signées) |
+| `ssh2-sftp-client` | Client SFTP pour le stockage distant en production (backend alternatif) |
+| `fs-extra` | Opérations filesystem étendues (copie récursive, suppression, ensureDir) |
+| `archiver` | Création d'archives ZIP pour le téléchargement groupé de fichiers |
+| `uuid` | Génération d'identifiants uniques pour les chunks d'upload et les miniatures |
 
-#### 2. Upload en chunks (> 100 MB)
+#### Sécurité & Authentification
 
-**Étape 1 : Initier l'upload**
+| Package | Rôle dans le service |
+|---|---|
+| `jsonwebtoken` | Vérification et décodage des JWT pour l'authentification |
+| `sanitize-html` | Nettoyage du contenu HTML pour prévenir les attaques XSS |
+| `validator` | Validation des données d'entrée (email, URL, longueur de chaînes) |
+| `express-rate-limit` | Rate limiting par IP/route pour la protection contre les abus |
+| `crypto` (natif) | Chiffrement AES-256-GCM, RSA-OAEP 4096, hashing SHA-256 |
 
-```bash
-curl -X POST http://localhost:8000/api/files/chunk/init \
-  -H "Authorization: Bearer {accessToken}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "fileName": "large-video.mp4",
-    "fileSize": 500000000,
-    "mimeType": "video/mp4",
-    "conversationId": "507f1f77bcf86cd799439001"
-  }' | jq .
+#### Infrastructure & Résilience
 
-# Réponse
-{
-  "uploadId": "chunk_507f1f77bcf86cd799439200",
-  "chunkSize": 5242880,                   # 5 MB
-  "totalChunks": 96
-}
-```
+| Package | Rôle dans le service |
+|---|---|
+| `redis` | Client Redis v4 pour cache, Pub/Sub et Streams |
+| `mongoose` | ODM MongoDB avec schémas, indexes et middleware |
+| `@chatapp-ngomna/shared` | Module partagé : CircuitBreaker, StreamManager, WorkerManager, RedisManager, UserCache |
+| `dotenv` | Chargement des variables d'environnement depuis `.env` |
+| `chalk` | Coloration des logs en console pour le debugging |
 
-**Étape 2 : Envoyer les chunks**
+#### Outils système (non-NPM)
 
-```bash
-# Chunk 1
-curl -X POST http://localhost:8000/api/files/chunk/upload \
-  -H "Authorization: Bearer {accessToken}" \
-  -F "file=@chunk_1.bin" \
-  -F "uploadId=chunk_507f1f77bcf86cd799439200" \
-  -F "chunkIndex=0" \
-  -F "totalChunks=96" | jq .
-
-# Réponse
-{
-  "success": true,
-  "chunkIndex": 0,
-  "receivedChunks": 1,
-  "totalChunks": 96,
-  "complete": false
-}
-
-# Chunk 96 (final)
-curl -X POST http://localhost:8000/api/files/chunk/upload \
-  -H "Authorization: Bearer {accessToken}" \
-  -F "file=@chunk_96.bin" \
-  -F "uploadId=chunk_507f1f77bcf86cd799439200" \
-  -F "chunkIndex=95" \
-  -F "totalChunks=96" | jq .
-
-# Réponse (final)
-{
-  "success": true,
-  "complete": true,
-  "file": {
-    "id": "507f1f77bcf86cd799439200",
-    "name": "large-video.mp4",
-    "size": 500000000,
-    "url": "http://localhost:9000/chat-files/507f1f77bcf86cd799439200/large-video.mp4",
-    "thumbnail": "http://localhost:9000/chat-files/507f1f77bcf86cd799439200/thumbnail.jpg"
-  }
-}
-```
-
-#### 3. Télécharger un fichier
-
-**Endpoint :** `GET /api/files/{fileId}/download`
-
-```bash
-curl -X GET http://localhost:8000/api/files/507f1f77bcf86cd799439200/download \
-  -H "Authorization: Bearer {accessToken}" \
-  -o downloaded-file.pdf
-```
-
-#### 4. Supprimer un fichier
-
-**Endpoint :** `DELETE /api/files/{fileId}`
-
-```bash
-curl -X DELETE http://localhost:8000/api/files/507f1f77bcf86cd799439200 \
-  -H "Authorization: Bearer {accessToken}" | jq .
-```
+| Outil | Rôle | Installation |
+|---|---|---|
+| **FFmpeg** | Binaire requis par `fluent-ffmpeg` pour le traitement vidéo/audio | `apt install ffmpeg` ou fourni par `ffmpeg-static` |
+| **ExifTool** | Extraction des métadonnées complexes (EXIF, GPS) des images | `apt install libimage-exiftool-perl` ou `apk add exiftool` |
 
 ---
 
-### E. Gestion des participants & groupes
+## 🏗️ Architecture générale
 
-#### 1. Ajouter des participants
+### Principes architecturaux appliqués
 
-**Endpoint :** `POST /api/conversations/{conversationId}/participants`
+Le Chat-File-Service applique les principes suivants :
 
-```bash
-curl -X POST http://localhost:8000/api/conversations/507f1f77bcf86cd799439001/participants \
-  -H "Authorization: Bearer {accessToken}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "participantId": ["507f1f77bcf86cd799439013", "507f1f77bcf86cd799439014"]
-  }' | jq .
+1. **Clean Architecture** (Robert C. Martin) — Le code est organisé en couches concentriques où les dépendances pointent toujours vers l'intérieur. Le domaine ne connaît ni Express, ni MongoDB, ni Redis.
 
-# WebSocket ACK
-socket.on('participant:added', (ack) => {
-  console.log('✅ Participants ajoutés:', ack.participantIds);
-});
+2. **Domain-Driven Design (DDD)** — Les entités métier (`Message`, `Conversation`, `File`, `Event`) encapsulent leurs règles de validation et leurs invariants.
+
+3. **Repository Pattern** — L'accès aux données est abstrait derrière des interfaces. Les implémentations concrètes (MongoDB) sont décorées par des couches de cache (Redis).
+
+4. **Dependency Injection** — Toutes les dépendances sont injectées au démarrage via le fichier `index.js`, qui agit comme **Composition Root**. Aucun service ne crée ses propres dépendances.
+
+5. **Event-Driven Architecture** — La communication entre les composants internes utilise Redis Streams comme bus d'événements, avec des consumer groups pour la distribution fiable.
+
+6. **Resilience Patterns** — Circuit Breaker, Write-Ahead Log (WAL), Dead Letter Queue (DLQ), Retry avec backoff exponentiel, et Fallback Redis.
+
+### Diagramme des couches
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      INTERFACES (I/O)                               │
+│  Routes HTTP (Express)  │  WebSocket (Socket.IO)  │  Middleware     │
+│  messageRoutes.js       │  chatHandler.js          │  authMiddleware │
+│  fileRoutes.js          │                          │  validation     │
+│  conversationRoutes.js  │                          │  rateLimit      │
+│  groupRoutes.js         │                          │                 │
+│  broadcastRoutes.js     │                          │                 │
+│  healthRoutes.js        │                          │                 │
+├─────────────────────────┴──────────────────────────┴─────────────────┤
+│                      APPLICATION (Use Cases)                         │
+│  Controllers                    │  Use Cases (Business Logic)        │
+│  MessageController.js           │  SendMessage.js                    │
+│  FileController.js              │  GetMessages.js                    │
+│  ConversationController.js      │  UploadFile.js                     │
+│  GroupController.js             │  CreateGroup.js                    │
+│  HealthController.js            │  MarkMessageRead.js                │
+│                                 │  DeleteMessage.js                  │
+│                                 │  ForwardMessage.js                 │
+│                                 │  AddReaction.js                    │
+│                                 │  ... (30 use cases)                │
+├─────────────────────────────────┴────────────────────────────────────┤
+│                        DOMAIN (Entities)                             │
+│  Message.js    │  Conversation.js    │  File.js    │  Event.js       │
+│  • validate()  │  • addParticipant() │  • validate │  • types        │
+│  • markAsRead  │  • archive()        │  • metadata │  • payloads     │
+│  • reactions   │  • settings         │  • checksum │                 │
+│  • edit()      │  • unreadCounts     │             │                 │
+├────────────────┴─────────────────────┴─────────────┴─────────────────┤
+│                    INFRASTRUCTURE (External)                         │
+│  MongoDB         │  Redis            │  Services techniques          │
+│  ├─ connection   │  ├─ redisConfig   │  ├─ ResilientMessageService   │
+│  ├─ models/      │  ├─ CacheService  │  ├─ MessageDeliveryService    │
+│  │  ├─ Message   │  ├─ OnlineUser    │  ├─ TypingIndicatorService    │
+│  │  ├─ Convers.  │  ├─ RoomManager   │  ├─ FileStorageService       │
+│  │  ├─ File      │  └─ UnreadMsg     │  ├─ MediaProcessingService   │
+│  │  └─ UserKey   │                   │  ├─ ThumbnailService          │
+│  │               │  Repositories     │  ├─ ChunkedUploadService      │
+│  │               │  ├─ CachedMsg     │  ├─ EncryptionService         │
+│  │               │  ├─ CachedConv    │  ├─ KeyManagementService      │
+│  │               │  ├─ CachedFile    │  ├─ UserCacheService          │
+│  │               │  ├─ MongoMsg      │  ├─ SmartCachePrewarmer       │
+│  │               │  ├─ MongoConv     │  └─ AutoGroupSyncService      │
+│  │               │  └─ MongoFile     │                               │
+├──┴───────────────┴──────────────────┴────────────────────────────────┤
+│                       CONFIG                                         │
+│  envValidator.js  │  errorHandler.js  │  responseFormatter.js        │
+└───────────────────┴───────────────────┴──────────────────────────────┘
 ```
 
-#### 2. Retirer un participant
+### Arborescence complète des fichiers
 
-**Endpoint :** `DELETE /api/conversations/{conversationId}/participants/{participantId}`
-
-```bash
-curl -X DELETE http://localhost:8000/api/conversations/507f1f77bcf86cd799439001/participants/507f1f77bcf86cd799439013 \
-  -H "Authorization: Bearer {accessToken}" | jq .
 ```
-
-#### 3. Quitter une conversation
-
-**Endpoint :** `POST /api/conversations/{conversationId}/leave`
-
-```bash
-curl -X POST http://localhost:8000/api/conversations/507f1f77bcf86cd799439001/leave \
-  -H "Authorization: Bearer {accessToken}" | jq .
+chat-file-service/
+├── src/
+│   ├── index.js                          # 🎯 Composition Root — Point d'entrée et DI
+│   │
+│   ├── interfaces/                       # 🔌 Couche INTERFACES (I/O)
+│   │   └── http/
+│   │       ├── routes/
+│   │       │   ├── messageRoutes.js      # Routes REST messages
+│   │       │   ├── fileRoutes.js         # Routes REST fichiers (upload, download, chunk)
+│   │       │   ├── conversationRoutes.js # Routes REST conversations
+│   │       │   ├── groupRoutes.js        # Routes REST groupes
+│   │       │   ├── broadcastRoutes.js    # Routes REST canaux de diffusion
+│   │       │   └── healthRoutes.js       # Routes monitoring et health check
+│   │       └── middleware/
+│   │           ├── authMiddleware.js      # Vérification JWT + extraction userId
+│   │           ├── validationMiddleware.js# Validation des payloads d'entrée
+│   │           ├── rateLimitMiddleware.js # Limitation de débit par IP/route
+│   │           └── index.js              # Export centralisé des middleware
+│   │
+│   ├── application/                      # 📦 Couche APPLICATION
+│   │   ├── controllers/
+│   │   │   ├── MessageController.js      # Orchestration requêtes messages
+│   │   │   ├── FileController.js         # Orchestration upload/download/chunk
+│   │   │   ├── ConversationController.js # Orchestration conversations
+│   │   │   ├── GroupController.js        # Orchestration groupes
+│   │   │   └── HealthController.js       # Exposition métriques et santé
+│   │   ├── use-cases/                    # 30 Use Cases métier
+│   │   │   ├── SendMessage.js            # Envoi de message (texte, fichier, E2EE)
+│   │   │   ├── GetMessages.js            # Récupération paginée (cursor + page)
+│   │   │   ├── GetConversations.js       # Liste des conversations avec lastMessage
+│   │   │   ├── GetConversation.js        # Détail d'une conversation
+│   │   │   ├── CreateGroup.js            # Création de groupe avec membres
+│   │   │   ├── CreateBroadcast.js        # Création de canal de diffusion
+│   │   │   ├── UploadFile.js             # Upload fichier avec traitement média
+│   │   │   ├── DownloadFile.js           # Téléchargement depuis MinIO
+│   │   │   ├── DeleteFile.js             # Suppression fichier + nettoyage stockage
+│   │   │   ├── MarkMessageRead.js        # Marquage lu (unitaire + bulk)
+│   │   │   ├── MarkMessageDelivered.js   # Marquage livré
+│   │   │   ├── DeleteMessage.js          # Suppression (EVERYONE / SELF)
+│   │   │   ├── UpdateMessageContent.js   # Édition du contenu
+│   │   │   ├── ForwardMessage.js         # Transfert multi-conversations
+│   │   │   ├── ReplyMessage.js           # Réponse à un message (threading)
+│   │   │   ├── AddReaction.js            # Ajout emoji réaction
+│   │   │   ├── RemoveReaction.js         # Suppression réaction
+│   │   │   ├── AddParticipant.js         # Ajout membre à un groupe
+│   │   │   ├── RemoveParticipant.js      # Retrait membre d'un groupe
+│   │   │   ├── LeaveConversation.js      # Quitter une conversation
+│   │   │   ├── AddAdmin.js              # Promouvoir un membre admin
+│   │   │   ├── ArchiveConversation.js    # Archiver une conversation
+│   │   │   ├── GetArchivedConversations.js # Conversations archivées
+│   │   │   ├── SearchOccurrences.js      # Recherche fulltext dans les messages
+│   │   │   ├── UpdateCallStatus.js       # Mise à jour statut appel
+│   │   │   ├── AutoGroupSync.js          # Synchronisation auto des groupes
+│   │   │   └── ...
+│   │   └── websocket/
+│   │       └── chatHandler.js            # 🔌 Gestionnaire Socket.IO (135 Ko)
+│   │
+│   ├── domain/                           # 🎯 Couche DOMAINE
+│   │   └── entities/
+│   │       ├── Message.js                # Entité Message (validation, sérialisation)
+│   │       ├── Conversation.js           # Entité Conversation (participants, settings)
+│   │       ├── File.js                   # Entité File (métadonnées, checksum)
+│   │       ├── Event.js                  # Types d'événements système
+│   │       └── index.js                  # Export centralisé
+│   │
+│   ├── infrastructure/                   # 🛠️ Couche INFRASTRUCTURE
+│   │   ├── mongodb/
+│   │   │   ├── connection.js             # Connexion Mongoose singleton
+│   │   │   └── models/
+│   │   │       ├── MessageModel.js       # Schéma Mongoose Message
+│   │   │       ├── ConversationModel.js  # Schéma Mongoose Conversation
+│   │   │       ├── FileModel.js          # Schéma Mongoose File
+│   │   │       └── UserEncryptionKeyModel.js # Schéma clés publiques E2EE
+│   │   ├── redis/
+│   │   │   ├── redisConfig.js            # Configuration et connexion Redis
+│   │   │   ├── CacheService.js           # Service de cache générique (TTL, patterns)
+│   │   │   ├── OnlineUserManager.js      # Gestion des utilisateurs en ligne
+│   │   │   ├── RoomManager.js            # Gestion des rooms Socket.IO
+│   │   │   └── UnreadMessageManager.js   # Compteurs de messages non lus
+│   │   ├── repositories/
+│   │   │   ├── MongoMessageRepository.js       # Accès MongoDB messages
+│   │   │   ├── MongoConversationRepository.js  # Accès MongoDB conversations
+│   │   │   ├── MongoFileRepository.js          # Accès MongoDB fichiers
+│   │   │   ├── CachedMessageRepository.js      # Décorateur cache Redis sur messages
+│   │   │   ├── CachedConversationRepository.js # Décorateur cache Redis sur conversations
+│   │   │   └── CachedFileRepository.js         # Décorateur cache Redis sur fichiers
+│   │   ├── services/
+│   │   │   ├── ResilientMessageService.js      # 🛡️ Résilience + publication multi-streams
+│   │   │   ├── MessageDeliveryService.js       # 📬 Consumer multi-streams partitionné
+│   │   │   ├── TypingIndicatorService.js       # ⌨️ Indicateurs de frappe (debounce/timeout)
+│   │   │   ├── FileStorageService.js           # 📦 Stockage MinIO/SFTP + compression
+│   │   │   ├── MediaProcessingService.js       # 🖼️ Traitement images/vidéos/audio/PDF
+│   │   │   ├── ThumbnailService.js             # 🖼️ Génération miniatures (Sharp)
+│   │   │   ├── ChunkedUploadService.js         # 📤 Upload par morceaux (> 100 MB)
+│   │   │   ├── EncryptionService.js            # 🔐 Chiffrement E2EE (AES-256-GCM + RSA)
+│   │   │   ├── KeyManagementService.js         # 🔑 Gestion clés publiques RSA
+│   │   │   ├── UserCacheService.js             # 👤 Cache des profils utilisateurs
+│   │   │   ├── SmartCachePrewarmer.js          # 🔥 Pré-chauffage intelligent du cache
+│   │   │   └── AutoGroupSyncService.js         # 🔄 Synchronisation automatique des groupes
+│   │   ├── kafka/                              # (Legacy, non utilisé en production)
+│   │   │   ├── config/
+│   │   │   ├── consumers/
+│   │   │   └── producers/
+│   │   └── index.js                            # Export centralisé infrastructure
+│   │
+│   └── config/
+│       ├── envValidator.js               # Validation des variables d'environnement
+│       ├── errorHandler.js               # Middleware de gestion d'erreurs global
+│       └── responseFormatter.js          # Formatteur de réponses HTTP standardisé
+│
+├── public/                               # Interface web de test
+├── uploads/                              # Stockage local temporaire
+├── storage/                              # Répertoire de stockage persistant
+├── logs/                                 # Logs applicatifs
+├── scripts/                              # Scripts utilitaires
+├── shared/                               # Lien symbolique vers @chatapp-ngomna/shared
+├── Dockerfile                            # Image Docker de production
+├── package.json                          # Dépendances et scripts NPM
+└── .env                                  # Variables d'environnement
 ```
 
 ---
 
-### F. Recherche & Archivage
+## 🔬 Architecture bloc par bloc
 
-#### 1. Rechercher des messages
+### 1. Point d'entrée — Composition Root (`index.js`)
 
-**Endpoint :** `GET /api/messages/search?q=mot-clé&conversationId={id}`
+**Concept :** Le fichier `index.js` implémente le pattern **Composition Root**. C'est le seul endroit du code qui connaît toutes les classes concrètes. Il est responsable de :
 
-```bash
-curl -X GET "http://localhost:8000/api/messages/search?q=meeting&conversationId=507f1f77bcf86cd799439001" \
-  -H "Authorization: Bearer {accessToken}" | jq .
+1. **Valider l'environnement** (`EnvironmentValidator`)
+2. **Connecter l'infrastructure** (MongoDB, Redis)
+3. **Instancier tous les services**, repositories et use cases
+4. **Injecter les dépendances** via les constructeurs (pas de service locator, pas de singleton magique)
+5. **Configurer Express et Socket.IO**
+6. **Démarrer les workers de fond** (streams, cache prewarmer, nettoyage périodique)
+7. **Gérer l'arrêt gracieux** (`SIGTERM`, `SIGINT`)
+
 ```
-
-#### 2. Archiver une conversation
-
-**Endpoint :** `POST /api/conversations/{conversationId}/archive`
-
-```bash
-curl -X POST http://localhost:8000/api/conversations/507f1f77bcf86cd799439001/archive \
-  -H "Authorization: Bearer {accessToken}" | jq .
-```
-
-#### 3. Récupérer les conversations archivées
-
-**Endpoint :** `GET /api/conversations/archived?page=1&limit=20`
-
-```bash
-curl -X GET "http://localhost:8000/api/conversations/archived?page=1&limit=20" \
-  -H "Authorization: Bearer {accessToken}" | jq .
+Séquence de démarrage :
+  1. Validation env          → EnvironmentValidator
+  2. Connexion MongoDB       → connectDB()
+  3. Connexion Redis         → RedisManager.connect()
+  4. CacheService            → Avec client Redis
+  5. OnlineUserManager       → Avec Socket.IO + Redis
+  6. RoomManager             → Avec OnlineUserManager
+  7. UserCache               → Cache utilisateur centralisé
+  8. UserStreamConsumer      → Écoute événements du auth-service
+  9. MessageDeliveryService  → Consumer multi-streams
+  10. FileStorageService     → Client MinIO + config SFTP
+  11. MediaProcessingService → Sharp + FFmpeg + music-metadata + pdf-parse
+  12. ChunkedUploadService   → Redis + FileStorage
+  13. EncryptionService      → Mode none | e2ee
+  14. KeyManagementService   → Redis cache + MongoDB persistance
+  15. Repositories Mongo     → MongoMessage/Conversation/File
+  16. Repositories Cached    → Décorateurs Redis autour des Mongo
+  17. ResilientMessageService → Redis Streams + CircuitBreaker + Workers
+  18. Use Cases (×30)        → Injection des repositories + services
+  19. Controllers            → Injection des use cases
+  20. Routes HTTP            → Binding controllers → Express routes
+  21. ChatHandler            → Binding Socket.IO events → use cases
+  22. Maintenance tasks      → setInterval nettoyage Redis
+  23. Cache Prewarmer        → SmartCachePrewarmer.start() (non-bloquant)
 ```
 
 ---
 
-## 🛠️ Normes de code & Contribution
+### 2. Couche Interfaces (`interfaces/`)
 
-### 1. Structure de nommage
+**Concept :** Couche la plus externe de la Clean Architecture. Elle traduit les requêtes I/O (HTTP, WebSocket) en appels aux Controllers de la couche Application. Elle ne contient aucune logique métier.
 
-#### Variables & Fonctions
+#### 2.1. Routes HTTP (`interfaces/http/routes/`)
+
+Chaque fichier de routes est une **factory function** qui reçoit un controller injecté et retourne un `Router` Express :
 
 ```javascript
-// ✅ CORRECT
-const getUserById = async (userId) => {};
-const messageCache = new Map();
-const MAX_RETRY_ATTEMPTS = 3;
-const isConversationActive = true;
-
-// ❌ INCORRECT
-const get_user_by_id = async (userId) => {}; // snake_case en JS
-const MC = new Map(); // Acronyme court
-const maxRetry = 3; // Pas constant
-const active = true; // Trop vague
+// Pattern utilisé dans toutes les routes
+const createMessageRoutes = (messageController) => {
+  const router = express.Router();
+  router.get("/", authMiddleware, (req, res) => messageController.getMessages(req, res));
+  return router;
+};
 ```
 
-#### Fichiers & Modules
+| Fichier | Préfixe | Responsabilité |
+|---|---|---|
+| `messageRoutes.js` | `/messages` | CRUD messages, recherche, pagination |
+| `fileRoutes.js` | `/files` | Upload, download, chunk init/upload, suppression |
+| `conversationRoutes.js` | `/conversations` | Liste, détail, archivage, participants |
+| `groupRoutes.js` | `/groups` | Création groupe, ajout/retrait membres, admins |
+| `broadcastRoutes.js` | `/broadcasts` | Création canaux de diffusion |
+| `healthRoutes.js` | `/health` | Health checks simples et détaillés, métriques |
 
-```
-✅ CORRECT
-- src/domain/entities/Message.js
-- src/infrastructure/repositories/MongoMessageRepository.js
-- src/application/use-cases/SendMessage.js
-- src/interfaces/http/middleware/authMiddleware.js
+#### 2.2. Middleware (`interfaces/http/middleware/`)
 
-❌ INCORRECT
-- src/domain/message-entity.js              # Tiret au lieu de PascalCase
-- src/repositories/mongo_message_repo.js    # snake_case
-- src/SendMessage.js                        # Pas d'arborescence
-```
+| Middleware | Responsabilité |
+|---|---|
+| `authMiddleware.js` | Extrait le JWT du header `Authorization`, vérifie la signature, injecte `req.userId` et `req.user` |
+| `validationMiddleware.js` | Valide les payloads JSON des requêtes (longueur contenu, format conversationId, types autorisés) |
+| `rateLimitMiddleware.js` | Utilise `express-rate-limit` pour limiter les requêtes par IP (configurable via `.env`) |
 
-### 2. Conventions de code
+#### 2.3. WebSocket Handler (`application/websocket/chatHandler.js`)
 
-#### Classes & Services
+Le `ChatHandler` est le cœur temps réel du service. C'est un fichier de **135 Ko** qui gère :
+
+- **Authentification socket** : vérification JWT à la connexion
+- **Mapping userId → socketId(s)** : support multi-device natif
+- **Dispatch des événements** : routing de 20+ événements Socket.IO vers les use cases correspondants
+- **Exclusion du sender** : utilisation de `senderSocketId` pour éviter que l'émetteur reçoive son propre message
+
+Le handler reçoit **tous ses use cases par injection** dans le constructeur (pas d'import direct) :
 
 ```javascript
-// ✅ CORRECT
-class MessageRepository {
-  async findById(id) {
-    // Logique
-  }
-
-  async save(message) {
-    // Logique
-  }
-}
-
-module.exports = MessageRepository;
-
-// ❌ INCORRECT
-const MessageRepository = function () {}; // Pas de classe
-class messageRepository {} // Pas de PascalCase
-class MessageRepositoryService {} // Redondant (Service = pattern)
+const chatHandler = new ChatHandler(
+  io,                          // Socket.IO Server
+  sendMessageUseCase,          // Use case envoi
+  getMessagesUseCase,          // Use case lecture
+  // ... 25+ use cases injectés
+  encryptionService,           // E2EE
+  keyManagementService,        // Gestion clés
+);
 ```
 
-#### Use Cases (Clean Arch)
+---
+
+### 3. Couche Application (`application/`)
+
+**Concept :** Contient les **Controllers** et les **Use Cases**. Les Controllers orchestrent le flux HTTP (validation, appel du use case, formatage de la réponse). Les Use Cases encapsulent une seule opération métier.
+
+#### 3.1. Controllers
+
+Les Controllers suivent un pattern strict :
+1. Extraire les paramètres de la requête
+2. Appeler le Use Case approprié
+3. Formater et retourner la réponse
+4. Gérer les erreurs avec des codes HTTP appropriés
+
+Ils ne contiennent **aucune logique métier** — toute la logique est déléguée aux Use Cases.
+
+| Controller | Use Cases injectés |
+|---|---|
+| `MessageController` | SendMessage, GetMessages, UpdateMessageStatus |
+| `FileController` | UploadFile, GetFile, DownloadFile, ChunkedUploadService, EncryptionService |
+| `ConversationController` | GetConversations, GetConversation, SearchOccurrences, ArchiveConversation |
+| `GroupController` | CreateGroup, AddParticipant, RemoveParticipant, LeaveConversation, AddAdmin |
+| `HealthController` | Accès direct Redis pour les métriques |
+
+#### 3.2. Use Cases (30 cas d'utilisation)
+
+Chaque Use Case est une classe avec une méthode `execute()` unique. C'est l'implémentation du **Command Pattern** adapté à la Clean Architecture.
+
+**Principes :**
+- **Single Responsibility** : un seul use case = une seule opération métier
+- **Dépendances injectées** : repositories et services reçus via le constructeur
+- **Indépendant du framework** : aucune dépendance sur Express, Socket.IO ou Redis
+
+**Exemple — `SendMessage` (le plus complexe, 35 Ko) :**
 
 ```javascript
-// ✅ CORRECT
 class SendMessage {
-  constructor(messageRepository, conversationRepository, resilientService) {
-    this.messageRepository = messageRepository;
-    this.conversationRepository = conversationRepository;
-    this.resilientService = resilientService;
-  }
+  constructor(
+    messageRepository,        // CachedMessageRepository
+    conversationRepository,   // CachedConversationRepository
+    cacheService,             // CacheService Redis
+    resilientMessageService,  // Publication sur Redis Streams
+    userCacheService,         // Cache profils utilisateurs
+    getFileUseCase,           // Pour résoudre les fichiers joints
+    encryptionService,        // Chiffrement E2EE optionnel
+    keyManagementService,     // Récupération clés publiques
+  ) { ... }
 
   async execute(data) {
-    // 1. Validation
-    if (!data.content || !data.conversationId) {
-      throw new Error("Données invalides");
-    }
-
-    // 2. Logique métier
-    const conversation = await this.conversationRepository.findById(
-      data.conversationId,
-    );
-    if (!conversation) {
-      throw new Error("Conversation introuvable");
-    }
-
-    // 3. Persistance
-    const message = await this.messageRepository.save({
-      content: data.content,
-      conversationId: data.conversationId,
-      senderId: data.senderId,
-      createdAt: new Date(),
-    });
-
-    // 4. Effets secondaires (streams, cache, etc.)
-    await this.resilientService.publishMessage(message);
-
-    // 5. Retour
-    return message;
+    // 1. Validation métier (contenu, conversationId, permissions)
+    // 2. Chiffrement E2EE si activé (encryptionService.encryptText)
+    // 3. Persistance MongoDB (via CachedMessageRepository)
+    // 4. WAL pre-write (resilientMessageService.logPreWrite)
+    // 5. Publication Redis Stream (resilientMessageService.publishToMessageStream)
+    // 6. WAL post-write (resilientMessageService.logPostWrite)
+    // 7. Mise à jour du lastMessage de la conversation
+    // 8. Retour du message sauvegardé
   }
 }
-
-module.exports = SendMessage;
 ```
 
-#### Middleware
+**Liste complète des Use Cases :**
 
-```javascript
-// ✅ CORRECT
-const authMiddleware = (req, res, next) => {
-  const token = req.headers.authorization?.split(" ")[1];
-
-  if (!token) {
-    return res.status(401).json({ error: "Token manquant" });
-  }
-
-  try {
-    const decoded = jwtService.verifyToken(token);
-    req.userId = decoded.userId;
-    req.user = decoded;
-    next();
-  } catch (err) {
-    res.status(401).json({ error: "Token invalide" });
-  }
-};
-
-module.exports = authMiddleware;
-```
-
-### 3. Conventions de logging
-
-```javascript
-// ✅ CORRECT
-console.log('✅ Service initialisé');        // Succès
-console.error('❌ Erreur connexion DB');     // Erreur critique
-console.warn('⚠️  Redis non disponible');    // Avertissement
-console.log('🔌 WebSocket connecté');        // Info importante
-
-// ❌ INCORRECT
-console.log('ok')                             # Pas d'émoji, flou
-console.log('[ERROR]')                       # Format inconsistant
-console.log('Something went wrong')          # Pas de contexte
-```
-
-### 4. Gestion des erreurs
-
-```javascript
-// ✅ CORRECT
-try {
-  const message = await sendMessageUseCase.execute(data);
-  res.status(200).json({ success: true, message });
-} catch (error) {
-  console.error('❌ Erreur SendMessage:', error.message);
-
-  if (error.message.includes('Validation')) {
-    return res.status(400).json({
-      success: false,
-      message: 'Données invalides',
-      details: error.message
-    });
-  }
-
-  if (error.message.includes('Introuvable')) {
-    return res.status(404).json({
-      success: false,
-      message: 'Ressource introuvable'
-    });
-  }
-
-  res.status(500).json({
-    success: false,
-    message: 'Erreur serveur interne',
-    error: process.env.NODE_ENV === 'development' ? error.message : undefined
-  });
-}
-
-// ❌ INCORRECT
-res.status(500).json(error);                 # Exposer l'erreur complète
-catch (e) { console.log('Error'); }          # Pas de détails
-throw new Error('Something happened');       # Message vague
-```
-
-### 5. Principes de contribution
-
-#### Workflow Git
-
-```bash
-# 1. Créer une branche depuis `develop`
-git checkout develop
-git pull origin develop
-git checkout -b feature/add-emoji-reactions   # Nommer clairement
-
-# 2. Committer régulièrement avec des messages clairs
-git add .
-git commit -m "feat: add emoji reactions to messages
-
-- Implement addReaction use case
-- Add reaction validation middleware
-- Stream reactions via Redis Streams
-- Tests included"
-
-# 3. Push et ouvrir une PR
-git push origin feature/add-emoji-reactions
-
-# 4. Squash & merge après review
-```
-
-#### Commits
-
-```
-✅ CORRECT
-feat: add file encryption support
-fix: prevent duplicate message delivery
-refactor: extract socket event handlers
-docs: add WebSocket event reference
-test: add message validation tests
-perf: optimize conversation query with indexes
-
-❌ INCORRECT
-updated files
-fix stuff
-WIP: trying something
-omg this finally works
-```
-
-### 6. Documentation du code
-
-```javascript
-/**
- * SendMessage Use Case
- *
- * Responsabilité: Valider, sauvegarder et distribuer un message
- *
- * @class
- * @example
- * const sendMessage = new SendMessage(repo, resilientService);
- * const result = await sendMessage.execute({
- *   content: "Hello",
- *   conversationId: "123"
- * });
- */
-class SendMessage {
-  /**
-   * Crée une nouvelle instance
-   * @param {MessageRepository} messageRepository - Repo persistence
-   * @param {ResilientService} resilientService - Service distribution
-   */
-  constructor(messageRepository, resilientService) {}
-
-  /**
-   * Exécute le use case
-   * @param {Object} data - Données du message
-   * @param {string} data.content - Contenu du message (max 5000 chars)
-   * @param {string} data.conversationId - ID conversation (ObjectId)
-   * @param {string} data.senderId - ID de l'expéditeur
-   * @returns {Promise<Message>} Message créé
-   * @throws {ValidationError} Si données invalides
-   * @throws {NotFoundError} Si conversation n'existe pas
-   */
-  async execute(data) {}
-}
-```
-
-### 7. Tests
-
-```javascript
-// ✅ Structures de tests attendues
-const SendMessage = require("../SendMessage");
-const MockMessageRepository = require("./mocks/MockMessageRepository");
-
-describe("SendMessage Use Case", () => {
-  let sendMessage;
-  let messageRepository;
-  let resilientService;
-
-  beforeEach(() => {
-    messageRepository = new MockMessageRepository();
-    resilientService = { publishMessage: jest.fn() };
-    sendMessage = new SendMessage(messageRepository, resilientService);
-  });
-
-  describe("execute", () => {
-    it("should create and distribute a message", async () => {
-      const data = {
-        content: "Hello",
-        conversationId: "507f1f77bcf86cd799439001",
-        senderId: "507f1f77bcf86cd799439010",
-      };
-
-      const result = await sendMessage.execute(data);
-
-      expect(result).toHaveProperty("id");
-      expect(result.content).toBe("Hello");
-      expect(resilientService.publishMessage).toHaveBeenCalledWith(result);
-    });
-
-    it("should throw ValidationError for empty content", async () => {
-      const data = {
-        content: "",
-        conversationId: "507f1f77bcf86cd799439001",
-      };
-
-      await expect(sendMessage.execute(data)).rejects.toThrow(ValidationError);
-    });
-  });
-});
-```
-
-### 8. Checklist avant PR
-
-- [ ] Code passe `npm run lint`
-- [ ] Tests passent : `npm test`
-- [ ] Pas de `console.log()` de debug
-- [ ] Messages de commit clairs et en anglais
-- [ ] Documentation mise à jour
-- [ ] Variables d'env gérées dans `.env.example`
-- [ ] Backward compatible (ou migration documentée)
-- [ ] Pas de secrets/tokens hardcodés
-- [ ] Performance: O(n) queries optimisées
+| Catégorie | Use Cases |
+|---|---|
+| **Messages** | SendMessage, GetMessages, GetMessageById, UpdateMessageContent, DeleteMessage, ForwardMessage, ReplyMessage, UpdateMessageStatus |
+| **Statuts** | MarkMessageRead, MarkMessageDelivered |
+| **Réactions** | AddReaction, RemoveReaction |
+| **Fichiers** | UploadFile, GetFile, DownloadFile, DeleteFile |
+| **Conversations** | GetConversation, GetConversations, GetConversationIds, ArchiveConversation, GetArchivedConversations, SearchOccurrences |
+| **Groupes** | CreateGroup, CreateBroadcast, AddParticipant, RemoveParticipant, LeaveConversation, AddAdmin |
+| **Système** | AutoGroupSync, UpdateCallStatus |
 
 ---
 
-## 📋 Guides spécialisés
+### 4. Couche Domaine (`domain/`)
 
-### A. Architecture Multi-Device (senderSocketId)
+**Concept :** Le cœur de l'application. Contient les **entités métier** pures, sans dépendance sur aucun framework ou bibliothèque externe (sauf `crypto` natif pour les checksums). C'est la couche la plus stable du système.
 
-**Problème :** Comment éviter que l'émetteur reçoive son propre message?
+#### 4.1. Entités
 
-**Solution :** Utiliser `senderSocketId` dans Redis Streams
+**`Message.js`** — Représente un message dans le système :
 
-```javascript
-// chatHandler.js
-socket.on('sendMessage', (data) => {
-  this.sendMessageUseCase.execute({
-    ...data,
-    senderSocketId: socket.id  // ⬅️ CLÉ: Passer le socket ID exact
-  });
-});
+| Propriété | Type | Description |
+|---|---|---|
+| `type` | Enum | `TEXT`, `IMAGE`, `VIDEO`, `AUDIO`, `FILE`, `LOCATION`, `CONTACT` |
+| `status` | Enum | `SENT`, `DELIVERED`, `READ`, `FAILED` |
+| `reactions` | Array | `[{ userId, emoji, timestamp }]` |
+| `replyTo` | ObjectId | Référence au message parent (threading) |
+| `metadata` | Object | Métadonnées enrichies (cache, sécurité, livraison) |
 
-// ResilientMessageService
-publishMessage(message, senderSocketId) {
-  redis.xAdd('chat:stream:messages:group', '*', {
-    messageId: message.id,
-    content: message.content,
-    senderSocketId: senderSocketId  // ⬅️ Stocker pour le MDS
-    // ...
-  });
-}
+Méthodes métier : `validate()`, `markAsRead()`, `markAsDelivered()`, `addReaction()`, `removeReaction()`, `edit()`, `softDelete()`
 
-// MessageDeliveryService (Consumer)
-async deliverMessage(entry) {
-  const { senderSocketId } = entry.data;
+Méthodes de sérialisation : `toKafkaPayload()`, `toRedisPayload()`, `toObject()`
 
-  // EXCLURE CE SOCKET EXACT (pas tous les sockets de l'userId)
-  io.to(conversationRoom)
-    .except(senderSocketId)  // ⬅️ Socket.IO natif: .except()
-    .emit('message:group', message);
-}
+Stratégie de cache dynamique : le TTL varie selon le type de message (`TEXT`=1h, `IMAGE`=2h, `VIDEO`=30min).
+
+**`Conversation.js`** — Représente une conversation :
+
+| Propriété | Type | Description |
+|---|---|---|
+| `type` | Enum | `PRIVATE`, `GROUP`, `CHANNEL` |
+| `participants` | Array | Liste des userIds participants |
+| `unreadCounts` | Object | `{ userId: count }` — compteurs non-lus par utilisateur |
+| `settings` | Object | Notifications, confidentialité, rétention, paramètres groupe |
+| `archivedBy` / `mutedBy` / `pinnedBy` | Arrays | Actions utilisateur individuelles |
+
+Factory methods : `Conversation.createPrivateConversation()`, `Conversation.createGroup()`
+
+**`File.js`** — Représente un fichier uploadé avec ses métadonnées enrichies (dimensions, durée, nombre de pages PDF, etc.)
+
+**`Event.js`** — Définit les types d'événements système standardisés pour les Redis Streams.
+
+---
+
+### 5. Couche Infrastructure (`infrastructure/`)
+
+La couche la plus volumineuse. Contient toutes les implémentations concrètes des interfaces définies par les couches supérieures.
+
+#### 5.1. MongoDB (`infrastructure/mongodb/`)
+
+**`connection.js`** — Singleton de connexion Mongoose avec retry automatique.
+
+**Modèles Mongoose** — Schémas riches avec indexes composites pour les performances :
+
+| Modèle | Indexes principaux |
+|---|---|
+| `MessageModel` | `{ conversationId: 1, createdAt: -1 }`, `{ senderId: 1 }`, `{ status: 1 }` |
+| `ConversationModel` | `{ "participants.userId": 1 }`, `{ type: 1 }`, `{ updatedAt: -1 }` |
+| `FileModel` | `{ conversationId: 1 }`, `{ uploadedBy: 1 }`, `{ mimeType: 1 }` |
+| `UserEncryptionKeyModel` | `{ userId: 1, isActive: 1 }`, `{ fingerprint: 1 }` |
+
+#### 5.2. Redis (`infrastructure/redis/`)
+
+Cinq composants Redis distincts :
+
+| Composant | Responsabilité | Clés Redis |
+|---|---|---|
+| `redisConfig.js` | Configuration et health check | — |
+| `CacheService.js` | Cache générique avec TTL, pattern delete, renew TTL | `chat:cache:*` |
+| `OnlineUserManager.js` | Tracking utilisateurs connectés, heartbeat, cleanup | `chat:online:*` |
+| `RoomManager.js` | Gestion des rooms Socket.IO dans Redis | `chat:room:*` |
+| `UnreadMessageManager.js` | Compteurs non-lus atomiques (INCR/DECR) | `chat:cache:unread:*` |
+
+#### 5.3. Repositories (`infrastructure/repositories/`)
+
+**Pattern Decorator** : Chaque repository MongoDB est enveloppé dans un repository caché qui ajoute transparemment une couche de cache Redis.
+
+```
+Requête → CachedMessageRepository → (cache hit?) → retourne
+                                    → (cache miss?) → MongoMessageRepository → MongoDB
+                                                   → mise en cache Redis
+                                                   → retourne
 ```
 
-### B. Resilience Pattern — Circuit Breaker
+**`CachedMessageRepository`** implémente une stratégie de cache à 3 niveaux :
 
-```javascript
-// CircuitBreaker usage
-const circuitBreaker = new CircuitBreaker({
-  failureThreshold: 5, // 5 erreurs
-  resetTimeout: 60000, // 60s avant retry
-  timeout: 5000, // 5s timeout max
-});
+| Niveau | Clé | TTL | Quand |
+|---|---|---|---|
+| Quick Load | `chat:cache:msgs:quick:{convId}:{limit}` | 60s | Chargement initial rapide |
+| First Page | `chat:cache:msgs:{convId}:first:{limit}` | 1h | Première page de messages |
+| Pagination | `chat:cache:msgs:{convId}:p{page}:{limit}` | 5min | Pages suivantes |
 
-try {
-  await circuitBreaker.execute(async () => {
-    return await mongoRepository.save(message);
-  });
-} catch (err) {
-  if (err.message.includes("CIRCUIT_OPEN")) {
-    console.error("⚠️  Circuit ouvert: fallback à cache");
-    // Fallback: écrire en cache Redis temporaire
-    await cacheService.set(`pending:${message.id}`, message);
-  }
-}
+**Invalidation intelligente :** À chaque nouveau message, le cache de la conversation est invalidé puis **pré-rechargé en arrière-plan** (`setImmediate`), garantissant un cache warm pour la prochaine requête.
+
+#### 5.4. Services techniques (`infrastructure/services/`)
+
+C'est le bloc le plus critique du service. 11 services techniques gèrent les aspects non-fonctionnels.
+
+---
+
+##### 5.4.1. `ResilientMessageService` — Résilience & Publication
+
+**Concepts :** Circuit Breaker, Write-Ahead Log (WAL), Dead Letter Queue (DLQ), Retry exponentiel, Fallback Redis
+
+C'est le **service de résilience centralisé** (2 676 lignes). Il garantit qu'aucun message n'est perdu, même en cas de défaillance de MongoDB ou Redis.
+
+**Architecture de résilience :**
+
+```
+Message entrant
+      │
+      ├─→ WAL Pre-Write (Redis Stream)      ← Point de récupération
+      │
+      ├─→ CircuitBreaker.execute()
+      │     ├─→ MongoDB Save (succès)
+      │     │     ├─→ WAL Post-Write (cleanup)
+      │     │     └─→ Publish Redis Stream
+      │     │
+      │     └─→ MongoDB Save (échec)
+      │           ├─→ Circuit CLOSED → Retry Queue
+      │           │     └─→ Backoff exponentiel: 100ms × 2^(attempt-1)
+      │           │           └─→ Max 5 retries → DLQ
+      │           │
+      │           └─→ Circuit OPEN → Fallback Redis
+      │                 └─→ Hash Redis (TTL 24h) + Fallback Stream
+      │                       └─→ Replay worker → MongoDB (quand disponible)
 ```
 
-### C. E2EE — Encryption de bout en bout
+**Composants shared injectés :**
+- `CircuitBreaker` : seuil de 5 échecs, reset après 30s
+- `StreamManager` : normalisation des opérations Redis Streams (addToStream, readFromStream, trimming)
+- `WorkerManager` : orchestration de 3 workers de fond (retry, fallback, WAL recovery)
 
-```javascript
-// Envoyer un message chiffré
-const encryptedContent = await encryptionService.encrypt(
-  content,
-  conversationId,
-  keyManagementService,
-);
+**Streams Redis gérés (20+) :**
 
-socket.emit("sendMessage", {
-  content: encryptedContent,
-  isEncrypted: true,
-  conversationId,
-});
+| Catégorie | Streams |
+|---|---|
+| Techniques | `chat:stream:wal`, `chat:stream:retry`, `chat:stream:dlq`, `chat:stream:fallback`, `chat:stream:metrics` |
+| Messages | `chat:stream:messages:private`, `chat:stream:messages:group`, `chat:stream:messages:channel` |
+| Statuts | `chat:stream:status:delivered`, `chat:stream:status:read`, `chat:stream:status:edited`, `chat:stream:status:deleted` |
+| Événements | `chat:stream:events:typing`, `chat:stream:events:reactions`, `chat:stream:events:replies` |
+| Système | `chat:stream:events:conversations`, `chat:stream:events:files`, `chat:stream:events:notifications`, `chat:stream:events:analytics` |
 
-// Recevoir et déchiffrer
-socket.on("newMessage", async (message) => {
-  if (message.isEncrypted) {
-    const decrypted = await encryptionService.decrypt(
-      message.content,
-      message.conversationId,
-      keyManagementService,
-    );
-    console.log("Contenu déchiffré:", decrypted);
-  }
-});
+---
+
+##### 5.4.2. `MessageDeliveryService` — Consumer Multi-Streams
+
+**Concepts :** Consumer Groups, Worker Partitioning, Lazy Subscription, Priorité, Déduplication
+
+C'est le **consommateur distribué** (3 425 lignes) qui lit les Redis Streams et distribue les messages aux destinataires via Socket.IO.
+
+**Architecture de partitionnement des workers :**
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│              MessageDeliveryService                          │
+│                                                              │
+│  HIGH_PRIORITY_WORKER (3 workers)                            │
+│  ├─ private (100ms)        ← Messages privés                 │
+│  ├─ statusRead (50ms)      ← Accusés de lecture              │
+│  ├─ statusDelivered (50ms) ← Accusés de livraison            │
+│  ├─ conversationCreated    ← Nouvelles conversations         │
+│  └─ call (50ms)            ← Événements d'appels             │
+│                                                              │
+│  GROUP_WORKER (2 workers)                                    │
+│  ├─ group (200ms)          ← Messages de groupe              │
+│  ├─ channel (200ms)        ← Messages canal                  │
+│  ├─ reactions (2000ms)     ← Réactions emoji                 │
+│  └─ replies (2000ms)       ← Réponses threadées              │
+│                                                              │
+│  SYSTEM_WORKER (1 worker)                                    │
+│  ├─ notifications (500ms)  ← Notifications push              │
+│  ├─ conversations (500ms)  ← Événements conversation         │
+│  ├─ files (500ms)          ← Événements fichiers             │
+│  ├─ statusEdited (1500ms)  ← Édition de messages             │
+│  ├─ statusDeleted (1500ms) ← Suppression de messages         │
+│  └─ analytics (3000ms)     ← Métriques d'usage               │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-### D. Cache Prewarming — SmartCachePrewarmer
+**Lazy Subscription (abonnement progressif) :**
+Les streams ne sont pas tous consommés simultanément. Le service démarre par phases pour éviter la surcharge au boot :
 
-```javascript
-// Préchauffer le cache au login
-const prewarmer = new SmartCachePrewarmer(cacheService, repositories);
+| Phase | Délai | Streams |
+|---|---|---|
+| Phase 1 | Immédiat | `private`, `statusRead`, `statusDelivered`, `conversationCreated`, `call` |
+| Phase 2 | +100ms | `group`, `channel` |
+| Phase 3 | +300ms | `notifications`, `conversations`, participant events |
+| Phase 4 | +800ms | `files`, `reactions`, `replies` |
+| Phase 5 | Background | `analytics` |
 
-socket.on("authenticated", async (data) => {
-  // 1. Charger les conversations actives
-  // 2. Pré-charger les derniers messages
-  // 3. Charger les métadonnées utilisateur
-  await prewarmer.prewarmUserCache(userId, {
-    conversationLimit: 20,
-    messagesPerConversation: 50,
-  });
-});
+**Mécanismes de fiabilité :**
+- **Déduplication** : cache en mémoire (`Map`) avec TTL 30s pour éviter la double livraison (direct + stream consumer)
+- **Queue sérialisée** : livraison ordonnée des statuts avec 20ms d'intervalle entre chaque `emit` pour éviter la saturation Socket.IO
+- **Pending Queue** : si le destinataire est déconnecté, le message est stocké dans `chat:stream:pending:messages:{userId}` pour livraison au reconnect
+- **Multi-device** : le message est livré à **tous les sockets** du destinataire, mais exclu le `senderSocketId` exact (pas tous les sockets du sender)
+
+---
+
+##### 5.4.3. `TypingIndicatorService` — Indicateurs de frappe
+
+**Concepts :** Consumer Group dédié, Debounce serveur, Timeout automatique
+
+Consumer Redis Streams dédié au stream `chat:stream:events:typing`. Séparé du `MessageDeliveryService` pour isoler le trafic haute fréquence (50ms d'intervalle de polling).
+
+| Paramètre | Valeur | Rôle |
+|---|---|---|
+| `TYPING_TIMEOUT` | 10s | Si aucun refresh reçu → envoi automatique de `typing:stop` |
+| `DEBOUNCE_INTERVAL` | 1s | Minimum entre deux broadcasts du même utilisateur |
+
+**Flux :**
 ```
-
-### E. Typing Indicators — Debounce & Timeout
-
-```javascript
-// Architecture TypingIndicatorService
-// Consumer dédié qui:
-// 1. Lit de "chat:stream:events:typing"
-// 2. Debounce 1s min entre chaque refresh du même user
-// 3. Timeout 10s auto = "typing:stop"
-
-socket.on("typing", (data) => {
-  redis.xAdd("chat:stream:events:typing", "*", {
-    userId: socket.userId,
-    conversationId: data.conversationId,
-    event: "typing:start",
-  });
-  // TypingIndicatorService broadcast "typing:indicator"
-});
+Client → emit("typing") → chatHandler → Redis Stream → TypingIndicatorService
+  → broadcastTypingStatus() → Socket.IO emit("typing:indicator") à tous les participants (sauf le typeur)
 ```
 
 ---
 
-## 🐛 Troubleshooting avancé
+##### 5.4.4. `FileStorageService` — Stockage objet
 
-### Redis Streams — Debug & Monitoring
+**Concept :** Strategy Pattern — Le service supporte plusieurs backends de stockage.
 
-```bash
-# Vérifier les streams existants
-redis-cli
-> XINFO STREAM chat:stream:messages:group
+| Mode | Backend | Usage |
+|---|---|---|
+| `development` | MinIO (S3-compatible) | Développement local avec Docker |
+| `production` | MinIO ou SFTP (`ssh2-sftp-client`) | Production avec stockage distant |
 
-# Voir les consumer groups
-> XINFO GROUPS chat:stream:messages:group
+Fonctionnalités :
+- Upload monolithique et par buffer avec retry automatique (max 3 tentatives)
+- Download avec stream (pas de chargement en mémoire)
+- Compression optionnelle : images → WebP via `sharp`, vidéos → MP4 via `ffmpeg`
+- Chiffrement serveur optionnel (AES-256-GCM comme fallback)
+- URL signées (`presignedGetObject`) pour le téléchargement sécurisé temporaire
+- Métriques intégrées (uploads, downloads, deletes, errors)
 
-# Lire les entries du stream
-> XRANGE chat:stream:messages:group - +
-> XLEN chat:stream:messages:group
+---
 
-# Nettoyer un stream (⚠️ ATTENTION: données perdues)
-> DEL chat:stream:messages:group
+##### 5.4.5. `MediaProcessingService` — Traitement multimédia
 
-# Voir les pending entries (messages non ACK)
-> XPENDING chat:stream:messages:group delivery-service
+Service de traitement et d'extraction de métadonnées pour tous les types de fichiers supportés :
+
+| Type | Bibliothèque | Données extraites |
+|---|---|---|
+| **Images** | `sharp` | Dimensions, format, taille, miniature WebP |
+| **Vidéos** | `fluent-ffmpeg` | Durée, dimensions, codec, framerate, miniature |
+| **Audio** | `music-metadata` | Durée, artiste, album, genre, bitrate, sample rate |
+| **PDF** | `pdf-parse` | Nombre de pages, texte extrait, métadonnées auteur |
+| **Tous** | `mime-types` | Type MIME détecté, extension originale |
+
+---
+
+##### 5.4.6. `ThumbnailService` — Miniatures
+
+Génère des miniatures pour les images et vidéos uploadés :
+- Images : redimensionnement via `sharp` en WebP (qualité 80)
+- Stockage des miniatures dans MinIO sous le préfixe `thumbnails/`
+- Nommage unique via `uuid`
+
+---
+
+##### 5.4.7. `ChunkedUploadService` — Upload par morceaux
+
+Gère l'upload de fichiers volumineux (> 100 MB) par morceaux :
+
 ```
+1. Client → POST /files/chunk/init  → ChunkedUploadService.initUpload()
+   → Retourne uploadId, chunkSize (5 MB), totalChunks
 
-### MongoDB — Indexes & Perf
+2. Client → POST /files/chunk/upload (×N) → ChunkedUploadService.uploadChunk()
+   → Stockage temporaire dans le filesystem (fs-extra)
+   → Tracking Redis du nombre de chunks reçus
 
-```bash
-# Lister les indexes
-db.messages.getIndexes()
+3. Dernier chunk → ChunkedUploadService.finalizeUpload()
+   → Assemblage des chunks → Buffer complet
+   → Upload vers MinIO via FileStorageService
+   → Nettoyage des chunks temporaires
 
-# Créer un index sur conversationId + timestamp
-db.messages.createIndex({ conversationId: 1, createdAt: -1 })
-
-# Analyser une query
-db.messages.find({ conversationId: ObjectId("...") }).explain("executionStats")
-
-# Nettoyer les collections obsolètes
-db.messages.deleteMany({ createdAt: { $lt: ISODate("2024-01-01") } })
-```
-
-### Socket.IO — Debugging
-
-```bash
-# Activer debug mode
-export DEBUG=socket.io:*
-npm run dev
-
-# Voir tous les événements Socket.IO émis/reçus
-socket.onAny((eventName, ...args) => {
-  console.log(`🔍 Event: ${eventName}`, args);
-});
-
-# Vérifier les rooms actuelles
-io.of('/').adapter.rooms  // Server-side
+Maintenance :
+   → setInterval (30 min) → cleanupExpired() → Supprime les uploads abandonnés (TTL > 2h)
 ```
 
 ---
 
-## 📚 Ressources additionnelles
+##### 5.4.8. `EncryptionService` — Chiffrement E2EE
 
-| Ressource             | Lien                                                                       | Description                                |
-| --------------------- | -------------------------------------------------------------------------- | ------------------------------------------ |
-| Socket.IO Reference   | [SOCKET_EVENTS_REFERENCE.md](SOCKET_EVENTS_REFERENCE.md)                   | Catalogue complet des événements WebSocket |
-| Use-Cases Reference   | [USE_CASES_REFERENCE.md](USE_CASES_REFERENCE.md)                           | Liste exhaustive de tous les cas d'utilisation métier |
-| Redis Keys Convention | [REDIS_KEYS_CONVENTION.md](REDIS_KEYS_CONVENTION.md)                       | Convention de nommage des clés Redis       |
-| Redis Streams Guide   | [shared/REDIS_DOCUMENTATION.md](shared/REDIS_DOCUMENTATION.md)             | Architecture distribuée et patterns        |
-| Deployment Guide      | [DEPLOYMENT.md](DEPLOYMENT.md)                                             | Instructions production & scaling          |
-| API Routes            | `GET http://localhost:8003/`                                               | Health check & routes actuelles            |
-| Architecture          | [SMART_CACHE_PREWARMER_INTEGRATION.md](SMARTCACHEPREWARMER_INTEGRATION.md) | Cache optimization strategy                |
+**Concepts :** Chiffrement hybride, AES-256-GCM, RSA-OAEP 4096, Switch de mode à chaud
+
+Le service supporte deux modes, commutables **à chaud** sans redémarrage :
+
+| Mode | Comportement |
+|---|---|
+| `none` | Pas de chiffrement applicatif (défaut). Le contenu transite en clair (TLS réseau uniquement). |
+| `e2ee` | Chiffrement de bout en bout. Le serveur ne peut **jamais** lire le contenu. |
+
+**Algorithmes en mode E2EE :**
+
+```
+Chiffrement d'un message :
+  1. Génération d'une clé symétrique AES-256 aléatoire (32 bytes)
+  2. Génération d'un IV aléatoire (16 bytes)
+  3. Chiffrement du contenu avec AES-256-GCM → ciphertext + auth tag (16 bytes)
+  4. Chiffrement de la clé symétrique avec la clé publique RSA-4096 du destinataire (OAEP + SHA-256)
+  5. Retour : { encryptedContent, encryptionIV, encryptionTag, encryptedKey }
+```
+
+Le service chiffre aussi les fichiers (buffers binaires) avec le même schéma.
+
+**Sécurité :** Le serveur ne stocke **jamais** les clés privées. Elles sont générées et conservées exclusivement côté client (Keychain iOS / SecureStorage Android).
 
 ---
 
-## 📞 Support & Contribuer
+##### 5.4.9. `KeyManagementService` — Gestion des clés publiques
 
-Pour toute question ou bug report :
+**Concepts :** Rotation de clés, TOFU (Trust On First Use), Cache Redis + persistance MongoDB
 
-1. Consulter la [FAQ](#) ou les issues existantes
-2. Créer une nouvelle issue avec contexte
-3. Faire une PR selon la checklist de [Contribution](#normes-de-code--contribution)
+| Opération | Description |
+|---|---|
+| `registerPublicKey()` | Enregistre ou rotate la clé publique d'un utilisateur (versionnée) |
+| `getPublicKey()` | Cache Redis → Fallback MongoDB → retourne le PEM actif |
+| `revokeKey()` | Désactive la clé active (cas de compromission) |
+| `verifyFingerprint()` | Vérifie un fingerprint SHA-256 contre la clé active (TOFU) |
+| `getKeyHistory()` | Historique des versions de clé (pour déchiffrer d'anciens messages) |
 
-**Équipe de maintenance :** DevOps, Backend, Architecture
+**Architecture de stockage :**
+```
+getPublicKey(userId)
+  → Redis cache (chat:encryption:pubkey:{userId}, TTL 1h)
+    → HIT → retourne PEM
+    → MISS → MongoDB (UserEncryptionKeyModel, { userId, isActive: true })
+      → FOUND → cache Redis + retourne PEM
+      → NOT FOUND → throw Error
+```
 
 ---
 
-**Version :** 1.0.0 | **Dernière mise à jour :** 17 Juin 2026 | **License :** ISC
+##### 5.4.10. `UserCacheService` — Cache profils utilisateurs
+
+Client HTTP (`axios`) qui interroge le `auth-user-service` pour résoudre les noms/avatars des utilisateurs. Utilisé lors de l'ajout de participants pour enrichir les notifications système.
+
+---
+
+##### 5.4.11. `SmartCachePrewarmer` — Pré-chauffage du cache
+
+**Concept :** Cache Warming — Pré-charger les données fréquemment accédées au démarrage pour maximiser le cache hit rate.
+
+**Stratégie en 3 étapes :**
+1. Lecture du stream `user-service:stream:events:users` via `UserStreamConsumer`
+2. Fallback : requête HTTP `GET /all` vers le auth-user-service
+3. Traitement par batches de 500 utilisateurs avec 1.5s de délai inter-batch
+
+Résultat : cache hit rate de 80-95% dès le premier accès.
+
+---
+
+##### 5.4.12. `AutoGroupSyncService` — Synchronisation des groupes
+
+Synchronise automatiquement les groupes organisationnels (par ministère, département) en interrogeant les données utilisateur et en créant/mettant à jour les groupes correspondants via les use cases `CreateGroup` et `AddParticipant`.
+
+---
+
+### 6. Module partagé (`@chatapp-ngomna/shared`)
+
+Module NPM local (`file:../shared`) qui fournit les composants transversaux réutilisés par tous les microservices :
+
+| Composant | Rôle |
+|---|---|
+| `RedisManager` | Gestionnaire de connexions Redis (main, pub, sub, stream) |
+| `CacheService` | Cache générique avec TTL, pattern delete, renewal |
+| `OnlineUserManager` | Tracking des utilisateurs connectés |
+| `RoomManager` | Gestion des rooms Socket.IO dans Redis |
+| `UnreadMessageManager` | Compteurs atomiques non-lus |
+| `CircuitBreaker` | Pattern Circuit Breaker (closed → open → half-open) |
+| `StreamManager` | Abstraction des opérations Redis Streams |
+| `WorkerManager` | Orchestration de workers de fond |
+| `UserCache` | Cache centralisé des profils utilisateurs |
+| `UserStreamConsumer` | Consumer du stream événements utilisateurs |
+
+---
+
+## 📐 Patterns & Concepts architecturaux — Résumé
+
+| Pattern | Où il est appliqué | Pourquoi |
+|---|---|---|
+| **Clean Architecture** | Structure complète du projet (`interfaces/` → `application/` → `domain/` → `infrastructure/`) | Séparation stricte des responsabilités, testabilité, maintenabilité |
+| **Dependency Injection** | `index.js` (Composition Root) → tous les constructeurs | Découplage, testabilité (mock facile), configuration centralisée |
+| **Repository Pattern** | `MongoMessageRepository`, `CachedMessageRepository`, etc. | Abstraction de la couche de persistance, interchangeabilité |
+| **Decorator Pattern** | `CachedMessageRepository` enveloppe `MongoMessageRepository` | Ajout transparent du cache sans modifier le repository original |
+| **Command Pattern** | 30 Use Cases avec `execute()` | Une classe = une opération = une responsabilité |
+| **Circuit Breaker** | `ResilientMessageService` via `@chatapp-ngomna/shared` | Protection contre les défaillances en cascade de MongoDB |
+| **Write-Ahead Log (WAL)** | `ResilientMessageService.logPreWrite()` / `logPostWrite()` | Récupération des messages en cas de crash entre l'écriture et la publication |
+| **Dead Letter Queue (DLQ)** | `ResilientMessageService.addToDLQ()` | Isolation des messages "poison" qui échouent après tous les retries |
+| **Retry avec Backoff** | `ResilientMessageService.addRetry()` — 100ms × 2^(attempt-1) | Récupération automatique des erreurs transitoires |
+| **Fallback** | `ResilientMessageService.redisFallback()` | Dégradation gracieuse : Redis comme buffer temporaire si MongoDB down |
+| **Event-Driven Architecture** | Redis Streams (20+ streams) + Consumer Groups | Découplage production/consommation, scalabilité horizontale |
+| **Consumer Partitioning** | `MessageDeliveryService.WORKER_PARTITIONS` | Isolation des charges par priorité, pas de starvation |
+| **Lazy Subscription** | `MessageDeliveryService.SUBSCRIPTION_PHASES` | Démarrage progressif pour éviter la surcharge au boot |
+| **Strategy Pattern** | `FileStorageService` (MinIO vs SFTP) | Backend de stockage interchangeable par configuration |
+| **Cache-Aside** | `CachedMessageRepository.findByConversation()` | Cache → Miss → DB → Cache → Réponse |
+| **Cache Warming** | `SmartCachePrewarmer.start()` | Pré-chargement des données chaudes au démarrage |
+| **Graceful Shutdown** | `index.js` — `SIGTERM`/`SIGINT` handlers | Arrêt propre : stop consumers → close Redis → close MongoDB |
+| **Composition Root** | `index.js` — unique point d'assemblage | Tous les `new` au même endroit, pas de couplage implicite |
+
+---
+
+## 📞 Liens utiles
+
+| Ressource | Lien |
+|---|---|
+| Documentation globale | [README.md](../README.md) |
+| Événements Socket.IO | [SOCKET_EVENTS_REFERENCE.md](../SOCKET_EVENTS_REFERENCE.md) |
+| Use Cases complets | [USE_CASES_REFERENCE.md](../USE_CASES_REFERENCE.md) |
+| Conventions Redis | [REDIS_KEYS_CONVENTION.md](../REDIS_KEYS_CONVENTION.md) |
+| Documentation Redis Streams | [shared/REDIS_DOCUMENTATION.md](../shared/REDIS_DOCUMENTATION.md) |
+| Interface de test | `http://localhost:8003/` |
+| Health check | `http://localhost:8003/health` |
+
+---
+
+**Version :** 1.0.0 | **Dernière mise à jour :** 20 Juin 2026 | **License :** ISC
