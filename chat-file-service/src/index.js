@@ -20,6 +20,7 @@ if (!envValidator.validate()) {
 }
 
 // Infrastructure
+const mongoose = require("mongoose");
 const connectDB = require("./infrastructure/mongodb/connection");
 const redisConfig = require("./infrastructure/redis/redisConfig");
 
@@ -327,7 +328,7 @@ const startServer = async () => {
     // ✅ NETTOYAGE AUTOMATIQUE DES CHUNKS EXPIRÉS (toutes les 30 minutes)
     // Supprime les dossiers temporaires d'uploads abandonnés ou crashés (TTL > 2h)
     const CHUNK_CLEANUP_INTERVAL_MS = 30 * 60 * 1000; // 30 min
-    setInterval(async () => {
+    const chunkCleanupInterval = setInterval(async () => {
       try {
         await chunkedUploadService.cleanupExpired();
       } catch (err) {
@@ -997,8 +998,9 @@ const startServer = async () => {
     // ===============================
 
     // Maintenance Redis
+    let redisMaintenanceInterval = null;
     if (onlineUserManager && roomManager) {
-      setInterval(
+      redisMaintenanceInterval = setInterval(
         async () => {
           try {
             console.log("🧹 Nettoyage périodique Redis...");
@@ -1017,6 +1019,111 @@ const startServer = async () => {
         30 * 60 * 1000,
       ); // 30 minutes
     }
+
+    // ===============================
+    // 13b. ENREGISTREMENT DES RESSOURCES POUR L'ARRÊT GRACIEUX
+    // ===============================
+    // Défini ici comme closure pour avoir accès aux variables locales de
+    // startServer() (services, clients, handles d'intervalle). L'ancien
+    // gracefulShutdown était au niveau module et ne voyait aucune de ces
+    // variables (block scoping), rendant le nettoyage totalement inopérant.
+    performShutdown = async () => {
+      // 1. Stopper les timers en premier pour éviter qu'ils touchent
+      //    Redis/Mongo pendant la fermeture.
+      clearInterval(chunkCleanupInterval);
+      if (redisMaintenanceInterval) clearInterval(redisMaintenanceInterval);
+
+      // 2. Cesser d'accepter de nouvelles connexions HTTP/WebSocket.
+      if (io) {
+        try {
+          await new Promise((resolve) => io.close(() => resolve()));
+          console.log("✅ Socket.IO fermé");
+        } catch (err) {
+          console.warn("⚠️ Erreur fermeture Socket.IO:", err.message);
+        }
+      }
+      if (server && server.listening) {
+        try {
+          await new Promise((resolve) => server.close(() => resolve()));
+          console.log("✅ Serveur HTTP fermé");
+        } catch (err) {
+          console.warn("⚠️ Erreur fermeture serveur HTTP:", err.message);
+        }
+      }
+
+      // 3. Arrêter les services applicatifs (consumers, workers).
+      if (messageDeliveryService && messageDeliveryService.stopConsumer) {
+        try {
+          messageDeliveryService.stopConsumer();
+          console.log("✅ MessageDeliveryService arrêté");
+        } catch (err) {
+          console.warn("⚠️ Erreur arrêt MessageDeliveryService:", err.message);
+        }
+      }
+
+      if (typingIndicatorService && typingIndicatorService.stopConsumer) {
+        try {
+          await typingIndicatorService.stopConsumer();
+          console.log("✅ TypingIndicatorService arrêté");
+        } catch (err) {
+          console.warn("⚠️ Erreur arrêt TypingIndicatorService:", err.message);
+        }
+      }
+
+      if (resilientMessageService) {
+        try {
+          if (resilientMessageService.stopWorkers) {
+            resilientMessageService.stopWorkers();
+          }
+          if (resilientMessageService.memoryMonitorInterval) {
+            clearInterval(resilientMessageService.memoryMonitorInterval);
+          }
+          if (resilientMessageService.trimInterval) {
+            clearInterval(resilientMessageService.trimInterval);
+          }
+          if (resilientMessageService.metricsInterval) {
+            clearInterval(resilientMessageService.metricsInterval);
+          }
+          console.log("✅ ResilientMessageService arrêté");
+        } catch (err) {
+          console.warn("⚠️ Erreur arrêt ResilientMessageService:", err.message);
+        }
+      }
+
+      // 4. Fermer les subscribers Redis des managers (clients dupliqués).
+      if (onlineUserManager && onlineUserManager.cleanup) {
+        try {
+          await onlineUserManager.cleanup();
+          console.log("✅ OnlineUserManager nettoyé");
+        } catch (err) {
+          console.warn("⚠️ Erreur cleanup OnlineUserManager:", err.message);
+        }
+      }
+      if (roomManager && roomManager.cleanup) {
+        try {
+          await roomManager.cleanup();
+          console.log("✅ RoomManager nettoyé");
+        } catch (err) {
+          console.warn("⚠️ Erreur cleanup RoomManager:", err.message);
+        }
+      }
+
+      // 5. Fermer tous les clients Redis (main, pub, sub, stream, cache).
+      try {
+        await RedisManager.disconnect();
+        console.log("✅ Redis déconnecté");
+      } catch (err) {
+        console.warn("⚠️ Erreur fermeture Redis:", err.message);
+      }
+
+      // 6. Fermer la connexion MongoDB.
+      try {
+        await mongoose.connection.close();
+        console.log("✅ MongoDB déconnecté");
+      } catch (err) {
+        console.warn("⚠️ Erreur fermeture MongoDB:", err.message);
+      }
+    };
 
     // ===============================
     // 14. DÉMARRAGE SERVEUR
@@ -1098,69 +1205,29 @@ const startServer = async () => {
 // ===============================
 // GESTION FERMETURE PROPRE
 // ===============================
-const gracefulShutdown = async () => {
-  console.log("🛑 Arrêt gracieux du service...");
+// performShutdown est assigné par startServer() (closure ayant accès aux
+// ressources). gracefulShutdown orchestre l'arrêt : anti-double-appel,
+// timeout de sécurité, puis sortie du process.
+let performShutdown = null;
+let isShuttingDown = false;
+
+const gracefulShutdown = async (signal) => {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  console.log(`🛑 Arrêt gracieux du service (${signal})...`);
+
+  // Filet de sécurité : forcer la sortie si une fermeture reste bloquée.
+  const failSafe = setTimeout(() => {
+    console.error("⏱️ Timeout d'arrêt dépassé, sortie forcée");
+    process.exit(1);
+  }, 10000);
+  failSafe.unref();
 
   try {
-    // ✅ ARRÊTER LE MESSAGE DELIVERY SERVICE (Redis Streams Consumer)
-    if (
-      typeof messageDeliveryService !== "undefined" &&
-      messageDeliveryService
-    ) {
-      messageDeliveryService.stopConsumer();
-      console.log("✅ MessageDeliveryService arrêté");
+    if (performShutdown) {
+      await performShutdown();
     }
-
-    // ✅ ARRÊTER LES WORKERS INTERNES (ResilientMessageService)
-    if (
-      typeof resilientMessageService !== "undefined" &&
-      resilientMessageService
-    ) {
-      if (resilientMessageService.stopWorkers) {
-        resilientMessageService.stopWorkers();
-      }
-      if (resilientMessageService.memoryMonitorInterval) {
-        clearInterval(resilientMessageService.memoryMonitorInterval);
-      }
-      if (resilientMessageService.trimInterval) {
-        clearInterval(resilientMessageService.trimInterval);
-      }
-      if (resilientMessageService.metricsInterval) {
-        clearInterval(resilientMessageService.metricsInterval);
-      }
-      console.log("✅ ResilientMessageService arrêté");
-    }
-
-    // ✅ FERMER LE CLIENT REDIS STREAMS (séparé du client principal)
-    if (typeof redisStreamsClient !== "undefined" && redisStreamsClient) {
-      try {
-        await redisStreamsClient.quit();
-        console.log("✅ Redis Streams Client déconnecté");
-      } catch (err) {
-        console.warn("⚠️ Erreur fermeture Redis Streams Client:", err.message);
-      }
-    }
-
-    // ✅ FERMER LE CLIENT REDIS PRINCIPAL
-    if (typeof redisClient !== "undefined" && redisClient) {
-      try {
-        await redisClient.quit();
-        console.log("✅ Redis déconnecté");
-      } catch (err) {
-        console.warn("⚠️ Erreur fermeture Redis:", err.message);
-      }
-    }
-
-    // ✅ FERMER LA CONNEXION MONGODB
-    if (typeof mongoConnection !== "undefined" && mongoConnection) {
-      try {
-        await mongoConnection.close();
-        console.log("✅ MongoDB déconnecté");
-      } catch (err) {
-        console.warn("⚠️ Erreur fermeture MongoDB:", err.message);
-      }
-    }
-
+    clearTimeout(failSafe);
     console.log("✅ Arrêt gracieux complété");
     process.exit(0);
   } catch (error) {
@@ -1169,8 +1236,8 @@ const gracefulShutdown = async () => {
   }
 };
 
-process.on("SIGTERM", gracefulShutdown);
-process.on("SIGINT", gracefulShutdown);
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 process.on("uncaughtException", (error) => {
   console.error("❌ Exception non gérée:", error);

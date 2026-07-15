@@ -1077,6 +1077,10 @@ class ChatHandler {
               timestamp: new Date().toISOString(),
             });
 
+            console.log(
+              `📢 Diffusion "${name}" créée avec succès: ${broadcast._id} par ${userId}`,
+            );
+
             // 🔄 Notification admins supprimée — distribution via MDS (stream → conversation:created)
             // 🔄 Notification destinataires supprimée — distribution via MDS (stream → conversation:created)
 
@@ -1328,8 +1332,10 @@ class ChatHandler {
             let result;
             try {
               result = await this.sendMessageUseCase.execute({
-                content:
-                  callType === "VIDEO" ? "📹 Appel vidéo" : "📞 Appel audio",
+                // ✅ FIX : content vide pour les appels — le texte affiché est géré
+                // côté UI à partir des métadonnées (callMeta.callType, callMeta.status).
+                // Stocker un texte ici créait une confusion avec les messages texte ordinaires.
+                content: "",
                 senderId: userId,
                 conversationId: conversationId
                   ? this.normalizeMongoId(conversationId)
@@ -1376,6 +1382,9 @@ class ChatHandler {
                 messageId,
                 callType,
                 conversationId: result.conversation.id,
+                // ✅ FIX : callerId en champ racine pour lecture directe côté Flutter
+                // data['callerId'] dans SignalingService._initListeners()
+                callerId: userId,
                 caller: {
                   userId,
                   matricule: socket.matricule,

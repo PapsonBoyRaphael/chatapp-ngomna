@@ -109,6 +109,18 @@ class RoomManager {
     if (!this.redis) return;
 
     try {
+      // Fermer proprement un éventuel subscriber existant avant d'en créer
+      // un nouveau, pour éviter l'accumulation de connexions Redis.
+      if (this.roomSubscriber) {
+        try {
+          await this.roomSubscriber.unsubscribe();
+          await this.roomSubscriber.quit();
+        } catch (err) {
+          console.warn("⚠️ Erreur cleanup ancien roomSubscriber:", err.message);
+        }
+        this.roomSubscriber = null;
+      }
+
       this.roomSubscriber = this.redis.duplicate();
       await this.roomSubscriber.connect();
 
@@ -477,21 +489,34 @@ class RoomManager {
 
     try {
       let cleanedCount = 0;
-      const allRoomKeys = await this.redis.keys(`${this.roomPrefix}:*`);
+      let cursor = 0;
 
-      for (const roomKey of allRoomKeys) {
-        const roomName = roomKey.replace(`${this.roomPrefix}:`, "");
-        const usersCount = await this.redis.sCard(
-          `${this.roomUsersPrefix}:${roomName}`,
+      // SCAN paginé (lots de 100) au lieu de KEYS pour éviter de charger
+      // toutes les clés en mémoire d'un coup et de bloquer Redis.
+      do {
+        const { cursor: nextCursor, keys: roomKeys } = await this.redis.scan(
+          cursor,
+          {
+            MATCH: `${this.roomPrefix}:*`,
+            COUNT: 100,
+          },
         );
+        cursor = nextCursor;
 
-        if (usersCount === 0) {
-          await this.redis.del(roomKey);
-          await this.redis.del(`${this.roomUsersPrefix}:${roomName}`);
-          cleanedCount++;
-          console.log(`🧹 Room vide supprimée: ${roomName}`);
+        for (const roomKey of roomKeys) {
+          const roomName = roomKey.replace(`${this.roomPrefix}:`, "");
+          const usersCount = await this.redis.sCard(
+            `${this.roomUsersPrefix}:${roomName}`,
+          );
+
+          if (usersCount === 0) {
+            await this.redis.del(roomKey);
+            await this.redis.del(`${this.roomUsersPrefix}:${roomName}`);
+            cleanedCount++;
+            console.log(`🧹 Room vide supprimée: ${roomName}`);
+          }
         }
-      }
+      } while (cursor !== 0);
 
       return cleanedCount;
     } catch (error) {

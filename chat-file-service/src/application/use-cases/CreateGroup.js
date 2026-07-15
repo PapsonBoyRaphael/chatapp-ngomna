@@ -39,47 +39,59 @@ class CreateGroup {
         console.log(
           `🔐 Vérification permission création groupe pour: ${adminId}`,
         );
-        const visibilityResponse = await fetch(
-          `${process.env.VISIBILITY_API_URL}/api/visibility/contacts/${adminId}`,
-        );
 
-        if (!visibilityResponse.ok) {
-          throw new Error(
-            `Erreur API visibility: ${visibilityResponse.status}`,
+        // Vérifier que l'URL du service de visibilité est configurée
+        if (!process.env.VISIBILITY_SERVICE_URL) {
+          console.warn(
+            `⚠️ VISIBILITY_SERVICE_URL non configurée - vérification des permissions désactivée`,
           );
-        }
-
-        const visibilityData = await visibilityResponse.json();
-
-        if (!visibilityData.success || !visibilityData.data?.agent) {
-          throw new Error("Impossible de récupérer les permissions");
-        }
-
-        const agent = visibilityData.data.agent;
-
-        // Vérifier la permission peut_creer_groupe
-        if (!agent.peut_creer_groupe) {
-          throw new Error(
-            `L'utilisateur ${adminId} n'a pas la permission de créer des groupes`,
+          // Continuer sans vérification si le service n'est pas configuré
+          console.log(
+            `✅ Permission création groupe accordée par défaut (service non configuré)`,
           );
-        }
-
-        // Vérifier la taille maximale du groupe
-        const totalParticipants = members.length + 1; // +1 pour l'admin
-        if (
-          agent.taille_max_groupe > 0 &&
-          totalParticipants > agent.taille_max_groupe
-        ) {
-          throw new Error(
-            `Taille maximale du groupe dépassée: ${totalParticipants}/${agent.taille_max_groupe}`,
+        } else {
+          const visibilityResponse = await fetch(
+            `${process.env.VISIBILITY_SERVICE_URL}/api/visibility/contacts/${adminId}`,
           );
-        }
 
-        console.log(`✅ Permission validée pour ${adminId}:`, {
-          peut_creer_groupe: agent.peut_creer_groupe,
-          taille_max_groupe: agent.taille_max_groupe,
-          totalParticipants,
-        });
+          if (!visibilityResponse.ok) {
+            throw new Error(
+              `Erreur API visibility: ${visibilityResponse.status}`,
+            );
+          }
+
+          const visibilityData = await visibilityResponse.json();
+
+          if (!visibilityData.success || !visibilityData.data?.agent) {
+            throw new Error("Impossible de récupérer les permissions");
+          }
+
+          const agent = visibilityData.data.agent;
+
+          // Vérifier la permission peut_creer_groupe
+          if (!agent.peut_creer_groupe) {
+            throw new Error(
+              `L'utilisateur ${adminId} n'a pas la permission de créer des groupes`,
+            );
+          }
+
+          // Vérifier la taille maximale du groupe
+          const totalParticipants = members.length + 1; // +1 pour l'admin
+          if (
+            agent.taille_max_groupe > 0 &&
+            totalParticipants > agent.taille_max_groupe
+          ) {
+            throw new Error(
+              `Taille maximale du groupe dépassée: ${totalParticipants}/${agent.taille_max_groupe}`,
+            );
+          }
+
+          console.log(`✅ Permission validée pour ${adminId}:`, {
+            peut_creer_groupe: agent.peut_creer_groupe,
+            taille_max_groupe: agent.taille_max_groupe,
+            totalParticipants,
+          });
+        }
       } catch (permissionError) {
         console.error(
           `❌ Erreur vérification permissions:`,
