@@ -22,6 +22,7 @@ Ce document liste **tous les événements Socket.IO** gérés par le `chatHandle
 - [Réponses](#réponses)
 - [Transfert](#transfert)
 - [Typing](#typing)
+- [Sauvegardes & Restauration (Backups)](#sauvegardes--restauration-backups)
 - [Utilitaires (ping, heartbeat)](#utilitaires-ping-heartbeat)
 - [Récapitulatif — Émissions MessageDeliveryService (MDS)](#récapitulatif--émissions-messagedeliveryservice-mds)
 - [Architecture Multi-Device (senderSocketId)](#architecture-multi-device-sendersocketid)
@@ -548,6 +549,58 @@ Client emit "typing"/"stopTyping"
       → debounce 1s + timeout 10s + état mémoire
         → socket.emit("typing:indicator") aux participants
 ```
+
+---
+
+## Sauvegardes & Restauration (Backups)
+
+Ce module permet de créer, contrôler en temps réel et restaurer des sauvegardes complètes (conversations et messages au format ZIP stockées dans MinIO) scopées par utilisateur authentifié.
+
+### `backup:start`
+Démarre une session de sauvegarde interactive pour l'utilisateur.
+
+|                  |                                                                                                                                  |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Entrée**       | `{ conversationId?, label? }` (si `conversationId` est omis, sauvegarde tout l'historique du user)                              |
+| **ACK succès**   | `backup:started` ➔ `{ sessionId, state: "PENDING", startedAt, message }`                                                         |
+| **ACK erreur**   | `backup:error` ➔ `{ message, code: "START_FAILED" }`                                                                             |
+| **Signaux émis** | `backup:progress` pour chaque batch de messages traités, puis `backup:completed` (succès) ou `backup:failed` (échec).            |
+
+### `backup:suspend`
+Suspend temporairement la sauvegarde en cours d'exécution.
+
+|                  |                                                                                                                                  |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Entrée**       | _(vide)_                                                                                                                         |
+| **ACK succès**   | `backup:paused` ➔ `{ sessionId, state: "PAUSED", pausedAt, message }`                                                            |
+| **ACK erreur**   | `backup:error` ➔ `{ message, code: "SUSPEND_FAILED" }`                                                                           |
+
+### `backup:resume`
+Reprend une sauvegarde suspendue en cours.
+
+|                  |                                                                                                                                  |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Entrée**       | _(vide)_                                                                                                                         |
+| **ACK succès**   | `backup:resumed` ➔ `{ sessionId, state: "RUNNING", resumedAt, message }`                                                          |
+| **ACK erreur**   | `backup:error` ➔ `{ message, code: "RESUME_FAILED" }`                                                                            |
+
+### `backup:cancel`
+Annule définitivement la sauvegarde (active ou en pause) et libère la session.
+
+|                  |                                                                                                                                  |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Entrée**       | _(vide)_                                                                                                                         |
+| **ACK succès**   | `backup:cancelled` ➔ `{ sessionId, state: "CANCELLED", cancelledAt, message }`                                                   |
+| **ACK erreur**   | `backup:error` ➔ `{ message, code: "CANCEL_FAILED" }`                                                                            |
+
+### `backup:status`
+Demande l'état et la progression actuelle de la session de sauvegarde de l'utilisateur.
+
+|                  |                                                                                                                                  |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **Entrée**       | _(vide)_                                                                                                                         |
+| **ACK succès**   | `backup:sessionStatus` ➔ `{ session: { sessionId, state, progress: { percentage, message, conversationsLoaded, messagesLoaded }, ... }, timestamp }` (retourne `session: null` si aucune session active) |
+| **ACK erreur**   | `backup:error` ➔ `{ message, code: "STATUS_FAILED" }`                                                                            |
 
 ---
 

@@ -88,6 +88,13 @@ const ArchiveConversation = require("./application/use-cases/ArchiveConversation
 const GetArchivedConversations = require("./application/use-cases/GetArchivedConversations");
 const AddReaction = require("./application/use-cases/AddReaction");
 const RemoveReaction = require("./application/use-cases/RemoveReaction");
+// Backup Use Cases
+const ExportConversationBackup = require("./application/use-cases/ExportConversationBackup");
+const RestoreConversationBackup = require("./application/use-cases/RestoreConversationBackup");
+
+// Backup Service
+const BackupService = require("./infrastructure/services/BackupService");
+const BackupSessionManager = require("./infrastructure/services/BackupSessionManager");
 
 // Controllers
 const FileController = require("./application/controllers/FileController");
@@ -95,6 +102,7 @@ const MessageController = require("./application/controllers/MessageController")
 const ConversationController = require("./application/controllers/ConversationController");
 const GroupController = require("./application/controllers/GroupController");
 const HealthController = require("./application/controllers/HealthController");
+const BackupController = require("./application/controllers/BackupController");
 
 // Repositories - Mongo
 const MongoMessageRepository = require("./infrastructure/repositories/MongoMessageRepository");
@@ -108,6 +116,7 @@ const createFileRoutes = require("./interfaces/http/routes/fileRoutes");
 const createHealthRoutes = require("./interfaces/http/routes/healthRoutes");
 const createGroupRoutes = require("./interfaces/http/routes/groupRoutes");
 const createBroadcastRoutes = require("./interfaces/http/routes/broadcastRoutes");
+const createBackupRoutes = require("./interfaces/http/routes/backupRoutes");
 
 // WebSocket Handler
 const ChatHandler = require("./application/websocket/chatHandler");
@@ -633,6 +642,50 @@ const startServer = async () => {
       resilientMessageService,
     );
 
+    // ─── BACKUP ────────────────────────────────────────────────────────────
+    // Instancier BackupService (connexion MinIO dédiée au backup)
+    const backupService = new BackupService(
+      {
+        endPoint: (process.env.S3_ENDPOINT || "http://minio:9000")
+          .replace(/^https?:\/\//, "")
+          .split(":")[0],
+        port: parseInt(
+          (process.env.S3_ENDPOINT || "http://minio:9000").split(":").pop(),
+          10
+        ) || 9000,
+        useSSL: (process.env.S3_ENDPOINT || "").startsWith("https"),
+        accessKey: process.env.S3_ACCESS_KEY || "minioadmin",
+        secretKey: process.env.S3_SECRET_KEY || "minioadmin",
+        bucket: process.env.S3_BUCKET || "chat-files",
+        backupBucket: process.env.S3_BACKUP_BUCKET || "chat-backups",
+      },
+      {
+        // Chiffrement désactivé par défaut — activer via BACKUP_ENCRYPTION=true
+        encryptionEnabled: process.env.BACKUP_ENCRYPTION === "true",
+        encryptionKey: process.env.BACKUP_ENCRYPTION_KEY || null,
+      }
+    );
+    console.log("✅ BackupService initialisé (bucket: chat-backups)");
+
+    const exportConversationBackupUseCase = new ExportConversationBackup(
+      backupService,
+      conversationRepository,
+      messageRepository
+    );
+
+    const restoreConversationBackupUseCase = new RestoreConversationBackup(
+      backupService,
+      cacheServiceInstance
+    );
+
+    // Instancier le manager de sessions de backup Socket.IO
+    // (créé ici car io est déjà disponible)
+    const backupSessionManager = new BackupSessionManager(
+      exportConversationBackupUseCase,
+      io
+    );
+    console.log("✅ BackupSessionManager initialisé");
+
     // ===============================
     // INITIALISATION AutoGroupSyncService
     // ===============================
@@ -650,6 +703,8 @@ const startServer = async () => {
 
     // Rendre disponibles globalement (injection simple pour controllers / handlers)
     app.locals.useCases = app.locals.useCases || {};
+    app.locals.useCases.exportConversationBackup = exportConversationBackupUseCase;
+    app.locals.useCases.restoreConversationBackup = restoreConversationBackupUseCase;
     app.locals.useCases.markMessageDelivered = markMessageDeliveredUseCase;
     app.locals.useCases.markMessageRead = markMessageReadUseCase;
     app.locals.useCases.addParticipant = addParticipantUseCase;
@@ -708,6 +763,13 @@ const startServer = async () => {
 
     const healthController = new HealthController(redisClient);
 
+    // ─── BACKUP CONTROLLER ────────────────────────────────────────────────
+    const backupController = new BackupController(
+      exportConversationBackupUseCase,
+      restoreConversationBackupUseCase,
+      backupService
+    );
+
     // ===============================
     // 9. CONFIGURATION ROUTES HTTP
     // ===============================
@@ -722,6 +784,7 @@ const startServer = async () => {
     app.use("/health", createHealthRoutes(healthController));
     app.use("/groups", createGroupRoutes(groupController));
     app.use("/broadcasts", createBroadcastRoutes(createBroadcastUseCase));
+    app.use("/backups", createBackupRoutes(backupController));
 
     // ===============================
     // 10. CONFIGURATION WEBSOCKET
@@ -769,6 +832,8 @@ const startServer = async () => {
       keyManagementService, // ✅ E2EE
       archiveConversationUseCase, // ✅ Archivage
       getArchivedConversationsUseCase, // ✅ Archivage
+      null, // ✅ Export (legacy, inutilisé)
+      backupSessionManager, // ✅ Backup sessions Socket.IO
     );
 
     // ✅ CONFIGURER LES GESTIONNAIRES D'ÉVÉNEMENTS SOCKET.IO

@@ -42,6 +42,8 @@ class ChatHandler {
     keyManagementService = null, // ✅ E2EE
     archiveConversationUseCase = null, // ✅ Archivage
     getArchivedConversationsUseCase = null, // ✅ Archivage
+    exportUserDiscussionsUseCase = null, // ✅ Export (legacy, conservé pour compat)
+    backupSessionManager = null, // ✅ Backup sessions Socket.IO
   ) {
     this.io = io;
     this.sendMessageUseCase = sendMessageUseCase;
@@ -76,6 +78,8 @@ class ChatHandler {
     this.keyManagementService = keyManagementService; // ✅ E2EE
     this.archiveConversationUseCase = archiveConversationUseCase; // ✅ Archivage
     this.getArchivedConversationsUseCase = getArchivedConversationsUseCase; // ✅ Archivage
+    this.exportUserDiscussionsUseCase = exportUserDiscussionsUseCase; // ✅ Export (legacy)
+    this.backupSessionManager = backupSessionManager; // ✅ Backup sessions Socket.IO
     // ✅ LOG DE DEBUG
     console.log(
       "🔍 ChatHandler reçu messageDeliveryService:",
@@ -84,6 +88,14 @@ class ChatHandler {
     console.log(
       "🔍 ChatHandler reçu autoGroupSyncUseCase:",
       this.autoGroupSyncUseCase ? "✅ OUI" : "❌ NON",
+    );
+    console.log(
+      "🔍 ChatHandler reçu exportUserDiscussionsUseCase:",
+      this.exportUserDiscussionsUseCase ? "✅ OUI" : "❌ NON",
+    );
+    console.log(
+      "🔍 ChatHandler reçu backupSessionManager:",
+      this.backupSessionManager ? "✅ OUI" : "❌ NON",
     );
   }
 
@@ -585,6 +597,247 @@ class ChatHandler {
           } catch (err) {
             console.error("❌ conversation:getArchived:", err.message);
             socket.emit("conversation:archiveError", { message: err.message });
+          }
+        });
+
+        // ──────────────────────────────────────────────────────────────────
+        // 💾 ÉVÉNEMENTS BACKUP SESSION (ZIP → MinIO)
+        // backup:start    → Démarrer une session de backup
+        // backup:suspend  → Suspendre la session en cours
+        // backup:resume   → Reprendre la session suspendue
+        // backup:cancel   → Annuler la session
+        // backup:status   → Demander l'état courant de la session
+        //
+        // Événements émis vers le client :
+        //   backup:progress   { sessionId, state, progress: { percentage, message, conversationsLoaded, messagesLoaded } }
+        //   backup:paused     { sessionId, state, pausedAt, progress }
+        //   backup:resumed    { sessionId, state, resumedAt, progress }
+        //   backup:cancelled  { sessionId, state, cancelledAt, progress }
+        //   backup:completed  { sessionId, state, completedAt, result: { objectPath, bucket, size, stats } }
+        //   backup:failed     { sessionId, state, error }
+        //   backup:error      { message, code }  (erreur de commande)
+        // ──────────────────────────────────────────────────────────────────
+
+        /**
+         * backup:start
+         * Démarre une nouvelle session de backup pour l'utilisateur connecté.
+         * Payload (optionnel): { conversationId?: string, label?: string }
+         */
+        socket.on("backup:start", (data) => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("backup:error", {
+                message: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+            if (!this.backupSessionManager) {
+              return socket.emit("backup:error", {
+                message: "Service de backup non disponible",
+                code: "SERVICE_UNAVAILABLE",
+              });
+            }
+
+            const { conversationId = null, label = "socket-backup" } = data || {};
+
+            console.log(
+              `📦 backup:start → userId=${userId} | conversationId=${conversationId || "toutes"} | label=${label}`
+            );
+
+            // Mettre à jour le socketId dans le manager (pour les émissions ciblées)
+            this.backupSessionManager.updateSocketId(userId, socket.id);
+
+            const session = this.backupSessionManager.startSession(userId, {
+              conversationId,
+              label,
+              socketId: socket.id,
+            });
+
+            socket.emit("backup:started", {
+              sessionId: session.sessionId,
+              state: session.state,
+              startedAt: session.startedAt,
+              message: "Session de backup démarrée",
+            });
+          } catch (err) {
+            console.error("❌ backup:start:", err.message);
+            socket.emit("backup:error", {
+              message: err.message,
+              code: "START_FAILED",
+            });
+          }
+        });
+
+        /**
+         * backup:suspend
+         * Suspend la session RUNNING de l'utilisateur connecté.
+         * Payload : (vide)
+         */
+        socket.on("backup:suspend", () => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("backup:error", {
+                message: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+            if (!this.backupSessionManager) {
+              return socket.emit("backup:error", {
+                message: "Service de backup non disponible",
+                code: "SERVICE_UNAVAILABLE",
+              });
+            }
+
+            console.log(`⏸️  backup:suspend → userId=${userId}`);
+            const result = this.backupSessionManager.suspendSession(userId);
+
+            // L'événement backup:paused est aussi émis par le manager
+            // On confirme également directement au socket demandeur
+            socket.emit("backup:paused", {
+              sessionId: result.sessionId,
+              state: result.state,
+              pausedAt: result.pausedAt,
+              message: "Session suspendue avec succès",
+            });
+          } catch (err) {
+            console.error("❌ backup:suspend:", err.message);
+            socket.emit("backup:error", {
+              message: err.message,
+              code: "SUSPEND_FAILED",
+            });
+          }
+        });
+
+        /**
+         * backup:resume
+         * Reprend la session PAUSED de l'utilisateur connecté.
+         * Payload : (vide)
+         */
+        socket.on("backup:resume", () => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("backup:error", {
+                message: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+            if (!this.backupSessionManager) {
+              return socket.emit("backup:error", {
+                message: "Service de backup non disponible",
+                code: "SERVICE_UNAVAILABLE",
+              });
+            }
+
+            console.log(`▶️  backup:resume → userId=${userId}`);
+
+            // Mettre à jour le socketId en cas de reconnexion
+            this.backupSessionManager.updateSocketId(userId, socket.id);
+
+            const result = this.backupSessionManager.resumeSession(userId);
+
+            socket.emit("backup:resumed", {
+              sessionId: result.sessionId,
+              state: result.state,
+              resumedAt: result.resumedAt,
+              message: "Session reprise avec succès",
+            });
+          } catch (err) {
+            console.error("❌ backup:resume:", err.message);
+            socket.emit("backup:error", {
+              message: err.message,
+              code: "RESUME_FAILED",
+            });
+          }
+        });
+
+        /**
+         * backup:cancel
+         * Annule la session RUNNING ou PAUSED de l'utilisateur connecté.
+         * Payload : (vide)
+         */
+        socket.on("backup:cancel", () => {
+          if (this.onlineUserManager && socket.userId) {
+            this.onlineUserManager.updateLastActivity(socket.userId, socket);
+          }
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("backup:error", {
+                message: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+            if (!this.backupSessionManager) {
+              return socket.emit("backup:error", {
+                message: "Service de backup non disponible",
+                code: "SERVICE_UNAVAILABLE",
+              });
+            }
+
+            console.log(`🚫 backup:cancel → userId=${userId}`);
+            const result = this.backupSessionManager.cancelSession(userId);
+
+            socket.emit("backup:cancelled", {
+              sessionId: result.sessionId,
+              state: result.state,
+              cancelledAt: result.cancelledAt,
+              message: "Session annulée",
+            });
+          } catch (err) {
+            console.error("❌ backup:cancel:", err.message);
+            socket.emit("backup:error", {
+              message: err.message,
+              code: "CANCEL_FAILED",
+            });
+          }
+        });
+
+        /**
+         * backup:status
+         * Demande l'état courant de la session de backup de l'utilisateur.
+         * Payload : (vide)
+         * Réponse : backup:sessionStatus { session } | backup:error
+         */
+        socket.on("backup:status", () => {
+          try {
+            const userId = socket.userId;
+            if (!userId) {
+              return socket.emit("backup:error", {
+                message: "Authentification requise",
+                code: "AUTH_REQUIRED",
+              });
+            }
+            if (!this.backupSessionManager) {
+              return socket.emit("backup:error", {
+                message: "Service de backup non disponible",
+                code: "SERVICE_UNAVAILABLE",
+              });
+            }
+
+            const status = this.backupSessionManager.getSessionStatus(userId);
+
+            socket.emit("backup:sessionStatus", {
+              session: status, // null si aucune session active
+              timestamp: new Date().toISOString(),
+            });
+          } catch (err) {
+            console.error("❌ backup:status:", err.message);
+            socket.emit("backup:error", {
+              message: err.message,
+              code: "STATUS_FAILED",
+            });
           }
         });
 

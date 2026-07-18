@@ -1347,6 +1347,64 @@ Message broadcast de test 📢</textarea
           </div>
         </div>
 
+          <!-- Sauvegardes & Restauration (Backups) -->
+          <div class="section backup-section" style="border-left: 4px solid #3b82f6; background: #1c1917">
+            <h2>💾 Sauvegarde & Restauration des Discussions (MinIO)</h2>
+
+            <!-- Session en temps réel (Socket.IO) -->
+            <div style="margin-bottom: 20px; padding: 12px; background: #262626; border-radius: 6px;">
+              <h3 style="color: #3b82f6; margin-top: 0">⚡ Session de Sauvegarde Temps Réel (Socket.IO)</h3>
+              <div class="form-group" style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;">
+                <input type="text" id="backupSocketLabel" placeholder="Label (ex: ma-sauvegarde)" value="socket-backup" style="flex: 1; min-width: 150px;" />
+                <input type="text" id="backupSocketConvId" placeholder="ID Conv Optionnel (ex: 60f7...)" style="flex: 1; min-width: 150px;" />
+              </div>
+              <div class="button-grid">
+                <button onclick="startSocketBackup()" class="btn-primary">▶️ Démarrer</button>
+                <button onclick="suspendSocketBackup()" class="btn-warning">⏸️ Suspendre</button>
+                <button onclick="resumeSocketBackup()" class="btn-success">▶️ Reprendre</button>
+                <button onclick="cancelSocketBackup()" class="btn-danger">🚫 Annuler</button>
+                <button onclick="statusSocketBackup()" class="btn-info">🔍 Statut</button>
+              </div>
+              
+              <!-- Progress bar -->
+              <div id="backupProgressContainer" style="margin-top: 15px; display: none;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 12px;">
+                  <span id="backupProgressStep">Étape : init</span>
+                  <span id="backupProgressPct">0%</span>
+                </div>
+                <div style="background: #404040; border-radius: 4px; height: 10px; width: 100%; overflow: hidden;">
+                  <div id="backupProgressBar" style="background: #3b82f6; height: 100%; width: 0%; transition: width 0.3s ease;"></div>
+                </div>
+                <div id="backupProgressMessage" style="font-size: 11px; color: #a3a3a3; margin-top: 4px; text-align: center;">Initialisation...</div>
+              </div>
+            </div>
+
+            <!-- Actions REST HTTP -->
+            <div style="margin-bottom: 16px;">
+              <h3 style="color: #3b82f6;">🌐 Actions HTTP REST API</h3>
+              <div class="button-grid" style="margin-bottom: 12px;">
+                <button onclick="exportBackupHTTP()" class="btn-primary">📦 Export HTTP</button>
+                <button onclick="listBackupsHTTP()" class="btn-secondary">📋 Lister mes Backups</button>
+              </div>
+              
+              <!-- Restauration -->
+              <div class="form-group" style="margin-top: 12px; border-top: 1px solid #404040; padding-top: 12px;">
+                <h4 style="margin-top: 0; margin-bottom: 8px;">🔄 Restaurer / Télécharger / Supprimer</h4>
+                <input type="text" id="backupObjectPath" placeholder="Chemin objet MinIO (ex: backups/570479H/backup_2026-07-18.zip)" style="width: 100%; margin-bottom: 8px;" />
+                <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+                  <input type="checkbox" id="backupDryRun" /> <label for="backupDryRun">Dry Run (Valider sans écrire)</label>
+                </div>
+                <div class="button-grid">
+                  <button onclick="restoreBackupHTTP()" class="btn-success">🔄 Restaurer</button>
+                  <button onclick="downloadBackupHTTP()" class="btn-info">⬇️ Télécharger (URL)</button>
+                  <button onclick="deleteBackupHTTP()" class="btn-danger">🗑️ Supprimer</button>
+                </div>
+              </div>
+            </div>
+            
+            <div class="status" id="backupStatus" style="font-family: monospace; white-space: pre-wrap; background: #18181b; padding: 10px; border-radius: 4px; display: none;"></div>
+          </div>
+
         <!-- Section réception complète des messages -->
         <div class="section all-messages-section">
           <h2>📥 Tous les messages reçus</h2>
@@ -1364,7 +1422,7 @@ Message broadcast de test 📢</textarea
       </div>
     </div>
 
-    <script src="app.js"></script>
+    <script src="app.js?v=2"></script>
     <script src="group-functions.js"></script>
   </body>
 </html>

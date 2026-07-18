@@ -361,6 +361,7 @@ const createMessageRoutes = (messageController) => {
 | `conversationRoutes.js` | `/conversations` | Liste, détail, archivage, participants |
 | `groupRoutes.js` | `/groups` | Création groupe, ajout/retrait membres, admins |
 | `broadcastRoutes.js` | `/broadcasts` | Création canaux de diffusion |
+| `backupRoutes.js` | `/backups` | Sauvegarde (export, listage, restauration, download, suppression) scopée par user |
 | `healthRoutes.js` | `/health` | Health checks simples et détaillés, métriques |
 
 #### 2.2. Middleware (`interfaces/http/middleware/`)
@@ -821,6 +822,24 @@ Résultat : cache hit rate de 80-95% dès le premier accès.
 ##### 5.4.12. `AutoGroupSyncService` — Synchronisation des groupes
 
 Synchronise automatiquement les groupes organisationnels (par ministère, département) en interrogeant les données utilisateur et en créant/mettant à jour les groupes correspondants via les use cases `CreateGroup` et `AddParticipant`.
+
+---
+
+##### 5.4.13. `BackupService` — Service de Sauvegarde & Restauration
+
+Gère la génération d'archives ZIP contenant les conversations, les messages et un manifeste technique, et leur stockage sécurisé sur MinIO (S3) dans le bucket `chat-backups`.
+- **Nommage des backups** : `backups/{userId}/backup_YYYY-MM-DD.zip`
+- **Politique de rétention/écrasement** : Pour chaque utilisateur, une seule sauvegarde est conservée. Tout nouvel export réussi supprime automatiquement les anciennes sauvegardes de cet utilisateur.
+- **Restauration idempotente** : Utilise le mécanisme de `bulkWrite` avec `upsert: true` pour réinsérer les conversations et messages sans doublons.
+
+---
+
+##### 5.4.14. `BackupSessionManager` — Cycle de vie des sessions de backup
+
+Gère le cycle de vie des sessions de sauvegarde interactives via WebSocket (Socket.IO).
+- **États d'une session** : `PENDING` ➔ `RUNNING` ➔ `PAUSED` / `CANCELLED` / `COMPLETED` / `FAILED`.
+- **Contrôle d'exécution** : Supporte la mise en pause (`suspend`), la reprise (`resume`) et l'annulation (`cancel`) propre entre les différents lots (batches) de requêtes à la base de données.
+- **Unicité** : Un utilisateur ne peut avoir qu'une seule session active (RUNNING ou PAUSED) à la fois.
 
 ---
 
