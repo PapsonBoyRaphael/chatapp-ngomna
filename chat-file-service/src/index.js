@@ -1,3 +1,4 @@
+require("../glintlog-tracer");
 const express = require("express");
 const { createServer } = require("http");
 const cors = require("cors");
@@ -717,6 +718,14 @@ const startServer = async () => {
       conversation: conversationRepository,
       file: fileRepository,
     };
+
+       // ✅ INJECTER conversationRepository dans ProfileEventBroadcaster (persistence avatar)
+      if (app.locals.profileBroadcaster && conversationRepository) {
+        app.locals.profileBroadcaster.conversationRepository = conversationRepository;
+        console.log(
+          "✅ Référence conversationRepository injectée dans ProfileEventBroadcaster",
+        );
+      }
 
     // ===============================
     // 8. INITIALISATION CONTROLLERS

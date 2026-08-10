@@ -1737,6 +1737,48 @@ class MongoConversationRepository {
       throw error;
     }
   }
+
+   /**
+   * ✅ METTRE À JOUR L'AVATAR (thumbnailUrl) D'UN UTILISATEUR DANS TOUTES SES CONVERSATIONS
+   * Appelé lors de la réception d'un event profile:photo_updated depuis le stream Redis
+   * @param {string} userId - Matricule de l'utilisateur
+   * @param {string|null} avatarUrl - Nouvelle thumbnailUrl pré-signée, ou null si photo supprimée
+   */
+  async updateAvatarForUser(userId, avatarUrl) {
+    try {
+      console.log(`🖼️ Mise à jour avatar dans userMetadata pour utilisateur ${userId}`, { avatarUrl: avatarUrl ? 'présente' : 'null (supprimée)' });
+      const result = await Conversation.updateMany(
+        {
+          'userMetadata.userId': String(userId),
+          isActive: true,
+        },
+        {
+          $set: {
+            'userMetadata.$[elem].avatar': avatarUrl || null,
+          },
+        },
+        {
+          arrayFilters: [{ 'elem.userId': String(userId) }],
+        },
+      );
+      console.log(`✅ Avatar userMetadata mis à jour:`, {
+        userId,
+        matchedCount: result.matchedCount,
+        modifiedCount: result.modifiedCount,
+        avatarUrl: avatarUrl ? 'présente' : 'null',
+      });
+      return {
+        success: true,
+        modifiedCount: result.modifiedCount,
+      };
+    } catch (error) {
+      console.error(`❌ Erreur updateAvatarForUser:`, {
+        error: error.message,
+        userId,
+      });
+      return { success: false, error: error.message };
+    }
+  }
 }
 
 module.exports = MongoConversationRepository;
