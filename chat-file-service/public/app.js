@@ -816,6 +816,79 @@ function setupSocketEvents() {
   });
 
   // ========================================
+  // 💾 ÉVÉNEMENTS BACKUP & SAUVEGARDE
+  // ========================================
+
+  socket.on("backup:started", (data) => {
+    log("💾 Backup Socket démarré", "success", data);
+    showBackupProgress(true);
+    updateBackupProgressUI("loading_conversations", 5, "Démarrage du backup...");
+    showBackupHTTPStatus(`✅ Backup démarré. ID Session: ${data.sessionId}`);
+  });
+
+  socket.on("backup:progress", (data) => {
+    log("💾 Progression Backup", "info", data);
+    const p = data.progress;
+    const msg = `${p.message} | Conv: ${p.conversationsLoaded}/${p.conversationsTotal} | Msg: ${p.messagesLoaded}/${p.messagesTotal}`;
+    updateBackupProgressUI(p.currentStep, p.percentage, msg);
+  });
+
+  socket.on("backup:paused", (data) => {
+    log("⏸️ Backup Suspendu", "warning", data);
+    updateBackupProgressUI("paused", data.progress.percentage, `⏸️ Suspendu à ${data.progress.percentage}%`);
+    showBackupHTTPStatus(`⏸️ Session suspendue.`);
+  });
+
+  socket.on("backup:resumed", (data) => {
+    log("▶️ Backup Repris", "success", data);
+    updateBackupProgressUI("running", data.progress.percentage, `▶️ Reprise de la sauvegarde...`);
+    showBackupHTTPStatus(`▶️ Session reprise.`);
+  });
+
+  socket.on("backup:cancelled", (data) => {
+    log("🚫 Backup Annulé", "error", data);
+    updateBackupProgressUI("cancelled", data.progress.percentage, "🚫 Sauvegarde annulée.");
+    setTimeout(() => showBackupProgress(false), 3000);
+    showBackupHTTPStatus(`🚫 Session annulée.`);
+  });
+
+  socket.on("backup:completed", (data) => {
+    log("✅ Backup Terminé avec succès", "success", data);
+    updateBackupProgressUI("done", 100, "✅ Backup complété et stocké dans MinIO !");
+    setTimeout(() => showBackupProgress(false), 5000);
+    
+    // Auto-remplir le champ objectPath de restauration
+    const r = data.result;
+    document.getElementById("backupObjectPath").value = r.objectPath;
+    
+    showBackupHTTPStatus(`✅ Backup Réussi !\nChemin : ${r.objectPath}\nTaille : ${formatFileSize(r.size)}\nBucket : ${r.bucket}`);
+  });
+
+  socket.on("backup:failed", (data) => {
+    log("❌ Backup Échoué", "error", data);
+    updateBackupProgressUI("failed", 0, `❌ Erreur : ${data.error}`);
+    showBackupHTTPStatus(`❌ Sauvegarde échouée : ${data.error}`);
+  });
+
+  socket.on("backup:error", (data) => {
+    log("❌ Erreur Commande Backup", "error", data);
+    showBackupHTTPStatus(`❌ Erreur Commande [${data.code}] : ${data.message}`);
+  });
+
+  socket.on("backup:sessionStatus", (data) => {
+    log("🔍 Statut Session Backup", "info", data);
+    if (!data.session) {
+      showBackupHTTPStatus("Aucune session de sauvegarde active.");
+      showBackupProgress(false);
+    } else {
+      const s = data.session;
+      showBackupProgress(true);
+      updateBackupProgressUI(s.progress.currentStep, s.progress.percentage, `${s.state} : ${s.progress.message}`);
+      showBackupHTTPStatus(`Statut : ${s.state}\nID Session: ${s.sessionId}\nProgression: ${s.progress.percentage}%`);
+    }
+  });
+
+  // ========================================
   // ✅ ÉVÉNEMENTS SUPPRESSION FICHIER
   // ========================================
 
@@ -4304,4 +4377,262 @@ function testE2EEConnection() {
   console.log("🔍 ═══════════════════════════════════════════════════════\n");
 
   log("🔍 Diagnostic E2EE exécuté — voir console (F12)", "info");
+}
+
+// ========================================
+// 💾 FONCTIONS CLIENT POUR LE BACKUP
+// ========================================
+
+function showBackupProgress(show) {
+  const container = document.getElementById("backupProgressContainer");
+  if (container) {
+    container.style.display = show ? "block" : "none";
+  }
+}
+
+function updateBackupProgressUI(step, percentage, message) {
+  const stepEl = document.getElementById("backupProgressStep");
+  const pctEl = document.getElementById("backupProgressPct");
+  const barEl = document.getElementById("backupProgressBar");
+  const msgEl = document.getElementById("backupProgressMessage");
+
+  if (stepEl) stepEl.textContent = `Étape : ${step}`;
+  if (pctEl) pctEl.textContent = `${percentage}%`;
+  if (barEl) barEl.style.width = `${percentage}%`;
+  if (msgEl) msgEl.textContent = message;
+}
+
+function showBackupHTTPStatus(text) {
+  const statusEl = document.getElementById("backupStatus");
+  if (statusEl) {
+    statusEl.textContent = text;
+    statusEl.style.display = text ? "block" : "none";
+  }
+}
+
+// --- Socket.IO backup operations ---
+
+function startSocketBackup() {
+  if (!socket || !socket.connected) {
+    showBackupHTTPStatus("❌ Erreur : Socket non connecté.");
+    return;
+  }
+  const label = document.getElementById("backupSocketLabel")?.value.trim() || "socket-backup";
+  const conversationId = document.getElementById("backupSocketConvId")?.value.trim() || null;
+  
+  showBackupHTTPStatus("⏳ Lancement de la sauvegarde via Socket.IO...");
+  socket.emit("backup:start", { label, conversationId });
+}
+
+function suspendSocketBackup() {
+  if (!socket || !socket.connected) {
+    showBackupHTTPStatus("❌ Erreur : Socket non connecté.");
+    return;
+  }
+  socket.emit("backup:suspend");
+}
+
+function resumeSocketBackup() {
+  if (!socket || !socket.connected) {
+    showBackupHTTPStatus("❌ Erreur : Socket non connecté.");
+    return;
+  }
+  socket.emit("backup:resume");
+}
+
+function cancelSocketBackup() {
+  if (!socket || !socket.connected) {
+    showBackupHTTPStatus("❌ Erreur : Socket non connecté.");
+    return;
+  }
+  socket.emit("backup:cancel");
+}
+
+function statusSocketBackup() {
+  if (!socket || !socket.connected) {
+    showBackupHTTPStatus("❌ Erreur : Socket non connecté.");
+    return;
+  }
+  socket.emit("backup:status");
+}
+
+// --- HTTP REST backup operations ---
+
+function getAuthHeaders() {
+  const token = getCookie("token");
+  const userId = document.getElementById("userId")?.value.trim();
+  const headers = {};
+  
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  if (userId) {
+    headers["user-id"] = userId;
+  }
+  return headers;
+}
+
+async function exportBackupHTTP() {
+  const headers = getAuthHeaders();
+  if (Object.keys(headers).length === 0) {
+    showBackupHTTPStatus("❌ Erreur : Veuillez renseigner un ID utilisateur ou vous authentifier d'abord.");
+    return;
+  }
+  
+  showBackupHTTPStatus("⏳ Lancement de l'export HTTP...");
+  try {
+    const res = await fetch("/backups/export", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...headers
+      },
+      body: JSON.stringify({
+        label: "http-backup"
+      })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showBackupHTTPStatus(`✅ Export Réussi (202 Accepted) !\n` + JSON.stringify(data.data, null, 2));
+      if (data.data.objectPath) {
+        document.getElementById("backupObjectPath").value = data.data.objectPath;
+      }
+    } else {
+      showBackupHTTPStatus(`❌ Erreur export HTTP : ${data.message || res.statusText}`);
+    }
+  } catch (error) {
+    showBackupHTTPStatus(`❌ Erreur export HTTP : ${error.message}`);
+  }
+}
+
+async function listBackupsHTTP() {
+  const headers = getAuthHeaders();
+  if (Object.keys(headers).length === 0) {
+    showBackupHTTPStatus("❌ Erreur : Veuillez renseigner un ID utilisateur ou vous authentifier d'abord.");
+    return;
+  }
+  
+  showBackupHTTPStatus("⏳ Récupération de la liste des backups...");
+  try {
+    const res = await fetch("/backups", {
+      method: "GET",
+      headers: headers
+    });
+    const data = await res.json();
+    if (res.ok) {
+      const backups = data.data.backups || [];
+      if (backups.length === 0) {
+        showBackupHTTPStatus("Aucun backup trouvé pour cet utilisateur.");
+      } else {
+        const text = backups.map(b => `- ${b.name} (${formatFileSize(b.size)} | Modifié le : ${new Date(b.lastModified).toLocaleString()})`).join("\n");
+        showBackupHTTPStatus(`📋 Liste des backups (${backups.length}) :\n${text}`);
+      }
+    } else {
+      showBackupHTTPStatus(`❌ Erreur liste backups : ${data.message || res.statusText}`);
+    }
+  } catch (error) {
+    showBackupHTTPStatus(`❌ Erreur liste backups : ${error.message}`);
+  }
+}
+
+async function restoreBackupHTTP() {
+  const headers = getAuthHeaders();
+  if (Object.keys(headers).length === 0) {
+    showBackupHTTPStatus("❌ Erreur : Veuillez renseigner un ID utilisateur ou vous authentifier d'abord.");
+    return;
+  }
+  const objectPath = document.getElementById("backupObjectPath").value.trim();
+  if (!objectPath) {
+    showBackupHTTPStatus("❌ Erreur : Le chemin d'objet est requis.");
+    return;
+  }
+  const dryRun = document.getElementById("backupDryRun").checked;
+
+  showBackupHTTPStatus(`⏳ Restauration en cours (dryRun=${dryRun})...`);
+  try {
+    const res = await fetch("/backups/restore", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...headers
+      },
+      body: JSON.stringify({ objectPath, dryRun })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showBackupHTTPStatus(`✅ Restauration Réussie !\n` + JSON.stringify(data.data, null, 2));
+    } else {
+      showBackupHTTPStatus(`❌ Erreur Restauration : ${data.message || res.statusText}`);
+    }
+  } catch (error) {
+    showBackupHTTPStatus(`❌ Erreur Restauration : ${error.message}`);
+  }
+}
+
+async function downloadBackupHTTP() {
+  const headers = getAuthHeaders();
+  if (Object.keys(headers).length === 0) {
+    showBackupHTTPStatus("❌ Erreur : Veuillez renseigner un ID utilisateur ou vous authentifier d'abord.");
+    return;
+  }
+  const objectPath = document.getElementById("backupObjectPath").value.trim();
+  if (!objectPath) {
+    showBackupHTTPStatus("❌ Erreur : Le chemin d'objet est requis.");
+    return;
+  }
+
+  showBackupHTTPStatus("⏳ Génération de l'URL de téléchargement...");
+  try {
+    const res = await fetch(`/backups/download?objectPath=${encodeURIComponent(objectPath)}`, {
+      method: "GET",
+      headers: headers
+    });
+    const data = await res.json();
+    if (res.ok) {
+      const url = data.data.downloadUrl;
+      showBackupHTTPStatus(`✅ URL générée avec succès (valide 1h) :\n\n👉 Cliquez pour télécharger :\n${url}`);
+    } else {
+      showBackupHTTPStatus(`❌ Erreur URL de téléchargement : ${data.message || res.statusText}`);
+    }
+  } catch (error) {
+    showBackupHTTPStatus(`❌ Erreur URL de téléchargement : ${error.message}`);
+  }
+}
+
+async function deleteBackupHTTP() {
+  const headers = getAuthHeaders();
+  if (Object.keys(headers).length === 0) {
+    showBackupHTTPStatus("❌ Erreur : Veuillez renseigner un ID utilisateur ou vous authentifier d'abord.");
+    return;
+  }
+  const objectPath = document.getElementById("backupObjectPath").value.trim();
+  if (!objectPath) {
+    showBackupHTTPStatus("❌ Erreur : Le chemin d'objet est requis.");
+    return;
+  }
+
+  if (!confirm(`Voulez-vous vraiment supprimer le backup :\n${objectPath} ?`)) {
+    return;
+  }
+
+  showBackupHTTPStatus("⏳ Suppression en cours...");
+  try {
+    const res = await fetch("/backups", {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        ...headers
+      },
+      body: JSON.stringify({ objectPath })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showBackupHTTPStatus(`🗑️ Backup supprimé avec succès !`);
+      document.getElementById("backupObjectPath").value = "";
+    } else {
+      showBackupHTTPStatus(`❌ Erreur Suppression : ${data.message || res.statusText}`);
+    }
+  } catch (error) {
+    showBackupHTTPStatus(`❌ Erreur Suppression : ${error.message}`);
+  }
 }

@@ -22,12 +22,25 @@ class BatchGetUsers {
 
       // Pour l'instant, on fait des requêtes individuelles
       // À optimiser avec une vraie requête batch SQL si nécessaire
-      const userPromises = idsArray.map((id) =>
-        this.userRepository.findById(id).catch((err) => {
+      const userPromises = idsArray.map(async (id) => {
+        try {
+          const isNumeric = /^\d+$/.test(id);
+          let user = null;
+
+          if (isNumeric) {
+            user = await this.userRepository.findById(id);
+          }
+
+          if (!user) {
+            user = await this.userRepository.findByMatricule(id);
+          }
+
+          return user;
+        } catch (err) {
           console.warn(`Erreur récupération user ${id}:`, err.message);
           return null;
-        })
-      );
+        }
+      });
 
       const users = await Promise.all(userPromises);
 

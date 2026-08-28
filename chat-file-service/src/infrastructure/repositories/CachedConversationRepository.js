@@ -672,6 +672,40 @@ class CachedConversationRepository {
       console.error("❌ Erreur clearCache conversations:", error.message);
     }
   }
+
+   /**
+   * ✅ METTRE À JOUR L'AVATAR D'UN UTILISATEUR DANS TOUTES SES CONVERSATIONS
+   * Délègue à MongoConversationRepository puis invalide le cache des listes de conversations.
+   * @param {string} userId - Matricule de l'utilisateur
+   * @param {string|null} avatarUrl - Nouvelle thumbnailUrl, ou null si photo supprimée
+   */
+  async updateAvatarForUser(userId, avatarUrl) {
+    try {
+      const result = await this.primaryStore.updateAvatarForUser(userId, avatarUrl);
+      // Invalider le cache des listes de conversations de cet utilisateur (fire-and-forget)
+      if (this.cache) {
+        const patterns = [
+          `${this.cacheKeyPrefix}:user:${userId}:*`,
+          `${this.cacheKeyPrefix}:quick:${userId}:*`,
+        ];
+        Promise.allSettled(
+          patterns.map((pattern) =>
+            this.cache.delete(pattern).catch((err) =>
+              console.warn(`⚠️ Erreur invalidation cache avatar ${pattern}:`, err.message),
+            ),
+          ),
+        ).then(() => {
+          if (result?.modifiedCount > 0) {
+            console.log(`🗑️ [CachedConvRepo] Cache conversations invalidé pour ${userId} après maj avatar`);
+          }
+        });
+      }
+      return result;
+    } catch (error) {
+      console.error('❌ Erreur updateAvatarForUser (cached):', error.message);
+      return { success: false, error: error.message };
+    }
+  }
 }
 
 module.exports = CachedConversationRepository;

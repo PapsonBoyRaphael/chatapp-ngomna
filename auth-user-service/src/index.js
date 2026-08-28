@@ -1,3 +1,4 @@
+require("../glintlog-tracer");
 const express = require("express");
 const chalk = require("chalk");
 const cors = require("cors");
